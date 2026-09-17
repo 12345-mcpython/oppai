@@ -1,0 +1,27 @@
+# 运行期产物
+var/
+*.log
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# 打包中间产物
+*.apk
+*.apk.idsig
+*.keystore
+*.jks
+dist/
+build/
+
+# 编辑器
+.idea/
+.vscode/
+*.swp
+.DS_Store
+
+# 反汇编/反编译产出的第三方源码（从 mozilla 拉下来的，不入库）
+sm/

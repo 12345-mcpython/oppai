@@ -1,0 +1,8 @@
+# 服务端本体只依赖 Python 标准库（3.10+），不需要装任何第三方包。
+#
+# 可选（只有跑客户端补丁工具时才需要）：
+#   - JDK 17（apktool / apksigner 用）
+#   - Android SDK build-tools（zipalign / apksigner）
+#   - adb
+#
+# 反汇编器 tools/jsc_disasm.py 也只用标准库。
