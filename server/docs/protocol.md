@@ -345,6 +345,67 @@ LoginLayer.prototype._enterMain = function () {
 
 ---
 
+## 7.5 新号起名（player.naming）
+
+进主场景后，新号会弹出 `NamingLayer`。反汇编 `NamingLayer`：
+
+```js
+// 模块作用域
+var MAX_NAME_LENGTH = table_constant.name_max_length;          // 10
+var ILLEGAL_CHARACTER_REG = /.../;
+var NICKNAME_REG = new RegExp("^[a-zA-Z0-9\u4e00-\u9fa5\u0800-\u4e00]{1," + MAX_NAME_LENGTH + "}$");
+
+// 确认按钮
+NamingLayer.prototype._onClickOk = function () {
+    var str = this._nameField.getString();
+    if (str.length == 0)                { ccuiManager.toast(table_dictionary[105]); return; }
+    if (str.length > MAX_NAME_LENGTH)   { ccuiManager.toast(table_dictionary[101]); return; }
+    if (ILLEGAL_CHARACTER_REG.test(str)){ ccuiManager.toast(table_dictionary[106]); return; }
+    if (!NICKNAME_REG.test(str))        { ccuiManager.toast(table_dictionary[106]); return; }
+    if (dataManager.chat.checkSensitive(str)) { ccuiManager.toast(table_dictionary[108]); return; }
+
+    if (this._skipGuide) { if (this._cb) this._cb(str); }
+    else { dataManager.player.naming(str, function (msg) { ... }.bind(this)); }
+};
+```
+
+`Player.naming`：
+
+```js
+Player.prototype.naming = function (name, cb) {
+    this._pendingName = name;
+    server.request('player.naming', {name: name}, function (err, data) {
+        if (err) return;
+        if (data.code == 200) { _this._setName(name); if (cb) cb(); gameEvent.onRoleCreate(); }
+        else                  { if (cb) cb(PLAYER_ERR_DICT[data.code] || data.data); }
+    });
+};
+```
+
+服务端必须回 **`code: 200`**。回 0 的话客户端走错误分支，**弹窗永远不关**，
+玩家看到的就是「点确认没反应 + 弹窗里有个东西一直闪」。
+
+那个「一直闪的东西」是 `NamingLayer.ctor` 里跑的 `res.cursoreffect` 时间轴
+（输入框的闪烁光标特效），是正常装饰，不是加载圈。
+
+**怎么确认「闪的东西」到底是谁**（这套排障手法值得复用）：
+
+```powershell
+# 1) 先排除 Java 层
+adb shell dumpsys activity top | findstr "ProgressBar Dialog GLSurfaceView"
+#    -> 只有 Cocos2dxGLSurfaceView + Cocos2dxEditText，Java 层是干净的
+
+# 2) 扫 JS 场景里所有「可见 + opacity>0 + 有正在跑的动作」的节点
+python tools\repl.py "(function(){var out=[];function w(n,d,p){...}...})()"
+#    -> TopLayer(时间轴) 和 NamingLayer(光标特效)，其余都是 opacity=0 的遮罩
+
+# 3) 用 instanceof 反查节点是哪个 JS 类
+for (var k in window) if (typeof window[k]==='function' && node instanceof window[k]) ...
+#    -> TopLayer / NamingLayer
+```
+
+---
+
 ## 8. 客户端内部数据模型（从反汇编读出来的接口）
 
 ### 8.1 jsc 字节码涉及的调用约定
