@@ -40,7 +40,8 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 APK_DIR = os.environ.get("GS_APK_DIR", r"E:\code\apk\zcsmw")
 WORK = os.environ.get("GS_WORK_DIR", r"E:\code\apk\work")
-DEFAULT_HOOK = os.path.join(BASE_DIR, "client", "hook.js")
+DEFAULT_PATCH = os.path.join(BASE_DIR, "client", "patch.js")
+DEFAULT_PROBE = os.path.join(BASE_DIR, "client", "probe.js")
 APKTOOL = os.environ.get("GS_APKTOOL", r"E:\code\apk\apktool.bat")
 
 BUILD_TOOLS = os.environ.get("GS_BUILD_TOOLS", r"D:\Android\android-sdk\build-tools\36.0.0")
@@ -180,7 +181,8 @@ def prune_stale_dex() -> None:
             log(f"  清理陈旧 dex: build/apk/{f}")
 
 
-def prepare_assets(host: str, port: int, login_port: int, hook_path: str) -> None:
+def prepare_assets(host: str, port: int, login_port: int, patch_path: str,
+                   probe_path: str, with_probe: bool) -> None:
     token = make_host_token(host, port)
     login_base = make_login_base(host, login_port)
     log(f"CDN      -> {token.decode()}")
@@ -195,29 +197,66 @@ def prepare_assets(host: str, port: int, login_port: int, hook_path: str) -> Non
     _replace_in_file(os.path.join(APK_DIR, "assets/src/patch/project.manifest"),
                      [(OLD_HOST, token), (OLD_WWW, token)], "project.manifest")
 
-    # project.json：jsList 里加探针
+    # project.json：jsList 里加入 patch.js（必需）和 probe.js（可选）
+    #
+    # 拆分说明：patch.js 是「少了游戏就跑不对」的适配层，必须打包；
+    #           probe.js 是研究用探针（加密/协议挂钩、REPL、字段探测），
+    #           release 可以用 GS_WITH_PROBE=0 排除掉。
     pj = os.path.join(APK_DIR, "assets/project.json")
     cfg = json.loads(open(pj, "r", encoding="utf-8").read())
     js_list = cfg.setdefault("jsList", [])
-    if "src/patch/hook.js" not in js_list:
-        js_list.append("src/patch/hook.js")
+    # 老版本注入过 hook.js，清掉
+    if "src/patch/hook.js" in js_list:
+        js_list.remove("src/patch/hook.js")
+    wanted = ["src/patch/patch.js"]
+    if with_probe:
+        wanted.append("src/patch/probe.js")
+    # 先清掉这次不打包的（让 --no-probe 的增量构建也正确）
+    changed = False
+    for name in ("src/patch/patch.js", "src/patch/probe.js"):
+        if name not in wanted and name in js_list:
+            js_list.remove(name)
+            changed = True
+    for name in wanted:
+        if name not in js_list:
+            js_list.append(name)
+            changed = True
+    if changed:
         with open(pj, "w", encoding="utf-8", newline="\n") as fh:
             fh.write(json.dumps(cfg, indent=4, ensure_ascii=False))
-        log("  project.json: 已加入 src/patch/hook.js")
+        log(f"  project.json: jsList = {js_list}")
     else:
-        log("  project.json: 已包含探针")
+        log(f"  project.json: jsList 已是最新 {js_list}")
 
-    # 写探针（把 __CDN_BASE__ 换成真实地址）
-    with open(hook_path, "rb") as fh:
-        hook_js = fh.read()
-    if b"__CDN_BASE__" not in hook_js:
-        raise SystemExit("hook.js 里没有 __CDN_BASE__ 占位符")
-    hook_js = hook_js.replace(b"__CDN_BASE__", f"http://{host}:{port}".encode())
-    dst = os.path.join(APK_DIR, "assets/src/patch/hook.js")
-    os.makedirs(os.path.dirname(dst), exist_ok=True)
-    with open(dst, "wb") as fh:
-        fh.write(hook_js)
-    log(f"  探针已写入 assets/src/patch/hook.js ({len(hook_js)} B)")
+    # 不打包的文件要从 assets 里删掉，否则会残留在 APK 里
+    keep = {w.rsplit("/", 1)[-1] for w in wanted}
+    for name in ("patch.js", "probe.js"):
+        if name not in keep:
+            stale = os.path.join(APK_DIR, "assets/src/patch", name)
+            if os.path.exists(stale):
+                os.remove(stale)
+                log(f"  已删除 assets/src/patch/{name}")
+
+    # 写 patch.js / probe.js（__CDN_BASE__ 换成真实地址）
+    sources = [("patch.js", patch_path)]
+    if with_probe:
+        sources.append(("probe.js", probe_path))
+    for name, src in sources:
+        with open(src, "rb") as fh:
+            body = fh.read()
+        if b"__CDN_BASE__" in body:
+            body = body.replace(b"__CDN_BASE__", f"http://{host}:{port}".encode())
+        dst = os.path.join(APK_DIR, "assets/src/patch", name)
+        os.makedirs(os.path.dirname(dst), exist_ok=True)
+        with open(dst, "wb") as fh:
+            fh.write(body)
+        log(f"  已写入 assets/src/patch/{name} ({len(body)} B)")
+
+    # 老文件清理
+    old = os.path.join(APK_DIR, "assets/src/patch/hook.js")
+    if os.path.exists(old):
+        os.remove(old)
+        log("  已删除旧的 assets/src/patch/hook.js")
 
     # 删无用资源
     for rel in DROP_ASSETS:
@@ -297,7 +336,10 @@ def main():
     ap.add_argument("--host", default="10.110.29.230")
     ap.add_argument("--port", type=int, default=18080, help="CDN 端口（必须 5 位）")
     ap.add_argument("--login-port", type=int, default=8080, help="登录端口（必须 4 位）")
-    ap.add_argument("--hook", default=DEFAULT_HOOK)
+    ap.add_argument("--patch", default=DEFAULT_PATCH)
+    ap.add_argument("--probe", default=DEFAULT_PROBE)
+    ap.add_argument("--no-probe", action="store_true",
+                    help="不打包 probe.js（release 构建）")
     ap.add_argument("--out", default=os.path.join(WORK, "zcsmw-mod.apk"))
     ap.add_argument("--skip-prepare", action="store_true", help="只打包，不重新改资源")
     ap.add_argument("--keep-intermediate", action="store_true", help="保留 aligned 中间产物")
@@ -306,7 +348,8 @@ def main():
     os.makedirs(WORK, exist_ok=True)
 
     if not args.skip_prepare:
-        prepare_assets(args.host, args.port, args.login_port, args.hook)
+        prepare_assets(args.host, args.port, args.login_port, args.patch,
+                   args.probe, not args.no_probe)
         prune_stale_dex()
 
     apktool_build(args.out)
