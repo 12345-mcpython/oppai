@@ -140,25 +140,113 @@ python tools\selftest_game.py
 
 分 **Java(smali) 层**、**JS 探针**、**现代化/精简** 三部分。
 
-### 4.0 现代化与精简
+### 4.0 现代化 / 精简 / 删 SDK
 
 原版 APK 是 2015 年的东西：**`minSdkVersion: 9`（Android 2.3）而且根本没有
-`targetSdkVersion`**（默认取 minSdk），56 个 Activity 里绝大多数是已经停服的
-百度/微博/推送/Bugly SDK 组件。
+`targetSdkVersion`**（默认取 minSdk），68 个组件里绝大多数是已经停服的
+百度 / 微博 / 推送 / Bugly / TalkingData SDK。
 
 ```powershell
 # 0) 先备份！
 copy zcsmw.apk backup\zcsmw-original.apk
 
-# 1) 现代化（改 manifest / apktool.yml / 注入运行时权限申请）
+# 1) 现代化（manifest / apktool.yml / 运行时权限）
 python client\modernize.py
 
-# 2) 重新编译 smali+资源，再打包（--strip 默认剔除广告图和百度支付插件）
+# 2) 删掉没用的第三方 SDK（会自动生成桩类 + 清理 manifest）
+python tools\sdk_strip\analyze.py --json tools\sdk_strip\needed.json
+python tools\sdk_strip\strip.py
+python tools\sdk_strip\gen_native_stubs.py
+
+# 3) 重编译 smali+资源，再打包
 apktool b <解包目录> --no-apk --no-crunch
 python tools\patch_apk.py
 ```
 
-`client/modernize.py` 做的事：
+#### 删掉了什么
+
+`tools/sdk_strip/analyze.py` 的 `STRIP_PREFIXES` 里列了全部要删的包，
+**46.6 MB smali**：
+
+```
+com/baidu(22.0) com/duoku(5.6) com/tencent(6.2) com/squareup(3.0) com/unionpay(2.4)
+com/sina(2.1) com/alipay(1.4) com/tendcloud(1.4) com/quicksdk(0.9) com/ta(0.5)
+com/slidingmenu(0.3) com/qq(0.3) com/gametalkingdata(0.2) com/qk(0.1)
+com/talkingdata com/jg com/chukong com/kurogame com/UCMobile com/ut
+```
+
+manifest 里删掉 **66 个组件 + 26 个权限**（`ReadSms` / `SendSms` / `ReadContacts` /
+`CallPhone` / `Camera` 之类全是 SDK 要的）。dex 从 **7.45 MB 降到 1.7 MB**。
+
+#### 删 SDK 的三个坑（都是 JNI 的锅）
+
+删 SDK 不只是删文件 —— 有三类代码会**按名字引用**被删的类，缺一个就崩：
+
+**坑 1：游戏自己的 Java 代码直接调 SDK API**
+
+`AppActivity` / `GameApplication` / `QuickAdapter` / `GameShare` / `XGAdapter` 一共
+引用了 34 个 SDK 类。`analyze.py` 把这些引用（类型 / 方法签名 / 父类 / 接口 /
+static 还是 virtual）全扫出来，`gen_stubs.py` 据此生成**空实现桩类**。
+
+* `getInstance()` → 生成单例，返回非 null（否则 `invoke-virtual` 直接 NPE）
+* 被 `implements` 的 → 生成 interface
+* `QuickSdkApplication` / `QuickSdkSplashActivity` → 父类换成 Application / Activity
+* **必须按 `invoke-static` / `invoke-virtual` 区分**，否则会
+  `IncompatibleClassChangeError: expected static but found virtual`
+
+**坑 2：`SplashActivity` 靠 SDK 基类回调才启动**
+
+```java
+SplashActivity extends QuickSdkSplashActivity
+  onSplashStop() { startActivity(AppActivity); finish(); }
+```
+
+原来由 SDK 闪屏播完后回调 `onSplashStop()`。桩里如果只继承 Activity 不回调，
+App 会**永远卡在闪屏**（界面全白、logcat 什么都没有）。桩里要在 `onCreate` 里直接回调一次。
+
+**坑 3：`libcocos2djs.so` 里硬编码了 SDK 类名**
+
+原生层 cocos2d-x 的 jsb 绑定会 `FindClass` 这些类，找不到就
+`JNI DETECTED ERROR: java_class == null` → SIGABRT（连 Java 异常都看不到）：
+
+```
+com/tencent/bugly/cocos/Cocos2dxAgent     Bugly
+com/tendcloud/tenddata/TalkingDataGA      TalkingData
+com/tendcloud/tenddata/TDGAAccount / TDGAItem / TDGAMission / TDGAVirtualCurrency
+com/chukong/cocosplay/client/CocosPlayClient
+```
+
+从 `.so` 的 `.rodata` 里按**相邻字符串**把「方法名 + JNI 签名」挖出来
+（`so_pairs.py`），然后**把所有出现过的重载都定义上** ——
+JNI 只按 (名字, 签名) 查，多定义几个参数列表不同的重载没有副作用。
+见 `tools/sdk_strip/native_stubs.py` + `gen_native_stubs.py`。
+
+**坑 4：游戏的 R 类是动态解析资源 ID 的**
+
+`com/cm/zcsmw/baidu/R$*.smali` 的 `<clinit>` 全部调
+`com.quicksdk.apiadapter.baidu.ActivityAdapter.getResId(name, type)`
+（共 3392 处）。所以这个类不能删，要用标准 API 重新实现：
+
+```java
+public static int getResId(String name, String type) {
+    return AppActivity.instance.getResources()
+        .getIdentifier(name, type, AppActivity.instance.getPackageName());
+}
+```
+
+#### 效果
+
+| 项 | 原版 | 现在 |
+|---|---|---|
+| smali（删掉） | — | **-46.6 MB** |
+| dex | 7.45 MB | **1.7 MB** |
+| manifest 组件 | 68 | **2** |
+| 权限 | 34 | **8** |
+| APK | 551.6 MB | **545.3 MB** |
+
+APK 只小了 6.33 MB —— 因为 540 MB 是游戏资源（png/mp3），SDK 那点代码本来就不占体积。
+**删 SDK 的真正意义是**：没有死代码、没有向已停服服务器发请求的后台服务
+（原来还有个 `com.cm.zcsmw.baidu:bdservice_v1` 百度推送进程）、少了 26 个用不上的隐私权限。
 
 | 项 | 改动 |
 |---|---|
