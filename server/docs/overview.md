@@ -234,9 +234,18 @@ vanilla 不传参 → 游戏代码 `function (eventName) { if (/began\d/.test(ev
    已试过 7~8 种形状都没在 REPL 里复现，怀疑 `initUserData` 传进去的不是 `data.talents`，
    需要在探针里把构造参数打出来再登一次才能确定。
 4. **日常 / 成就任务** —— 只做了 `type=2`（主线）；日常 246 条 / 成就 91 条。
-5. **其余 stub 路由** —— `rank.*` / `exchange.*` / `boss.*` / `shop.*` / `mail.*`
-   / `friendsupport.getrecommendsoldiers` 等，照着对应模块的 `updateByServer` 反汇编补 key 即可。
-6. `hashKey` / `hmac64` 还没复刻（登录靠单位元绕过）；自研 DH 的完整算法也没还原。
+5. **助战（好友支援）列表渲染不出来** —— 服务端已经能正确回 NPC 名单
+   （`friendsupport.getrecommendsoldiers` -> 20 个 `npcId`，客户端
+   `FriendSupport._recommendList` 里也确实收到了 20 个），
+   但 `SupportChoiceLayer` 那边渲染不出来。已确认的：
+   `setSupportList()` 手动调是好的（会往 `_pushAsynList` 里塞 18 个
+   `{item, innSize, index}`），所以卡在「层的 `_recommendList` 是 0」——
+   也就是 `_init` 里那个 `getRecommendList` 回调没把 data 传进层里，
+   需要一个能用的 REPL 会话盯一下 `SupportChoiceLayer._init/<`。
+   **不影响战斗**（这个弹窗是可选的好友助战）。
+6. **其余 stub 路由** —— `rank.*` / `exchange.*` / `boss.*` / `shop.*` / `mail.*` 等，
+   照着对应模块的 `updateByServer` 反汇编补 key 即可。
+7. `hashKey` / `hmac64` 还没复刻（登录靠单位元绕过）；自研 DH 的完整算法也没还原。
 
 ---
 
