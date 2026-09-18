@@ -163,6 +163,36 @@ E:\code\apk\work\
   debug.keystore             签名密钥
 ```
 
+## 解包目录里哪些可以删
+
+```
+E:\code\apk\zcsmw\
+  AndroidManifest.xml      ← 必需
+  apktool.yml              ← 必需（记录 sdk 版本 / doNotCompress 等）
+  smali/ res/ assets/ lib/ ← 必需（被打包的内容）
+  build/                   ← apktool 的增量构建缓存，可以随便删
+  unknown/                 ← apktool 的「未知文件」，build_apk.py 会删掉
+```
+
+**`build/` 是纯派生数据**：
+
+| 内容 | 作用 |
+|---|---|
+| `build/resources.zip` | aapt2 编译资源的中间产物 |
+| `build/apk/` | 编译好的 `classes.dex` / `resources.arsc` / `AndroidManifest.xml` / `res/`；打包时 apktool 直接从这里拿 |
+
+删掉完全没问题，下次 `apktool b` 会自动重建 —— 实测全量重建 **16.7 秒**
+（带缓存时 12 秒），产物完全一致。
+
+而且**删掉更干净**：apktool 打包时会把这个目录里的东西原样塞进 APK，
+如果改过 smali 目录结构（比如把 `smali_classes2` 并进 `smali`），
+缓存里旧的多余 dex 会跟着进包 —— 这就是之前包里出现 3 个 dex 的原因。
+
+`build_apk.py` 里的 `prune_stale_dex()` 会自动清掉这类陈旧 dex，
+所以平时不用手动删；只是遇到「包里多了 dex / 结构对不上」时，
+`rm -rf build` 是最省事的解法。
+
+
 ---
 
 ## 实测数据
