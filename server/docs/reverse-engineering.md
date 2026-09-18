@@ -247,6 +247,7 @@ JS 主线程被死循环卡住时，REPL 也发不出去（探针本身跑在 JS
 |------|------|
 | `tools/jsc_disasm.py` | jsc 反汇编 |
 | `tools/disasm_func.py` | 按函数名反汇编 |
+| `tools/jsc_strings.py` | 只扒 atom（标识符）表，按源码顺序，定位函数逻辑最快的一把 🔪 |
 | `tools/gen_opcodes.py` | 生成操作码表 |
 | `tools/repl.py` | 在游戏进程里执行 JS |
 | `tools/probe.py` | 重启客户端 + 批量执行 + 打日志 |
@@ -254,6 +255,65 @@ JS 主线程被死循环卡住时，REPL 也发不出去（探针本身跑在 JS
 | `tools/selftest_game.py` | 不开游戏自测业务协议 |
 | `tools/shots.py` | 连续截图 |
 | `tools/sdk_strip/` | 删掉没用的第三方 SDK（见 README 4.0） |
+
+### 3.2 「先扒 atom，再上 REPL」——定位客户端问题最快的两步
+
+`tools/jsc_disasm.py` 只能反汇编**顶层脚本**，真正的业务代码全在嵌套 lambda
+（对象字面量里的方法）里，所以很多时候不如换个思路：
+
+**第一步：扒 atom 表。** SM33 的 XDR 里每个函数脚本自带一组 atom，编码是
+
+```
+<uint32 (2 * len + 1)> <len 个单字节 ASCII>
+```
+
+长度字段是「UTF-16 长度 + 1」，内容却是 ASCII。按这个规则扫一遍就能拿到
+**按源码顺序排的标识符表**（`tools/jsc_strings.py`）：每个函数先是它的参数和
+局部变量名，然后是函数体里按出现顺序用到的属性名/方法名。信息量非常大，例如
+
+```
+$ python tools\jsc_strings.py zcsmw\assets\src\ui\main\mainlayer.jsc _initModuleButtons
+   8664   29  MainLayer<._initModuleButtons     <- 函数（debug name）
+   8761   11  mainUiLayer                        <- 局部变量（按声明顺序）
+   8776    7  modules
+   8787    3  key
+   ...
+   9615   12  _mainUiLayer                       <- 函数体，按出现顺序
+   9631   11  dataManager
+   9646    6  player
+   9656   11  moduleState
+   ...
+```
+
+一眼就能看出 `var modules = dataManager.player.moduleState;` 这一句 —— 私服
+没发 `moduleState` 时它就是 `undefined`，紧接着 `modules[key]` 抛
+`TypeError: modules is undefined`，主界面黑屏。
+
+**第二步：REPL 验证。** 猜测只有落到运行时才算数（`tools/repl.py`），
+而且可以直接 `new Xxx(data)` 试各种数据形状，几秒钟就能试出客户端要的字段结构
+（比如 `TalentCenter` 要的是「天赋类型 -> 当前天赋 key」的平铺映射，
+不是嵌套结构）。
+
+### 3.3 一个高频坑：`initUserData` 中途抛异常 = 各种莫名其妙的表现
+
+`dataManager.initUserData(data)` 是个「一把梭」的长函数：先 `new` 三十来个数据
+模块，再依次调 `player.setCharacter / initTeams / initAsst / guideManager.init /
+uiLayoutManager.init / player.initModuleState / initXgNotifications`。
+
+**中间任何一步抛异常，后面的全都不执行**，于是表现千奇百怪：
+
+| 没跑到的步骤 | 现象 |
+|---|---|
+| `player.initModuleState()` | `TypeError: modules is undefined @ mainlayer.js:188` → 登录后黑屏 |
+| `guideManager.init()` | 引导状态是默认值，引导乱走 |
+| 某个数据模块的构造 | `dataManager.xxx` 是半成品，点进对应界面才炸 |
+
+排查办法：`client/probe.js` 的 `hookInitUserData` 会把异常和 stack 打出来，
+`hookInterfaceTrace` 会把这一段调用逐个打 `CALL xxx`，一眼就能看出死在哪一步。
+
+`client/patch.js` 里的 `INITUSERDATA-GUARD` 是正式版兜底：无论上面死在哪一步，
+都保证 `player._moduleState` 建出来，至少不会黑屏。
+
 
 ### 3.1 排障套路（复用性最高的几条）
 
