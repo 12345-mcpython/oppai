@@ -49,6 +49,14 @@
     var fileText = "";
     var MAX_FILE = 300000;
 
+    // 冗长日志（每帧/每次轮询的那种）走 vlog，默认不输出。
+    // 想看就在 REPL 里执行： __OPPAI_VERBOSE__ = true
+    function vlog(line) {
+        if (typeof __OPPAI_VERBOSE__ !== "undefined" && __OPPAI_VERBOSE__) {
+            emit(line);
+        }
+    }
+
     function emit(line) {
         lines.push(line);
         try {
@@ -117,15 +125,15 @@
                             try {
                                 hb.fn();
                             } catch (e) {
-                                emit("HEARTBEAT ERR " + e);
+                                vlog("HEARTBEAT ERR " + e);
                             }
                         }
                     }
                 }, null, 0.1, false);
-                emit("HEARTBEAT via scheduler");
+                vlog("HEARTBEAT via scheduler");
             }
         } catch (e) {
-            emit("HEARTBEAT scheduler failed " + e);
+            vlog("HEARTBEAT scheduler failed " + e);
         }
     }
 
@@ -734,7 +742,7 @@
             return;
         }
         autoLoginTried = true;
-        emit("AUTO LOGIN -> quicksdk.login()（走 Java 层补丁）");
+        if (!window.__oppaiAutoLogged) { window.__oppaiAutoLogged = true; emit("AUTO 自动点击已关闭"); }
         try {
             // 原生 QuickAdapter.login 已被改成直接回调 quicksdk.sdkLoginCallback(1, account, token)。
             // 这里只是替玩家点一下「开始游戏」，剩下交给游戏自己的登录链路。
@@ -800,7 +808,7 @@
 
     function startAutoLoginWatch() {
         if (!AUTO_CLICK_START) {
-            emit("AUTO 自动点击「开始游戏」已关闭，请手动点");
+            vlog("AUTO 自动点击「开始游戏」已关闭，请手动点");
             return;
         }
         heartbeat(function () {
@@ -1043,7 +1051,7 @@
         }
         if (transportMode === null) {
             transportMode = (window.httpc && typeof httpc.sendGetRequest === "function") ? "httpc" : "xhr";
-            emit("TRANSPORT " + transportMode);
+            vlog("TRANSPORT " + transportMode);
         }
         if (transportMode === "httpc") {
             try {
@@ -1064,7 +1072,7 @@
         // 看门狗：请求万一丢了，别把 REPL 永久锁死
         if (replBusy) {
             if (replBusySince && (Date.now() - replBusySince) > 8000) {
-                emit("REPL watchdog reset (pendingXhr=" + liveXhr.length + ")");
+                vlog("REPL watchdog reset (pendingXhr=" + liveXhr.length + ")");
                 liveXhr.length = 0;
                 replBusy = false;
             } else {
@@ -1081,7 +1089,7 @@
             replBusy = false;
             replBusySince = 0;
             if (replPolls <= 3) {
-                emit("REPL poll#" + replPolls + " status=" + st + " body=" + brief(String(txt), 300));
+                vlog("REPL poll#" + replPolls + " status=" + st + " body=" + brief(String(txt), 300));
             }
             if (st !== 200 || !txt) {
                 return;
@@ -1217,7 +1225,7 @@
             var self = this;
             var dur = 0;
             try { dur = self.getDuration ? self.getDuration() : 0; } catch (e) { }
-            emit("AT.setLastFrameCallFunc 已调用 duration=" + dur);
+            vlog("AT.setLastFrameCallFunc 已调用 duration=" + dur);
 
             self.__oppaiLfFired = false;
             var wrapped = function () {
@@ -1225,21 +1233,21 @@
                 self.__oppaiLfFired = true;
                 var scB = null;
                 try { scB = cc.director.getRunningScene(); } catch (e) { }
-                emit("AT.lastFrame 触发 frame=" + (self.getCurrentFrame ? self.getCurrentFrame() : "?") +
+                vlog("AT.lastFrame 触发 frame=" + (self.getCurrentFrame ? self.getCurrentFrame() : "?") +
                      " sceneBefore=" + (scB ? scB.getChildrenCount() : "-"));
                 // 关键：原版引擎会把动画名当第一个参数传给回调
                 // 游戏代码写的是 function (eventName) { if (eventName === "default") this._init(); }
                 // 而 v3.6 的绑定是 invoke(0, ...) 不传参数，导致 _init() 永不调用。
                 var animName = self.__oppaiAnimName || "default";
-                emit("AT.lastFrame 传参 anim=" + animName);
+                vlog("AT.lastFrame 传参 anim=" + animName);
                 try {
                     var r = cb.call(self, animName);
                     var scA = null;
                     try { scA = cc.director.getRunningScene(); } catch (e) { }
-                    emit("AT.lastFrame cb 正常返回 sceneAfter=" + (scA ? scA.getChildrenCount() : "-"));
+                    vlog("AT.lastFrame cb 正常返回 sceneAfter=" + (scA ? scA.getChildrenCount() : "-"));
                     return r;
                 } catch (e) {
-                    emit("AT.lastFrame cb 抛异常!! " + e);
+                    vlog("AT.lastFrame cb 抛异常!! " + e);
                     throw e;
                 }
             };
@@ -1249,7 +1257,7 @@
                 var ms = Math.round((dur / 60) * 1000) + 800;
                 setTimeout(function () {
                     if (!self.__oppaiLfFired) {
-                        emit("AT.lastFrame 兜底触发（引擎没触发）after " + ms + "ms");
+                        vlog("AT.lastFrame 兜底触发（引擎没触发）after " + ms + "ms");
                         wrapped();
                     }
                 }, ms);
@@ -1265,10 +1273,10 @@
                 var wrapped = function (frame) {
                     var ev = "?";
                     try { ev = (frame && frame.getEvent) ? frame.getEvent() : String(frame); } catch (e) { ev = "ERR"; }
-                    emit("AT.frameEvent " + ev + " frame=" + (self.getCurrentFrame ? self.getCurrentFrame() : "?"));
+                    vlog("AT.frameEvent " + ev + " frame=" + (self.getCurrentFrame ? self.getCurrentFrame() : "?"));
                     return cb.apply(self, arguments);
                 };
-                emit("AT.setFrameEventCallFunc 已注册");
+                vlog("AT.setFrameEventCallFunc 已注册");
                 return origSetFrame.call(self, wrapped);
             };
         }
@@ -1278,8 +1286,8 @@
             // 记下动画名，setLastFrameCallFunc 的回调要用
             this.__oppaiAnimName = name;
             var r = null;
-            try { r = origPlay.apply(this, arguments); } catch (e) { emit("AT.play ERR " + e); throw e; }
-            emit("AT.play(" + name + "," + loop + ") endFrame=" + (this.getEndFrame ? this.getEndFrame() : "?"));
+            try { r = origPlay.apply(this, arguments); } catch (e) { vlog("AT.play ERR " + e); throw e; }
+            vlog("AT.play(" + name + "," + loop + ") endFrame=" + (this.getEndFrame ? this.getEndFrame() : "?"));
             return r;
         };
 
@@ -1311,13 +1319,13 @@
                 if (typeof orig !== "function") { return; }
                 n++;
                 UpdateScene.prototype[m] = function () {
-                    emit("US." + m + "() 进入");
+                    vlog("US." + m + "() 进入");
                     try {
                         var r = orig.apply(this, arguments);
-                        emit("US." + m + "() 返回");
+                        vlog("US." + m + "() 返回");
                         return r;
                     } catch (e) {
-                        emit("US." + m + "() 抛异常!! " + e);
+                        vlog("US." + m + "() 抛异常!! " + e);
                         throw e;
                     }
                 };
@@ -1404,7 +1412,7 @@
 
             loadURL: function (url) {
                 this._url = url || "";
-                emit("WEBVIEW.loadURL " + this._url);
+                vlog("WEBVIEW.loadURL " + this._url);
                 var self = this;
                 try {
                     var xhr = cc.loader.getXMLHttpRequest();
@@ -1413,7 +1421,7 @@
                         if (xhr.readyState !== 4) { return; }
                         if (xhr.status >= 200 && xhr.status < 300) {
                             var text = htmlToText(xhr.responseText);
-                            emit("WEBVIEW 内容 " + text.length + " 字");
+                            vlog("WEBVIEW 内容 " + text.length + " 字");
                             self._render(text || "（公告为空）");
                             try { if (self._cbFinish) { self._cbFinish(self, self._url); } } catch (e) { }
                         } else {
@@ -1528,13 +1536,116 @@
         emit("VIDEO ccui.VideoPlayer polyfill 已装（占位，不真正播放）");
     })();
 
+    // ------------------------------------------------------------------
+    // LaunchGuideLayer（战斗开场引导层）调用跟踪
+    //
+    // 视频播完卡住时用。VideoPlayer 绑定本身已验证没问题
+    // （单独测能收到 COMPLETED=3），所以卡点在引导层的状态机。
+    // ------------------------------------------------------------------
+    (function installTrace() {
+        // LaunchGuideLayer 是懒加载的，hook 执行时可能还没有 —— 轮询等待
+        if (typeof LaunchGuideLayer === "undefined" || !LaunchGuideLayer.prototype) {
+            if (!window.__oppaiLglTraceTimer) {
+                window.__oppaiLglTraceTimer = setInterval(function () {
+                    if (typeof LaunchGuideLayer !== "undefined" && LaunchGuideLayer.prototype) {
+                        clearInterval(window.__oppaiLglTraceTimer);
+                        window.__oppaiLglTraceTimer = null;
+                        installTrace();
+                    }
+                }, 500);
+            }
+            return;
+        }
+        if (window.__oppaiLglTraceTimer) {
+            clearInterval(window.__oppaiLglTraceTimer);
+            window.__oppaiLglTraceTimer = null;
+        }
+        if (LaunchGuideLayer.prototype.__oppaiWrapped) { return; }
+        LaunchGuideLayer.prototype.__oppaiWrapped = true;
+
+        var METHODS = ["ctor", "guideStart", "jump", "_update", "_next", "_end",
+                       "onPlayerMovieCallBack", "launchBegan", "launchEnd",
+                       "launchCancelled", "battleLaunchEnd", "judgePlacement",
+                       "_judgePlacement"];
+        var n = 0;
+        for (var i = 0; i < METHODS.length; i++) {
+            (function (m) {
+                var orig = LaunchGuideLayer.prototype[m];
+                if (typeof orig !== "function") { return; }
+                n++;
+                LaunchGuideLayer.prototype[m] = function () {
+                    var idx = "";
+                    try { idx = " _index=" + this._index; } catch (e) { }
+                    vlog("LGL." + m + "() 进入" + idx + " args=" + arguments.length);
+                    try {
+                        var r = orig.apply(this, arguments);
+                        vlog("LGL." + m + "() 返回" + idx);
+                        return r;
+                    } catch (e) {
+                        vlog("LGL." + m + "() 抛异常!! " + e);
+                        throw e;
+                    }
+                };
+            })(METHODS[i]);
+        }
+        vlog("LGL-WRAP LaunchGuideLayer 已包装 " + n + " 个方法");
+    })();
+
+    // ------------------------------------------------------------------
+    // LaunchGuideLayer.onPlayerMovieCallBack 重复回调守卫
+    //
+    // 视频播完会调这个，回调体里第一句是 this._videoPlayer.removeFromParent()，
+    // 而 _videoPlayer 恰恰是回调体自己置成 null 的 —— 所以一旦触发两次，
+    // 第二次必然 TypeError: this._videoPlayer is null（launchguidelayer.js:372），
+    // 异常把后面的 guideStart() / resumeMusic() 全挡掉，画面就停在视频最后一帧。
+    //
+    // 这里做成幂等：_videoPlayer 已经是 null 就说明这一轮已经处理过，直接忽略。
+    // ------------------------------------------------------------------
+    (function installGuard() {
+        // LaunchGuideLayer 是懒加载的，hook 执行时可能还没有 —— 轮询等待
+        if (typeof LaunchGuideLayer === "undefined" || !LaunchGuideLayer.prototype) {
+            if (!window.__oppaiLglGuardTimer) {
+                window.__oppaiLglGuardTimer = setInterval(function () {
+                    if (typeof LaunchGuideLayer !== "undefined" && LaunchGuideLayer.prototype) {
+                        clearInterval(window.__oppaiLglGuardTimer);
+                        window.__oppaiLglGuardTimer = null;
+                        installGuard();
+                    }
+                }, 500);
+            }
+            return;
+        }
+        if (window.__oppaiLglGuardTimer) {
+            clearInterval(window.__oppaiLglGuardTimer);
+            window.__oppaiLglGuardTimer = null;
+        }
+        if (LaunchGuideLayer.prototype.__oppaiGuard) { return; }
+        LaunchGuideLayer.prototype.__oppaiGuard = true;
+
+        var orig = LaunchGuideLayer.prototype.onPlayerMovieCallBack;
+        if (typeof orig !== "function") {
+            emit("LGL-GUARD onPlayerMovieCallBack 不是函数，跳过");
+            return;
+        }
+
+        LaunchGuideLayer.prototype.onPlayerMovieCallBack = function (sender, eventType) {
+            // 3 = COMPLETED
+            if (eventType === 3 && this._videoPlayer == null) {
+                emit("LGL-GUARD 忽略重复的 COMPLETED（_videoPlayer 已为 null）");
+                return;
+            }
+            return orig.apply(this, arguments);
+        };
+        emit("LGL-GUARD onPlayerMovieCallBack 已加幂等守卫");
+    })();
+
     var tries = 0;
     var timer = setInterval(function () {
         tries++;
         try {
             hookAll();
         } catch (e) {
-            emit("HOOK ERROR " + e);
+            vlog("HOOK ERROR " + e);
         }
         if (tries > 2000) {
             clearInterval(timer);
@@ -1545,7 +1656,7 @@
     heartbeat(function () {
         tick++;
         if (tick <= 5 || tick % 50 === 0) {
-            emit("TICK " + tick + " pendingXhr=" + liveXhr.length);
+            vlog("TICK " + tick + " pendingXhr=" + liveXhr.length);
         }
     }, 1000);
 
@@ -1553,7 +1664,7 @@
         hookAll();
         startHeartbeats();
         // 立刻做一次自检：写文件 + 发一次 XHR
-        emit("SELFTEST writable=" + (function () {
+        vlog("SELFTEST writable=" + (function () {
             try {
                 jsb.fileUtils.writeStringToFile("selftest\n", jsb.fileUtils.getWritablePath() + "hook.log");
                 return jsb.fileUtils.isFileExist(jsb.fileUtils.getWritablePath() + "hook.log");
@@ -1562,10 +1673,10 @@
             }
         })());
         xhr("GET", CDN_BASE + "/hook/ping", "1", function (st, txt) {
-            emit("SELFTEST xhr status=" + st + " body=" + brief(String(txt), 200));
+            vlog("SELFTEST xhr status=" + st + " body=" + brief(String(txt), 200));
         });
         replPoll();
     } catch (e) {
-        emit("HOOK ERROR " + e);
+        vlog("HOOK ERROR " + e);
     }
 })();
