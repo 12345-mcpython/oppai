@@ -50,7 +50,14 @@ DEFAULT_STRIP = (
     "assets/res/adimage/",        # 广告图（广告服务早已下线）
     "assets/res/adcolumn/",
     "assets/bdpwxpayplugin.apk",  # 百度支付插件
+    "assets/quicksdk.xml",        # QuickSDK 配置（SDK 已删）
 )
+
+# lib/ 下只保留这些 .so，其余全删。
+# 依据：跑起来后 /proc/<pid>/maps 里实际只加载了 libcocos2djs.so。
+KEEP_LIBS = {
+    "libcocos2djs.so",
+}
 
 OLD_HOST = b"cdn.shuangmawei.net"          # 19 字节
 OLD_WWW = b"www.shuangmawei.net"           # 19 字节
@@ -182,6 +189,12 @@ def repack(src_apk: str, dst_apk: str, host: str, port: int, login_port: int, ho
 
                 if any(name.startswith(p) for p in strip):
                     skipped += 1
+                    continue
+
+                # lib/ 下只留白名单里的 .so（实测只有 libcocos2djs.so 会被加载）
+                if name.startswith("lib/") and os.path.basename(name) not in KEEP_LIBS:
+                    skipped += 1
+                    log(f"  剔除 native 库 {name} ({info.file_size/1024:.0f} KB)")
                     continue
 
                 data = dex_files.get(name) or res_files.get(name) or zin.read(name)
