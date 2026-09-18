@@ -1257,6 +1257,22 @@
             return origSet.call(self, wrapped);
         };
 
+        // 帧事件（setFrameEventCallFunc）—— 战斗加载/结束的推进靠它
+        var origSetFrame = AT.prototype.setFrameEventCallFunc;
+        if (typeof origSetFrame === "function") {
+            AT.prototype.setFrameEventCallFunc = function (cb) {
+                var self = this;
+                var wrapped = function (frame) {
+                    var ev = "?";
+                    try { ev = (frame && frame.getEvent) ? frame.getEvent() : String(frame); } catch (e) { ev = "ERR"; }
+                    emit("AT.frameEvent " + ev + " frame=" + (self.getCurrentFrame ? self.getCurrentFrame() : "?"));
+                    return cb.apply(self, arguments);
+                };
+                emit("AT.setFrameEventCallFunc 已注册");
+                return origSetFrame.call(self, wrapped);
+            };
+        }
+
         // play 也记一笔，方便看时序
         AT.prototype.play = function (name, loop) {
             // 记下动画名，setLastFrameCallFunc 的回调要用
@@ -1453,7 +1469,9 @@
     // ------------------------------------------------------------------
     (function () {
         if (typeof ccui === "undefined") { return; }
-        if (typeof ccui.VideoPlayer === "function" && ccui.VideoPlayer.__oppaiFake) {
+        // 原生绑定已经注册了就别覆盖（引擎侧 register_all_oppai_videoplayer）
+        if (typeof ccui.VideoPlayer === "function") {
+            emit("VIDEO ccui.VideoPlayer 已存在（原生绑定），跳过 polyfill");
             return;
         }
 
