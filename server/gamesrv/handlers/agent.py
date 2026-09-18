@@ -47,7 +47,7 @@ def _module_stubs() -> dict:
         "item": {"items": [], "package": {}, "limitTimeItems": []},
         "char": {
             "heros": [store.new_hero()],
-            "soldiers": [],
+            "soldiers": store.new_soldiers(),
             "mechas": [store.new_mecha()],
             "daemons": [],
             "maxSoldiersCount": 50,

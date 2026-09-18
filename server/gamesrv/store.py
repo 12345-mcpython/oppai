@@ -62,6 +62,17 @@ HERO_KEY = "hadf"
 MECHA_KEY = "madflj"
 CHAR_TYPE_HERO = "h"
 CHAR_TYPE_MECHA = "m"
+CHAR_TYPE_SOLDIER = "s"
+
+# 初始士兵。key 都取自客户端 table_soldier（表里有 1558 条），
+# 挑了几个不同品质的，方便在「编成」里看出差别。
+# 之前 soldiers 一直是空列表，导致编成界面加了人也不显示。
+SOLDIER_KEYS = [
+    "sads010101",   # quality 1
+    "sads010102",   # quality 2
+    "sads010103",   # quality 3
+    "sads010104",   # quality 4
+]
 
 
 def new_hero() -> dict:
@@ -81,6 +92,36 @@ def new_hero() -> dict:
         "isCastEnabled": 0,
         "isAsstEnabled": 0,
     }
+
+
+def new_soldier(index: int, key: str, lv: int = 1, star: int = 1) -> dict:
+    """士兵。字段名来自客户端 src/data/soldier.js 的 Soldier（_init 里读的）。
+
+    客户端 Soldier._init 会拿 key 去查 table_soldier 取 char_key / quality /
+    各项属性，所以这里只需要给出会变的那几个字段。
+    """
+    return {
+        "id": index,
+        "key": key,
+        "charType": CHAR_TYPE_SOLDIER,
+        "lv": lv,
+        "star": star,
+        "curExp": 0,
+        "quality": 1,
+        "positioning": 1,
+        "skillLvList": [],
+        "equipments": [],
+        "isLock": 0,
+        "isDel": 0,
+        "isNew": 1,
+        "isDetect": 0,
+        "createTimeSec": int(time.time()),
+    }
+
+
+def new_soldiers() -> list:
+    """初始士兵列表（每样一个）。"""
+    return [new_soldier(i + 1, k) for i, k in enumerate(SOLDIER_KEYS)]
 
 
 def new_mecha() -> dict:
