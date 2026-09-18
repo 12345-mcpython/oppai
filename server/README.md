@@ -61,20 +61,29 @@ game_server/
 │   └── apps.py                cdn / gate / login / game 四个端口的实现
 ├── client/                    客户端补丁（全部在这里）
 │   ├── hook.js                明文 JS 探针（REPL / 日志 / 自动登录 / 进主场景）
-│   ├── ServerLoginRunnable.smali   新增的原生登录回调类
+│   ├── modernize.py           现代化：minSdk/targetSdk、明文 HTTP、运行时权限
+│   ├── PermissionHelper.smali 运行时权限申请
+│   ├── ServerLoginRunnable.smali   原生登录回调（绕开 SDK 弹窗）
 │   └── patch_smali.py         打 Java 层登录补丁
 ├── tools/
 │   ├── jsc_disasm.py          ★ jsc 反汇编器（SM33.1.1 XDR 字节码）
 │   ├── disasm_func.py         按函数名反汇编
 │   ├── gen_opcodes.py         从 Opcodes.h 生成操作码表
-│   ├── patch_apk.py           客户端补丁 + 重签名（含 dex 注入）
+│   ├── patch_apk.py           打 URL 补丁 + 注入探针/dex/资源 + 剔除无用文件 + 重签名
 │   ├── repl.py                在游戏进程里执行任意 JS
 │   ├── probe.py               重启客户端 + 批量执行 JS
 │   ├── selftest_game.py       不开游戏也能自测业务协议
 │   ├── bisect_init.py         逐模块二分，找把 JS 主线程卡死的那个
 │   ├── shots.py               连续截图
-│   ├── trace_startup.py       跟踪启动时对远程配置的读写
-│   └── dump_func.py           字符串提取（早期用的）
+│   └── sdk_strip/             删掉没用的第三方 SDK（详见 4.0）
+│       ├── analyze.py             扫出游戏代码引用了哪些 SDK 类/方法
+│       ├── gen_stubs.py           据此生成桩类
+│       ├── native_stubs.py        .so 硬依赖的类的桩定义
+│       ├── gen_native_stubs.py    生成原生依赖桩
+│       ├── strip.py               删 smali + 装桩 + 清 manifest + 清 assets/lib
+│       ├── manifest_clean.py      用 ElementTree 删 manifest 组件
+│       ├── so_pairs.py            从 .so 挖 JNI 名字+签名
+│       └── js_class_refs.py       扫 JS 里 jsb.reflection 调的 Java 类名
 └── docs/
     ├── protocol.md            协议逐项细节
     └── reverse-engineering.md 反汇编器原理 + 运行时探测手法

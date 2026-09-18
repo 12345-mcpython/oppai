@@ -253,4 +253,31 @@ JS 主线程被死循环卡住时，REPL 也发不出去（探针本身跑在 JS
 | `tools/bisect_init.py` | 逐模块二分找死的循环 |
 | `tools/selftest_game.py` | 不开游戏自测业务协议 |
 | `tools/shots.py` | 连续截图 |
-| `tools/trace_startup.py` | 跟踪启动时对远程配置的读写 |
+| `tools/sdk_strip/` | 删掉没用的第三方 SDK（见 README 4.0） |
+
+### 3.1 排障套路（复用性最高的几条）
+
+这几招在这次逆向里反复用到，遇到「界面卡住 / 白屏 / 闪烁 / 崩溃」都能按顺序试：
+
+```powershell
+# 1) 先分清是 Java 层还是引擎层
+adb shell dumpsys activity top | findstr "ProgressBar Dialog GLSurfaceView EditText"
+adb shell dumpsys window windows | findstr "Window # mFrame ty="     # 有没有小窗口在闪
+
+# 2) 抓帧看是不是在闪（内容帧 vs 空白帧交替）
+1..10 | % { adb shell screencap -p /sdcard/f$_.png; adb pull /sdcard/f$_.png . }
+#   空白帧通常 <9KB
+
+# 3) 列出 JS 场景里「可见 + opacity>0 + 有正在跑的动作」的节点
+python tools\repl.py "(function(){var out=[];function w(n,d,p){...}...})()"
+
+# 4) 反查节点是哪个 JS 类
+for (var k in window) if (typeof window[k]==='function' && node instanceof window[k]) ...
+
+# 5) SDK / 原生层的失败经常被 try/catch 吞掉，只能从 logcat 里捞
+adb shell logcat -d | findstr /i "onFailed failed error ClassNotFound JNI"
+adb shell logcat -d -b crash | findstr "Abort message"
+```
+
+**教训**：改 targetSdk / 删依赖这类事，光看「App 能不能起来」不够 ——
+SDK 的失败是被它自己的 try/catch 吞掉的，只在 logcat 里留一行 `onFailed`。
