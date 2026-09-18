@@ -16,24 +16,58 @@
 
 4. 在 AppActivity.onCreate 里注入一行调用 PermissionHelper.request(this)
 
-⚠️ **targetSdk 为什么停在 27、不能上 28？**
+⚠️ **targetSdk 必须停在 23，不能再往上升。**
 
-实测在 Android 9（API 28）上，一旦 targetSdk >= 28，系统就启用
-**隐藏 API（non-SDK interface）限制**，而 2016 年的 QuickSDK / 百度 SDK 大量依赖
-反射调隐藏 API 做初始化。异常被它自己的 try/catch 吞掉，表现为：
+踩了两次坑，都是这个 2016 年的 QuickSDK / 百度 SDK 引起的：
 
-    QuickSdkApplication.onCreate
-      -> com.quicksdk.utility.a.a() 返回 null
-      -> IAdapterFactory.adtActivity() 空指针
-      -> FATAL: Unable to create application ...GameApplication
+| targetSdk | 结果 |
+|---|---|
+| 9（原版） | 一切正常，但现代 Android 会拦安装 / 弹「为旧版 Android 打造」 |
+| **23** | ✅ 能用：装得上、没有旧版警告、SDK 也正常 |
+| 27 | ❌ App 能启动，但百度 SDK 初始化失败并不断重试，弹窗闪烁（见下） |
+| 28+ | ❌ 直接起不来：隐藏 API 限制 |
 
-所以 targetSdk 必须 <= 27。27 已经能满足现代安装要求
-（Android 14 只拦 targetSdk < 23；Android 12+ 的「为旧版 Android 打造」提示
-只在 targetSdk < 23 时出现）。除非把 QuickSDK 整套删掉，否则不要再往上提。
+**27 的坑：`MODE_WORLD_READABLE no longer supported`**
+
+Android 7.0（API 24）起，**targetSdk >= 24 的应用调用
+`Context.MODE_WORLD_READABLE` 会直接抛 SecurityException**。
+百度 SDK 用它写文件，于是：
+
+```
+E/channel.baidu: at com.quicksdk.apiadapter.baidu.SdkAdapter.init
+E/channel.baidu: at com.quicksdk.Sdk.init
+D/BaseLib.BIN  : =>BIN onFailed message = MODE_WORLD_READABLE no longer supported
+```
+
+初始化失败 → 不断重试 → 每次重试 show/dismiss 一次 QuickSDK 的
+小 Loading Dialog（`com.quicksdk.utility.g`，居中 69×69 的 APPLICATION 窗口），
+表现出来就是**屏幕一直在闪**。
+
+**28+ 的坑：隐藏 API 限制**
+
+Android 9（API 28）起，targetSdk >= 28 的应用访问 non-SDK 接口会被拦，
+QuickSDK 靠反射调隐藏 API 初始化，异常被它自己的 try/catch 吞掉：
+
+```
+QuickSdkApplication.onCreate
+  -> com.quicksdk.utility.a.a() 返回 null
+  -> IAdapterFactory.adtActivity() 空指针
+  -> FATAL: Unable to create application ...GameApplication
+```
+
+**为什么 23 是甜点**：
+
+* `< 24` → 不受 MODE_WORLD_READABLE 限制
+* `< 28` → 不受隐藏 API 限制
+* `>= 23` → Android 14 允许安装；Android 12+ 的「此应用专为旧版 Android
+  打造」提示只在 targetSdk < 23 时出现
+* `>= 23` → 危险权限变成运行时申请，所以需要 `PermissionHelper.smali`（已包含）
+
+想再往上提，只能先把 QuickSDK / 百度 SDK 整套删掉。
 
 用法：
-    python client/modernize.py                    # 就地修改（targetSdk 27）
-    python client/modernize.py --target-sdk 27
+    python client/modernize.py                    # 就地修改（targetSdk 23）
+    python client/modernize.py --target-sdk 23
     python client/modernize.py --revert           # 撤销 smali 注入
 """
 
@@ -56,7 +90,7 @@ PERM_SRC = os.path.join(BASE_DIR, "client", "PermissionHelper.smali")
 PERM_DST = os.path.join(SMALI_DIR, "PermissionHelper.smali")
 
 MIN_SDK = 21
-TARGET_SDK = 28
+TARGET_SDK = 23          # 不要往上提！见文件头说明（24 起 MODE_WORLD_READABLE 会抛异常）
 
 USES_SDK = f'    <uses-sdk android:minSdkVersion="{MIN_SDK}" android:targetSdkVersion="{TARGET_SDK}"/>'
 

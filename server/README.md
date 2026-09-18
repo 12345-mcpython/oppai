@@ -163,17 +163,44 @@ python tools\patch_apk.py
 | 项 | 改动 |
 |---|---|
 | `minSdkVersion` | `9` → `21` |
-| `targetSdkVersion` | 无 → **`27`**（见下面的警告） |
+| `targetSdkVersion` | 无 → **`23`**（见下面的警告） |
 | `usesCleartextTraffic` | `true`（模拟服是明文 HTTP） |
 | `extractNativeLibs` | `true` |
 | `requestLegacyExternalStorage` | `true` |
 | 运行时权限 | 新增 `client/PermissionHelper.smali`，在 `AppActivity.onCreate` 注入一次申请 |
 
-> #### ⚠️ targetSdk 不能提到 28
+> #### ⚠️ targetSdk 必须停在 23，不能再往上提
 >
-> 实测在 Android 9（API 28）上，`targetSdk >= 28` 会启用**隐藏 API
-> （non-SDK interface）限制**，而 2016 年的 QuickSDK / 百度 SDK 大量依赖反射调
-> 隐藏 API 做初始化。异常被它自己的 `try/catch` 吞掉，表现是：
+> 这个 2016 年的 QuickSDK / 百度 SDK 有两个硬性上限，都踩过：
+>
+> | targetSdk | 结果 |
+> |---|---|
+> | 9（原版） | 一切正常，但现代 Android 会拦安装 / 弹「为旧版 Android 打造」 |
+> | **23** | ✅ **能用**：装得上、没有旧版警告、SDK 也正常 |
+> | 27 | ❌ 能启动，但百度 SDK 初始化失败并不断重试 → **屏幕一直闪** |
+> | 28+ | ❌ 起不来：隐藏 API 限制 |
+>
+> **24 起：`MODE_WORLD_READABLE` 会抛异常**
+>
+> ```
+> E/channel.baidu: at com.quicksdk.apiadapter.baidu.SdkAdapter.init
+> E/channel.baidu: at com.quicksdk.Sdk.init
+> D/BaseLib.BIN  : =>BIN onFailed message = MODE_WORLD_READABLE no longer supported
+> ```
+>
+> 百度 SDK 用 `MODE_WORLD_READABLE` 写文件，Android 7.0（API 24）起
+> targetSdk >= 24 的应用调用它会直接抛 SecurityException。
+> 初始化失败 → 不断重试 → 每次重试 show/dismiss 一次 QuickSDK 的
+> 小 Loading Dialog（`com.quicksdk.utility.g`，居中 69×69 的 APPLICATION 窗口），
+> 表现出来就是**屏幕一直在闪 + 中间一个转圈**。
+>
+> **怎么定位的**：`screencap` 连抓 10 帧，发现内容帧和空白帧交替（约各一半）；
+> 再 `dumpsys window windows` 看到一个 **69×69 居中的 APPLICATION 窗口**
+> （另一个同款窗口处于 `EXITING`）—— 这就是 Java 层的那个转圈。
+>
+> **28 起：隐藏 API 限制**
+>
+> QuickSDK 靠反射调隐藏 API 初始化，异常被它自己的 try/catch 吞掉：
 >
 > ```
 > QuickSdkApplication.onCreate
@@ -182,12 +209,11 @@ python tools\patch_apk.py
 >   -> FATAL: Unable to create application ...GameApplication
 > ```
 >
-> 排障过程：先二分 `resources.arsc`（无影响）→ 再二分 dex（无影响）→
-> 最后两轮定位到 manifest 里的 `<uses-sdk>`。
+> **为什么 23 是甜点**：`< 24` 不受 MODE_WORLD_READABLE 限制；`< 28` 不受隐藏 API 限制；
+> `>= 23` 就能装在现代 Android 上、且不再弹「为旧版 Android 打造」。
+> 代价是危险权限变成运行时申请 —— 已经用 `PermissionHelper.smali` 补上了。
 >
-> 27 已经够用：Android 14 只拦 `targetSdk < 23`，Android 12+ 的
-> 「此应用专为旧版 Android 打造」提示只在 `targetSdk < 23` 时出现。
-> 除非把 QuickSDK 整套删掉，否则不要再往上提。
+> 想再往上提，只能先把 QuickSDK / 百度 SDK 整套删掉。
 
 `tools/patch_apk.py --strip` 默认剔除：
 
