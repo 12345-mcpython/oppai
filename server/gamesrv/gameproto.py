@@ -36,22 +36,59 @@ from .crypto.des import des_decode, des_encode
 
 log = logx.get("gameproto")
 
+# 和 session.DH_IDENTITY 同一个值（dhSecret 的单位元），这里复制一份避免循环 import
+DH_IDENTITY = bytes.fromhex("0100000000000000")
+
 # 客户端认可的成功码
 CODE_OK = 200
 
 
+# 客户端真实请求体 = base64(" " + sessionId) + base64(des(payload))
+#
+# server.js 的 reqPack 会在密文前面拼一段 session 字段：
+#   " " + 32 位十六进制 session id（共 33 字节）→ 正好编成 44 个 base64 字符、没有 '='。
+# 早先探针是用自己重发的请求（没这段），所以服务端一直没见过它；
+# 探针改成「包一层」之后暴露出真实格式，必须先把这段摘掉再解密，
+# 否则 DES 解出来是乱码 → unpack_request 返回 None → 客户端弹
+# 「温馨提示 {"code":1,"msg":"bad request"}」。
+SESSION_FIELD_LEN = 44
+
+
+def split_session_field(text: str):
+    """返回 (sessionId, 剩下的密文)，没有 session 前缀时返回 (None, 原文)。"""
+    if len(text) < SESSION_FIELD_LEN:
+        return None, text
+    head, rest = text[:SESSION_FIELD_LEN], text[SESSION_FIELD_LEN:]
+    try:
+        decoded = base64.b64decode(head, validate=True)
+    except Exception:  # noqa: BLE001
+        return None, text
+    if len(decoded) != 33 or decoded[:1] != b" ":
+        return None, text
+    sid = decoded[1:].decode("ascii", "ignore")
+    if len(sid) != 32 or any(c not in "0123456789abcdefABCDEF" for c in sid):
+        return None, text
+    return sid.lower(), rest
+
+
 def unpack_request(body: bytes, secret: bytes):
-    """解析客户端请求体，返回 (route, msg, reqId) 或 None。"""
+    """解析客户端请求体，返回 (route, msg, reqId) 或 None。
+
+    容错：带不带 session 前缀都认（`split_session_field` 先摘）。
+    """
     text = body.decode("utf-8", "replace").strip()
+    if not text:
+        return None
+    _, text = split_session_field(text)
     if not text:
         return None
     try:
         raw = base64.b64decode(text)
     except Exception:  # noqa: BLE001
         return None
-    for key in (secret, None):
+    for key in (secret, DH_IDENTITY):
         try:
-            plain = des_decode(key if key is not None else secret, raw)
+            plain = des_decode(key, raw)
             payload = json.loads(plain.decode("utf-8"))
             return payload
         except Exception:  # noqa: BLE001

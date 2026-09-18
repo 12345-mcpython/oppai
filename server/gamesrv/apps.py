@@ -323,15 +323,21 @@ def build_game(service):
             },
         )
 
-        # 会话：先按 data 参数里的 session 找，找不到就退化成默认会话
-        sess = None
-        sid = req.q("session") or (req.payload() or {}).get("session")
-        if sid:
-            sess = session_mod.get_session(sid)
-        if sess is None:
-            sess = {"session": sid or "-", "secret": session_mod.DH_IDENTITY, "info": {}}
+        # 会话：真实请求体前面会拼一段 base64(" " + sessionId)，先摘出来
+        raw_text = req.text.strip()
+        body_sid, payload_text = gameproto.split_session_field(raw_text)
 
-        payload = gameproto.unpack_request(req.body, sess["secret"])
+        sess = session_mod.get_session(body_sid) if body_sid else None
+        if sess is None:
+            sid = req.q("session") or (req.payload() or {}).get("session")
+            if sid:
+                sess = session_mod.get_session(sid)
+        if sess is None:
+            sess = {"session": body_sid or "-", "secret": session_mod.DH_IDENTITY, "info": {}}
+            if body_sid:
+                log.warning("GAME 未知 session %s，退化成默认密钥", body_sid)
+
+        payload = gameproto.unpack_request(payload_text.encode("utf-8", "replace"), sess["secret"])
         if payload is None:
             log.warning("GAME 无法解包: %s", req.text[:300])
             return Response(200, gameproto.pack_error(1, "bad request"), content_type="text/plain")

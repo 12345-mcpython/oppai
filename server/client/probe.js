@@ -617,51 +617,32 @@
             return origLogin.call(this, info, wrapped);
         };
 
-        var reqId = 0;
-        s.request = function (route, msg, cb, isBackstageRequest) {
-            reqId++;
-            var url = "http://" + (gameState.gameServUrl || ("10.110.29.230:" + 10003));
-            var key = DH_IDENTITY;
-            var body;
-            try {
-                var plain = crypt.utf16To8(JSON.stringify({route: route, msg: msg || {}, reqId: reqId}));
-                body = crypt.base64Encode(crypt.desEncode(key, plain));
-            } catch (e) {
-                emit("GAME REQ PACK ERR " + e);
-                return;
-            }
-            emit("GAME REQ " + route + " reqId=" + reqId + " -> " + url);
-            try {
-                httpc.sendPostRequest(url, body, function (err, data) {
+        // ⚠️ 这里**必须包一层、不能重写**。
+        //
+        // 早先的版本是自己用 httpc 重发一遍请求，结果把原实现里的
+        // responseConfig 派发整条路绕掉了：server.js 的 request 在调用业务回调前会
+        // 遍历 responseConfig，把响应里出现的模块（player / quest / char / mail ...）
+        // 喂给对应模块的 updateByServer()。绕掉之后所有「服务端推数据」都不生效，
+        // 表现就是任务领奖成功但列表不刷新（改服务端怎么改都没用）。
+        //
+        // 现在就只是包一层打日志，行为完全交给原实现。
+        var origRequest = s.request;
+        s.request = function () {
+            var args = Array.prototype.slice.call(arguments);
+            var route = args[0];
+            emit("GAME REQ " + route + " " + brief(safeJson(args[1]), 200));
+            if (typeof args[2] === "function") {
+                var cb = args[2];
+                args[2] = function (err, data) {
                     if (err) {
-                        emit("GAME REQ ERR " + safeJson(err));
-                        if (typeof cb === "function") {
-                            cb(err);
-                        }
-                        return;
+                        emit("GAME REQ ERR " + route + " " + brief(safeJson(err), 300));
+                    } else {
+                        emit("GAME RESP " + route + " => " + brief(safeJson(data), 600));
                     }
-                    var res;
-                    try {
-                        if (String(data).indexOf('"code":') >= 0) {
-                            res = JSON.parse(data);
-                        } else {
-                            res = JSON.parse(crypt.utf8To16(crypt.desDecode(key, crypt.base64Decode(data))));
-                        }
-                    } catch (e) {
-                        emit("GAME RESP DECODE ERR " + e + " raw=" + brief(String(data), 160));
-                        if (typeof cb === "function") {
-                            cb(e);
-                        }
-                        return;
-                    }
-                    emit("GAME RESP " + route + " => " + safeJson(res).substring(0, 600));
-                    if (typeof cb === "function") {
-                        cb(null, res, 0, 0);
-                    }
-                });
-            } catch (e) {
-                emit("GAME REQ EX " + e);
+                    return cb.apply(this, arguments);
+                };
             }
+            return origRequest.apply(this, args);
         };
         return true;
     }

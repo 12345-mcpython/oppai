@@ -227,6 +227,54 @@ return JSON.parse(crypt.utf8To16(crypt.desDecode(key, crypt.base64Decode(data)))
 * 成功响应 = `base64(desEncode(secret, utf8(JSON.stringify(payload))))`
 * **错误响应可以是明文 JSON**（只要含 `"code":`，客户端就直接当 JSON 解析）
 
+### 5.0 请求体前面还有一段 session（容易被探针掩盖）
+
+真实请求体是**两段 base64 拼起来的**：
+
+```
+body = base64(" " + sessionId)  +  base64(desEncode(secret, {route, msg, reqId}))
+        └─ 33 字节 → 44 个 base64 字符，没有 '=' ─┘
+```
+
+看到的现象是服务端 `unpack_request` 解密失败，客户端弹
+`温馨提示 {"code":1,"msg":"bad request"}`。
+
+这段以前一直没被发现，因为 `client/probe.js` 早先的版本**把 `server.request` 整个
+重写了**（自己拿 `httpc` 重发），压根不带这段前缀；探针改成「只包一层」之后真实
+格式才暴露出来。
+
+服务端处理见 `gamesrv/gameproto.py::split_session_field`：
+
+```python
+head, rest = text[:44], text[44:]
+sid = base64.b64decode(head)      # b" " + 32 位 hex
+payload = unpack_request(rest)    # 再用该 session 的 secret 解
+```
+
+### 5.2 响应派发（responseConfig）在这套引擎上不生效
+
+`src/util/server.js` 里有一张 `responseConfig`：
+
+```js
+responseConfig.quest  = function (res) { ... dataManager.questCenter.updateByServer(res.data) }
+responseConfig.player / mail / char / gacha / ...
+```
+
+本意是「响应 `data` 里出现哪个模块的 key，就喂给对应模块的 `updateByServer()`」。
+但实测**它没有被派发**：
+
+```
+server.request('player.getdata')  ->  {player: {...}}
+   └─ 包了 Player.updateByServer 打日志，一次都没进
+```
+
+后果是**所有「服务端推数据给客户端」都失效** —— 最直观的表现是主线任务领奖成功、
+奖励也发了，但列表不刷新（改服务端怎么改都没用）。
+
+客户端 `client/patch.js` 里的 `RESP-DISPATCH` 自己补了一层：包住 `server.request`，
+成功响应里出现已知模块 key 就先 `updateByServer()`，再走原来的回调
+（顺序关键：回调里会立刻重绘列表）。
+
 ### 5.1 成功码是 200
 
 反汇编 `dataManager.playerLogin/</<`：
@@ -451,3 +499,61 @@ for (var k in window) if (typeof window[k]==='function' && node instanceof windo
 ### 8.2 模块 key 映射
 
 见 README 5.4 节的表格。
+
+## 9. 任务（quest.*）
+
+### 9.1 数据形状
+
+登录的 `data.quest` 和 `quest.getnewquest` / `quest.submitquest` 响应里的 `quest`
+是**同一个形状**，客户端 `QuestCenter.ctor` 与 `updateByServer` 都吃它：
+
+```json
+{
+  "quests": {
+    "209001": {
+      "id": "209001",
+      "questKey": "209001",
+      "state": "3",
+      "schedule": {"1": 10}
+    }
+  },
+  "finishQuests": {"209001": 1},
+  "finishQuestsId": [],
+  "dailyQuestsTime": "2026-09-18 20:15:33",
+  "updateTime": "2026-09-18 20:15:33"
+}
+```
+
+三个坑（都是「列表能看但点不了/不刷新」的直接原因）：
+
+1. **`id` 必须给。** `_createQuest` 结尾 `quest.id = data.id`，
+   而 `QuestItem.updateState` 和 `QuestLayer._submitQuest` 都拿 `quest.id`
+   去查表和提交（`requestReceiveRewards({id: quest.id})`）。不给的话客户端在本地
+   就 `return`，**服务端连 `quest.submitquest` 都收不到**。
+2. **`schedule` 是对象不是数组。** key 取自 `table_quest.schedule_i` 的第一段
+   （`"1#1"` → `"1"`），value 是当前进度。回数组的话 `data.schedule["1"]` 取到
+   `undefined`，`scheduleCur` 算不出来，「领奖」按钮一直是灰的。
+3. **领过的任务要再回一次 `state:"4"`（FINISHED）。**
+   `updateByServer` 只覆盖不清理，不在回包里那条会一直停在 ACHIEVED，
+   表现就是「奖励领了、列表没刷新」。
+
+状态机：`0 未激活 / 1 已激活 / 2 已接受 / 3 已达成(可领) / 4 已完成(已领) / 5 无效`
+类型：`1 日常 / 2 主线 / 3 成就 / 4 公会 / 5 活动 / 6 新手`
+
+### 9.2 任务表是客户端静态配置
+
+`table_quest` / `table_quest_condition` / `table_quest_reward` 编译在
+`assets/src/table/tablequest*.jsc` 里，服务端没有原始文件。
+用 `tools/extract_client_tables.py` 让游戏自己把要用的字段吐出来，
+存成 `gamesrv/data/table_quest.json`（508 条，只留 type/rank/activate_lv/
+activate_quest_key/条件个数/达成值/schedule key）。客户端换版本重跑一次即可。
+
+### 9.3 主线推进
+
+`gamesrv/quests.py` 只维护主线（type=2，共 135 条）：
+按 `activate_quest_key` 前序遍历出推进顺序，一次给客户端一个 12 条的窗口，
+窗口第一条直接是「已达成」（可以立刻领），领掉后窗口往后滑。
+
+`sync.syncupclient` 也实现了：客户端上报 `actquest.questUpdateTime`，
+和服务端的 `quests.update_time(player)` 不一致时把整个 quest 块推回去
+（这是 `SyncManager.updateByServer` 唯一认的通道）。

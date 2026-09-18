@@ -9,7 +9,7 @@ route 名字来自客户端 src/manager/datamanager.js：
 from __future__ import annotations
 
 from ..gameproto import CODE_OK
-from .. import config, logx, store
+from .. import config, logx, quests, store
 from . import route
 
 log = logx.get("handler.agent")
@@ -62,13 +62,9 @@ def _module_stubs() -> dict:
             "activityTimes": {},
         },
         "mail": {"mails": [], "updateTime": t, "remindCount": 0},
-        "quest": {
-            "quests": [],
-            "finishQuests": [],
-            "finishQuestsId": [],
-            "dailyQuestsTime": t,
-            "remindCount": 0,
-        },
+        # 任务（主线）单独算：见 gamesrv/quests.py
+        # 形状必须和 quest.getnewquest 回的一致，客户端走的是同一套
+        # responseConfig -> QuestCenter.updateByServer()。
         "actquest": {"activites": [], "updateTime": t, "updateList": []},
         "favor": {"favors": [], "isNeedAsstEff": 0, "favorExpAdd": 0},
         "favorevent": {"favorEvents": [], "events": [], "removedFeEventKeys": []},
@@ -163,6 +159,8 @@ def get_login_data(session: dict, msg: dict, req_id):
         "timeObj": t,
         "serverTime": store.now_ms(),
         "player": player,
+        # 主线任务窗口（quests.py 里算，和 quest.getnewquest 同一个函数）
+        "quest": quests.block(player),
     }
     data.update(_module_stubs())
     return {"code": CODE_OK, "msg": "", "data": data}
@@ -184,6 +182,7 @@ def create_player(session: dict, msg: dict, req_id):
         "player": player,
         "isNewPlayer": True,
         "newPlayerGuide": 0,   # 0 = 不是新号，跳过新手引导
+        "quest": quests.block(player),
     }
     data.update(_module_stubs())
     return {"code": CODE_OK, "msg": "", "data": data}

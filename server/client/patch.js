@@ -487,6 +487,121 @@
 
 
     // ------------------------------------------------------------------
+    // 服务端推数据：客户端自己不做派发，这里补上
+    //
+    // src/util/server.js 里有一张 responseConfig 表，本意是「响应 data 里出现哪个
+    // 模块的 key，就喂给对应模块的 updateByServer()」：
+    //
+    //     responseConfig.quest  = function (res) { ... dataManager.questCenter.updateByServer(res.data) }
+    //     responseConfig.player / mail / char / gacha / ...
+    //
+    // 但在这套引擎上实测它**没有被派发**：server.request('player.getdata') 回
+    // {player:...}，Player.updateByServer() 也不会被调用。于是所有「服务端推数据给
+    // 客户端」都失效 —— 最直观的表现就是主线任务领奖成功、奖励也发了，但列表不刷新。
+    //
+    // 这里自己补一层：包住 server.request，成功响应里出现下面的 key 就先喂给对应模块
+    // 的 updateByServer()，再走原来的回调（顺序很重要，回调里会立刻重绘列表）。
+    // ------------------------------------------------------------------
+    (function installResponseDispatch() {
+        // 只列「响应 key -> dataManager 上的模块」能一一对上、
+        // 而且模块确实有 updateByServer() 的。
+        function targets() {
+            var dm = window.dataManager;
+            if (!dm) {
+                return null;
+            }
+            return {
+                player: dm.player,
+                quest: dm.questCenter,
+                mail: dm.mailbox,
+                gacha: dm.gacha,
+                char: dm.character,
+                friend: dm.friend,
+                sign: dm.signCenter,
+                arena: dm.arenaCenter,
+                score: dm.score,
+                society: dm.society,
+                societyclg: dm.societyClg,
+                detect: dm.detect,
+                boss: dm.bossCenter,
+                equipment: dm.equipmentCenter,
+                exchange: dm.exchangeCenter,
+                talents: dm.talentCenter,
+                actquest: dm.actQuestCenter
+            };
+        }
+
+        function applyResponse(res) {
+            if (!res || res.code !== 200 || !res.data) {
+                return 0;
+            }
+            var map = targets();
+            if (!map) {
+                return 0;
+            }
+            var n = 0;
+            for (var key in map) {
+                if (res.data[key] === undefined) {
+                    continue;
+                }
+                var mod = map[key];
+                if (!mod || typeof mod.updateByServer !== "function") {
+                    continue;
+                }
+                try {
+                    mod.updateByServer(res.data[key]);
+                    n++;
+                } catch (e) {
+                    emit("RESP-DISPATCH " + key + " 失败: " + e);
+                }
+            }
+            return n;
+        }
+
+        function patch() {
+            var s = window.server;
+            if (!s || typeof s.request !== "function") {
+                return false;
+            }
+            if (s.request.__oppaiDispatch) {
+                return true;
+            }
+            var orig = s.request;
+            var W = function () {
+                var args = Array.prototype.slice.call(arguments);
+                if (typeof args[2] === "function") {
+                    var cb = args[2];
+                    args[2] = function (err, res) {
+                        if (!err) {
+                            applyResponse(res);
+                        }
+                        return cb.apply(this, arguments);
+                    };
+                }
+                return orig.apply(this, args);
+            };
+            W.__oppaiDispatch = true;
+            s.request = W;
+            emit("RESP-DISPATCH 已接管响应派发（responseConfig 在这套引擎上不生效）");
+            return true;
+        }
+
+        if (patch()) {
+            return;
+        }
+        var tries = 0;
+        if (!window.__oppaiDispatchTimer) {
+            window.__oppaiDispatchTimer = setInterval(function () {
+                if (patch() || ++tries > 240) {
+                    clearInterval(window.__oppaiDispatchTimer);
+                    window.__oppaiDispatchTimer = null;
+                }
+            }, 500);
+        }
+    })();
+
+
+    // ------------------------------------------------------------------
     // 新手引导：直接跳过
     //
     // 客户端所有菜单点击都走 src/ex/uiloader.js 的 op.uiLoader.addTouchEventListener：
