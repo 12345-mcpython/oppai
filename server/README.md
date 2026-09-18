@@ -85,6 +85,7 @@ game_server/
 │       ├── so_pairs.py            从 .so 挖 JNI 名字+签名
 │       └── js_class_refs.py       扫 JS 里 jsb.reflection 调的 Java 类名
 └── docs/
+    ├── build.md               打包逻辑（为什么这么做）
     ├── protocol.md            协议逐项细节
     └── reverse-engineering.md 反汇编器原理 + 运行时探测手法
 ```
@@ -114,6 +115,8 @@ python run.py -v
 > 换机器时改 `gamesrv/config.py` 的 `PUBLIC_HOST`，并用同样的端口位数重新打包。
 
 ### 3.2 打客户端补丁
+
+> 每一步「为什么这么做」见 [docs/build.md](docs/build.md)。
 
 ```powershell
 # 0) 准备：原版 APK、apktool 解包目录、JDK、Android build-tools
