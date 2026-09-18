@@ -176,7 +176,7 @@ def create_player(session: dict, msg: dict, req_id):
         "serverTime": store.now_ms(),
         "player": player,
         "isNewPlayer": True,
-        "newPlayerGuide": 1,
+        "newPlayerGuide": 0,   # 0 = 不是新号，跳过新手引导
     }
     data.update(_module_stubs())
     return {"code": CODE_OK, "msg": "", "data": data}

@@ -64,6 +64,9 @@ CHAR_TYPE_HERO = "h"
 CHAR_TYPE_MECHA = "m"
 CHAR_TYPE_SOLDIER = "s"
 
+# 新手引导位掩码全 1 = 所有引导都已完成。见 new_player() 里的说明。
+GUIDE_MARK_DONE = 0x7FFFFFFF
+
 # 初始士兵。key 都取自客户端 table_soldier（表里有 1558 条），
 # 挑了几个不同品质的，方便在「编成」里看出差别。
 # 之前 soldiers 一直是空列表，导致编成界面加了人也不显示。
@@ -178,7 +181,12 @@ def new_player(account: str) -> dict:
         "medalClothesId": 0,
         "medalBgId": 0,
         "curTeamIdx": 0,
-        "guideMark": 0,
+        # 新手引导位掩码（客户端 guideManager.checkGuide 用 id & (1 << n) 判断）。
+        # 全 1 表示所有引导都已完成 —— 否则 GuideLayer 会一直拦着菜单点击：
+        #   op.uiLoader.addTouchEventListener 里，只要
+        #   GuideLayer.getInstance().isGuide() 为真，就先把点击交给
+        #   GuideLayer.nextStep()，正常回调永远走不到。
+        "guideMark": GUIDE_MARK_DONE,
         "createTime": time_str(now),
         # 客户端 Player.initTeams() 会按 TEAM_COUNT_LIMIT 建队，队伍数量给足
         "teams": [new_team(i) for i in range(5)],
