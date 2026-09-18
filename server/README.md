@@ -69,6 +69,7 @@ game_server/
 │   ├── jsc_disasm.py          ★ jsc 反汇编器（SM33.1.1 XDR 字节码）
 │   ├── disasm_func.py         按函数名反汇编
 │   ├── gen_opcodes.py         从 Opcodes.h 生成操作码表
+│   ├── merge_dex.py           把 smali_classesN 并成单 dex
 │   ├── build_apk.py           改 assets + apktool 打包 + 对齐 + 签名
 │   ├── repl.py                在游戏进程里执行任意 JS
 │   ├── probe.py               重启客户端 + 批量执行 JS
@@ -83,7 +84,8 @@ game_server/
 │       ├── strip.py               删 smali + 装桩 + 清 manifest + 清 assets/lib
 │       ├── manifest_clean.py      用 ElementTree 删 manifest 组件
 │       ├── so_pairs.py            从 .so 挖 JNI 名字+签名
-│       └── js_class_refs.py       扫 JS 里 jsb.reflection 调的 Java 类名
+│       ├── js_class_refs.py       扫 JS 里 jsb.reflection 调的 Java 类名
+│       └── find_orphans.py        找出宿主 SDK 删掉后变成孤儿的包
 └── docs/
     ├── build.md               打包逻辑（为什么这么做）
     ├── protocol.md            协议逐项细节

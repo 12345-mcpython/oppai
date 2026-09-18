@@ -151,6 +151,35 @@ def prune_do_not_compress() -> None:
             log(f"      - {r}")
 
 
+def prune_stale_dex() -> None:
+    """清理 apktool 增量缓存里已经不存在的 dex。
+
+    `build/apk/` 是 apktool 的缓存，打包时会把它里面的东西原样塞进 APK。
+    合并/删掉 smali 目录之后（比如 smali_classes2 并进 smali、smali_sdkstub 删掉），
+    缓存里的 classes2.dex / sdkstub.dex 还在，会被一起打进包。
+
+    这里按「当前存在哪些 smali 目录」算出期望的 dex 名，多余的删掉。
+    """
+    build = os.path.join(APK_DIR, "build", "apk")
+    if not os.path.isdir(build):
+        return
+
+    expected = set()
+    for d in os.listdir(APK_DIR):
+        if not os.path.isdir(os.path.join(APK_DIR, d)) or not d.startswith("smali"):
+            continue
+        if d == "smali":
+            expected.add("classes.dex")
+        else:
+            # smali_classes2 -> classes2.dex； smali_sdkstub -> sdkstub.dex
+            expected.add(d[len("smali_"):] + ".dex" if d.startswith("smali_") else "classes.dex")
+
+    for f in sorted(os.listdir(build)):
+        if f.endswith(".dex") and f not in expected:
+            os.remove(os.path.join(build, f))
+            log(f"  清理陈旧 dex: build/apk/{f}")
+
+
 def prepare_assets(host: str, port: int, login_port: int, hook_path: str) -> None:
     token = make_host_token(host, port)
     login_base = make_login_base(host, login_port)
@@ -278,6 +307,7 @@ def main():
 
     if not args.skip_prepare:
         prepare_assets(args.host, args.port, args.login_port, args.hook)
+        prune_stale_dex()
 
     apktool_build(args.out)
     aligned = align(args.out)
