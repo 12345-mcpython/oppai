@@ -252,6 +252,11 @@ def new_player(account: str) -> dict:
         "worldChatCount": 0,
         "monthCardDueTimeSec": time_str(now),
         "msgPushMark": 0,
+        # 任务进度。放在 new_player 里（而不是等第一次用到再 setdefault），
+        # 是为了让 updateTime 稳定：客户端会拿它跟服务端比来决定要不要拉新数据，
+        # 每次请求现生成的话 sync.syncupclient 会永远认为「有变化」。
+        # 新手引导 / 任务见 gamesrv/quests.py。
+        "quests": {"done": [], "updateTime": time_str(now)},
     }
 
 
@@ -306,6 +311,24 @@ def update_player(account: str, **fields) -> dict:
         player.update(fields)
         _save(db)
         return player
+
+
+def save_player(player: dict) -> None:
+    """把改过的 player 写回 players.json。
+
+    ⚠️ 这个很容易踩：`get_or_create_player()` 每次都从文件重新 load，
+    返回的是**临时副本**，直接改它、不写回去就全丢了。
+    主线任务领奖曾经就栽在这里 —— 每次 `done` 都从空开始，
+    日志里永远是「累计 1 条」，客户端下次刷新又看到同一条能领，
+    表现就是「反复刷新，顶上一直是这两条任务」。
+    """
+    account = player.get("account") or config.DEFAULT_ACCOUNT
+    with _lock:
+        db = _load()
+        if account in db:
+            player = dict(db[account], **player)
+        db[account] = player
+        _save(db)
 
 
 def all_players() -> dict:

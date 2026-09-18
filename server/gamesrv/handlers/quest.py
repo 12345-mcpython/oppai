@@ -53,6 +53,10 @@ def submit_quest(session: dict, msg: dict, req_id):
     result = quests.submit(player, msg)
     if result["code"] != CODE_OK:
         return result
+    # ⚠️ _player() 拿到的 player 是从 players.json load 出来的临时副本，
+    # 改完必须写回去，否则这次领奖下次刷新就「忘了」——
+    # 表现就是「反复刷新，顶上一直是同两条任务」（done 永远是空的）。
+    store.save_player(player)
     return _ok(player, rewards=result["data"].get("rewards") or [])
 
 
