@@ -1131,10 +1131,245 @@
     };
 
     emit("HOOK LOADED v" + VERSION + " cdn=" + CDN_BASE +
+
         " setInterval=" + (typeof setInterval) +
         " XHR=" + (typeof XMLHttpRequest) +
         " cc=" + (typeof window.cc) +
         " director=" + (window.cc && cc.director ? "yes" : "no"));
+
+
+    // ------------------------------------------------------------------
+    // ccui.helper.seekNodeByName / seekNodeByTag polyfill
+    //
+    // 原版 libcocos2djs.so 里有 js_cocos2dx_ui_Helper_seekNodeByName，
+    // 但 cocos2d-js v3.6 的 ui::Helper 只有 seekWidgetByName/ByTag（收 Widget*），
+    // 收 Node* 的版本是 cocos2d-x 3.7 才加的。
+    // 少了它，游戏的 UpdateScene._init() 会直接抛：
+    //     TypeError: seekNodeByName is not a function
+    // 热更新界面就建不出来，一直黑屏。
+    //
+    // 原生层注册不了 —— ccui.helper 是 jsb_boot.js 用 JS 建的，
+    // 原生 callback 跑在它之前会被覆盖。所以在这里补。
+    // ------------------------------------------------------------------
+    (function () {
+        var H = (typeof ccui !== "undefined" && ccui.helper) ? ccui.helper : null;
+        if (!H) { emit("POLYFILL ccui.helper 不存在，跳过"); return; }
+
+        if (typeof H.seekNodeByName !== "function") {
+            H.seekNodeByName = function (root, name) {
+                if (!root) { return null; }
+                try {
+                    if (root.getName && root.getName() === name) { return root; }
+                } catch (e) { }
+                var kids = null;
+                try { kids = root.getChildren ? root.getChildren() : null; } catch (e) { }
+                if (!kids) { return null; }
+                for (var i = 0; i < kids.length; i++) {
+                    var hit = H.seekNodeByName(kids[i], name);
+                    if (hit) { return hit; }
+                }
+                return null;
+            };
+            emit("POLYFILL ccui.helper.seekNodeByName 已补");
+        }
+
+        if (typeof H.seekNodeByTag !== "function") {
+            H.seekNodeByTag = function (root, tag) {
+                if (!root) { return null; }
+                try {
+                    if (root.getTag && root.getTag() === tag) { return root; }
+                } catch (e) { }
+                var kids = null;
+                try { kids = root.getChildren ? root.getChildren() : null; } catch (e) { }
+                if (!kids) { return null; }
+                for (var i = 0; i < kids.length; i++) {
+                    var hit = H.seekNodeByTag(kids[i], tag);
+                    if (hit) { return hit; }
+                }
+                return null;
+            };
+            emit("POLYFILL ccui.helper.seekNodeByTag 已补");
+        }
+    })();
+    // ------------------------------------------------------------------
+    // ActionTimeline 回调诊断 + 兜底
+    //
+    // 游戏 UpdateScene 的启动链：
+    //     ctor() -> _logo() -> tl.setLastFrameCallFunc(cb) -> cb 调 _init()
+    // 实测 Layer 节点的 action 恒为 1（永不结束），回调不触发，
+    // 游戏就卡在 logo 那一屏（表现为黑屏）。
+    //
+    // 这里包一层：记录调用 + 加 fired 标志 + 定时器兜底。
+    // ------------------------------------------------------------------
+    (function () {
+        var AT = (typeof ccs !== "undefined") ? ccs.ActionTimeline : null;
+        if (!AT || !AT.prototype || typeof AT.prototype.setLastFrameCallFunc !== "function") {
+            emit("AT-WRAP 无法包装（找不到 ccs.ActionTimeline）");
+            return;
+        }
+        if (AT.prototype.__oppaiWrapped) { return; }
+        AT.prototype.__oppaiWrapped = true;
+
+        var origSet = AT.prototype.setLastFrameCallFunc;
+        var origPlay = AT.prototype.play;
+
+        AT.prototype.setLastFrameCallFunc = function (cb) {
+            var self = this;
+            var dur = 0;
+            try { dur = self.getDuration ? self.getDuration() : 0; } catch (e) { }
+            emit("AT.setLastFrameCallFunc 已调用 duration=" + dur);
+
+            self.__oppaiLfFired = false;
+            var wrapped = function () {
+                if (self.__oppaiLfFired) { return; }
+                self.__oppaiLfFired = true;
+                var scB = null;
+                try { scB = cc.director.getRunningScene(); } catch (e) { }
+                emit("AT.lastFrame 触发 frame=" + (self.getCurrentFrame ? self.getCurrentFrame() : "?") +
+                     " sceneBefore=" + (scB ? scB.getChildrenCount() : "-"));
+                // 关键：原版引擎会把动画名当第一个参数传给回调
+                // 游戏代码写的是 function (eventName) { if (eventName === "default") this._init(); }
+                // 而 v3.6 的绑定是 invoke(0, ...) 不传参数，导致 _init() 永不调用。
+                var animName = self.__oppaiAnimName || "default";
+                emit("AT.lastFrame 传参 anim=" + animName);
+                try {
+                    var r = cb.call(self, animName);
+                    var scA = null;
+                    try { scA = cc.director.getRunningScene(); } catch (e) { }
+                    emit("AT.lastFrame cb 正常返回 sceneAfter=" + (scA ? scA.getChildrenCount() : "-"));
+                    return r;
+                } catch (e) {
+                    emit("AT.lastFrame cb 抛异常!! " + e);
+                    throw e;
+                }
+            };
+            self.__oppaiLfOnEngine = true;
+
+            if (dur > 0) {
+                var ms = Math.round((dur / 60) * 1000) + 800;
+                setTimeout(function () {
+                    if (!self.__oppaiLfFired) {
+                        emit("AT.lastFrame 兜底触发（引擎没触发）after " + ms + "ms");
+                        wrapped();
+                    }
+                }, ms);
+            }
+            return origSet.call(self, wrapped);
+        };
+
+        // play 也记一笔，方便看时序
+        AT.prototype.play = function (name, loop) {
+            // 记下动画名，setLastFrameCallFunc 的回调要用
+            this.__oppaiAnimName = name;
+            var r = null;
+            try { r = origPlay.apply(this, arguments); } catch (e) { emit("AT.play ERR " + e); throw e; }
+            emit("AT.play(" + name + "," + loop + ") endFrame=" + (this.getEndFrame ? this.getEndFrame() : "?"));
+            return r;
+        };
+
+        emit("AT-WRAP ActionTimeline 已包装");
+    })();
+
+    // ------------------------------------------------------------------
+    // UpdateScene 方法调用跟踪
+    //
+    // AT.lastFrame 的回调确实触发了、也正常返回了，但场景不变（2->2），
+    // 说明它不是 _init 的触发者。这里把 UpdateScene 的方法都包一层，
+    // 直接看热更新的启动顺序卡在哪一步。
+    // ------------------------------------------------------------------
+    (function () {
+        if (typeof UpdateScene === "undefined" || !UpdateScene.prototype) {
+            emit("US-WRAP 找不到 UpdateScene");
+            return;
+        }
+        if (UpdateScene.prototype.__oppaiWrapped) { return; }
+        UpdateScene.prototype.__oppaiWrapped = true;
+
+        var METHODS = ["onEnter", "onExit", "_init", "_loadRemoteConfig", "_loadJs",
+                       "_downloadTips", "_unzipTips", "_showTips", "_updateProgression",
+                       "_initUpdateView", "_logo"];
+        var n = 0;
+        for (var i = 0; i < METHODS.length; i++) {
+            (function (m) {
+                var orig = UpdateScene.prototype[m];
+                if (typeof orig !== "function") { return; }
+                n++;
+                UpdateScene.prototype[m] = function () {
+                    emit("US." + m + "() 进入");
+                    try {
+                        var r = orig.apply(this, arguments);
+                        emit("US." + m + "() 返回");
+                        return r;
+                    } catch (e) {
+                        emit("US." + m + "() 抛异常!! " + e);
+                        throw e;
+                    }
+                };
+            })(METHODS[i]);
+        }
+        emit("US-WRAP UpdateScene 已包装 " + n + " 个方法");
+    })();
+
+    // ------------------------------------------------------------------
+    // ccui.WebView polyfill
+    //
+    // 原版 .so 有 experimental_webView_WebView 绑定，v3.6 仓库里没有。
+    // 游戏公告层 noticelayer.js 用 new ccui.WebView()，缺了就抛
+    // "ccui.WebView is not a constructor"。
+    //
+    // 公告内容来自远端 URL（服务器已停），所以做占位实现：
+    // 能构建、能 loadURL、会异步回调 onDidFinishLoading，让流程能继续。
+    // ------------------------------------------------------------------
+    (function () {
+        if (typeof ccui === "undefined") { return; }
+        if (typeof ccui.WebView === "function") { emit("WEBVIEW 已存在，跳过"); return; }
+
+        var WV = ccui.Widget.extend({
+            ctor: function () {
+                this._super();
+                this._url = "";
+                this._scheme = "";
+                this._scales = false;
+                this._cbFinish = null;
+                this._cbFail = null;
+                this._cbJS = null;
+                this._cbShouldStart = null;
+            },
+            loadURL: function (url) {
+                this._url = url || "";
+                emit("WEBVIEW.loadURL " + this._url);
+                var self = this;
+                // 让公告层的 onDidFinishLoading 能收到，流程不至于卡住
+                setTimeout(function () {
+                    try {
+                        if (self._cbFinish) { self._cbFinish(self, self._url); }
+                    } catch (e) { emit("WEBVIEW cbFinish ERR " + e); }
+                }, 50);
+            },
+            loadFile: function (p) { this.loadURL(p); },
+            loadHTMLString: function (html, base) { this._url = base || ""; },
+            loadData: function () { },
+            reload: function () {
+                if (this._url) { this.loadURL(this._url); }
+            },
+            stopLoading: function () { },
+            setJavascriptInterfaceScheme: function (s) { this._scheme = s; },
+            setScalesPageToFit: function (b) { this._scales = !!b; },
+            setOnDidFinishLoading: function (cb) { this._cbFinish = cb; },
+            setOnDidFailLoading: function (cb) { this._cbFail = cb; },
+            setOnJSCallback: function (cb) { this._cbJS = cb; },
+            setOnShouldStartLoading: function (cb) { this._cbShouldStart = cb; },
+            canGoBack: function () { return false; },
+            canGoForward: function () { return false; },
+            goBack: function () { },
+            goForward: function () { },
+            evaluateJS: function (js) { },
+            getURL: function () { return this._url; }
+        });
+
+        ccui.WebView = WV;
+        emit("WEBVIEW ccui.WebView polyfill 已装");
+    })();
 
     var tries = 0;
     var timer = setInterval(function () {
