@@ -32,6 +32,7 @@ import uuid
 
 from . import config, logx
 from .crypto.des import des_decode, des_encode
+from .gameproto import CODE_OK
 
 log = logx.get("session")
 
@@ -128,9 +129,21 @@ def _finish_login(state: dict, text: str):
     session_id, _ = create_session(info)
 
     # 成功响应形状（session / gameServUrl 顶层和 data 里各给一份，兼容两种读法）。
-    # 客户端 User.login 内部还有一层 code 判断，实测带 code:0 也能走通完整链路。
+    #
+    # ⚠️ code 必须是 200。反汇编 `User.login` 的回调：
+    #
+    #     if (result == undefined) { cb(table_dictionary[622]); return; }
+    #     if (result.code !== 200) {
+    #         cc.log('error on login, code :' + result.code);
+    #         cb({code: 299, data: table_dictionary[623] + result.code}, result);
+    #         return;
+    #     }
+    #
+    # 回 0（或者压根不带 code）都会走错误分支 ——
+    # 表现是：点「开始游戏」先弹一个「温馨提示」，然后才进游戏
+    # （弹窗是这条链报的错，进游戏是探针那条链干完的活）。
     result = {
-        "code": 0,
+        "code": CODE_OK,
         "msg": "",
         "session": session_id,
         "gameServUrl": config.GAME_SERV_URL,

@@ -167,7 +167,7 @@ dhSecret(X, *) == dhSecret(*, 00…00) == X
 
 ```json
 {
-  "code": 0, "msg": "",
+  "code": 200, "msg": "",
   "session": "<hex>", "gameServUrl": "10.110.29.230:10003", "userId": 1,
   "data": { "session": "...", "gameServUrl": "...", "userId": 1 }
 }
@@ -175,6 +175,38 @@ dhSecret(X, *) == dhSecret(*, 00…00) == X
 
 `session` / `gameServUrl` 顶层和 `data` 里各给一份，兼容两种读法。
 `gameServUrl` 必须匹配 `^((25[0-5]|...)\.){3}(...):\d{3,5}$`（必须是 IP:PORT）。
+
+> #### ⚠️ `code` 必须是 **200**
+>
+> 反汇编 `User.login` 的回调：
+>
+> ```js
+> if (result == undefined) { cb(table_dictionary[622]); return; }
+> if (result.code !== 200) {
+>     cc.log('error on login, code :' + result.code);
+>     cb({code: 299, data: table_dictionary[623] + result.code}, result);
+>     return;
+> }
+> ```
+>
+> 回 0、或者压根不带 `code`，都会走错误分支。表现是：
+> **点「开始游戏」先弹一个「温馨提示」，然后才进游戏** ——
+> 弹窗是这条链报的错，进游戏是探针那条链干完的活。
+>
+> 改成 200 之后，客户端自己那条链就完全跑通了：
+>
+> ```
+> server.login → playerLogin → agent.getlogindata → cb4AfterLogin
+>              → initUserData → LoginLayer._enterMain → MainScene
+> ```
+>
+> 探针里的 `afterLogin`（手动补登录收尾）也就可以关掉了 ——
+> 否则两条链都跑 `initUserData`，会二次初始化把状态搞坏：
+>
+> ```
+> CB4 ERR    TypeError: this._lvEncrp is null
+> SWITCH ERR TypeError: this._teams is null
+> ```
 
 ---
 

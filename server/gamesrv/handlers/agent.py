@@ -130,24 +130,23 @@ def _agent_block() -> dict:
 def get_login_data(session: dict, msg: dict, req_id):
     """返回玩家登录数据。
 
-    客户端 dataManager.initUserData(data) 会遍历这些 key 构造各模块对象。
-    data.player 为空时客户端会自己去请求 agent.createplayer（新号流程）。
+    客户端 `dataManager.initUserData(data)` 会遍历这些 key 构造各模块对象。
+
+    ⚠️ **必须始终返回完整角色，不能回 `player: null`。**
+
+    反汇编 `dataManager.playerLogin/</<`：
+        var code = data.code;
+        if (code === 200) cb4AfterLogin(null, data.data);
+        else              cb4AfterLogin(data, null);
+
+    它拿到 `data.data` 就直接喂给 `initUserData`，**自己不处理「还没有角色」
+    的情况**。回 null 的话 `new Player(null)` 会把后续状态搞坏
+    （表现为 `CB4 ERR: this._lvEncrp is null`、`SWITCH ERR: this._teams is null`）。
+    所以新号第一次登录时，服务端直接把角色建好返回。
     """
     account = (session.get("info") or {}).get("account") or config.DEFAULT_ACCOUNT
-
     if not store.player_exists(account):
-        log.info("账号 %s 还没有角色，返回空 player 让客户端走建号流程", account)
-        return {
-            "code": CODE_OK,
-            "msg": "",
-            "data": {
-                "player": None,
-                "isNewPlayer": True,
-                "agent": _agent_block(),
-                "timeObj": store.time_obj(),
-                "serverTime": store.now_ms(),
-            },
-        }
+        log.info("账号 %s 还没有角色，服务端自动建号", account)
 
     player = store.get_or_create_player(account)
     t = store.time_obj()

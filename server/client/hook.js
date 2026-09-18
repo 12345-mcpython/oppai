@@ -20,9 +20,19 @@
     var AUTO_ACCOUNT = "emulator";
     var AUTO_PASSWORD = "emulator";
 
-    // 登录成功后是否自动替客户端跑 cb4AfterLogin + 切主场景
-    // （这一步是登录链路的收尾，跟谁点的「开始游戏」无关）
-    var AUTO_AFTER_LOGIN = true;
+    // 登录成功后是否自动替客户端跑 cb4AfterLogin + 切主场景。
+    //
+    // 现在**关掉了** —— 服务端把 WebSocket 登录响应的 code 改成 200 之后
+    // （反汇编 User.login: result.code !== 200 就走错误分支），
+    // 客户端自己那条链（server.login -> playerLogin -> agent.getlogindata
+    // -> cb4AfterLogin -> _enterMain）已经能完整跑通。
+    //
+    // 再让探针补一刀会变成**二次 initUserData**，把状态搞坏：
+    //     CB4 ERR TypeError: this._lvEncrp is null
+    //     SWITCH ERR TypeError: this._teams is null
+    //
+    // 排查问题时可以手动触发：__oppaiHook__.afterLogin()
+    var AUTO_AFTER_LOGIN = false;
 
     // 是否自动代替玩家点「开始游戏」。
     // 关掉之后登录界面完全手动操作；点「开始游戏」/「登录」后照样秒登录进游戏。
