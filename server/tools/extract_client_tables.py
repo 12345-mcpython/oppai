@@ -101,6 +101,40 @@ NPC_JS = r"""
 })()
 """
 
+# 关卡通关奖励。
+#
+# 战斗结算面板上「获得物资」那一栏是空的，就是因为服务端没回奖励。
+# 客户端 `Instance._handlerRewards(rewards)` 要的是
+#     {items: {道具key: 数量}, cards: {...}, equips: {...}, favors: {...}, scores: {...}}
+# （`_getRewardTotal` 是按 key 累加的 map，`_getItemsBySort` 再转成数组排序）
+#
+# 数值来自客户端表：
+#   table_level[levelId].level_reward_id        -> table_level_reward[id] 形如
+#       {"key_1":"100002","min_count_1":540,"max_count_1":900,"span_1":1}
+#   table_level[levelId].first_complete_reward_ids -> "id#id#id"
+#   table_level[levelId].exp
+# 服务端只需要「关卡 -> 掉什么」这一份，所以这里压成一棵小表。
+LEVEL_JS = r"""
+(function () {
+    var out = {level: {}};
+    for (var k in table_level) {
+        var r = table_level[k];
+        if (!r) { continue; }
+        out.level[k] = {
+            exp: r.exp || 0,
+            lvr: r.level_reward_id || "",
+            fc: r.first_complete_reward_ids || "",
+            ap: r.appraise_reward_ids || ""
+        };
+    }
+    out.reward = {};
+    for (var j in table_level_reward) {
+        out.reward[j] = table_level_reward[j];
+    }
+    return JSON.stringify(out);
+})()
+"""
+
 
 def _dump(base: str, js: str, name: str):
     result = eval_remote(base, js, timeout=30.0)
@@ -138,6 +172,8 @@ def main() -> int:
     print(f"[extract] 按 type 统计: {kinds}")
 
     if _dump(base, NPC_JS, "table_friend_support_npc.json") is None:
+        return 1
+    if _dump(base, LEVEL_JS, "table_level_reward.json") is None:
         return 1
     return 0
 
