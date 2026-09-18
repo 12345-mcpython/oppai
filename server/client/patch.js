@@ -126,17 +126,19 @@
             vlog("AT.setLastFrameCallFunc 已调用 duration=" + dur);
 
             self.__oppaiLfFired = false;
-            var wrapped = function () {
+            var wrapped = function (engineName) {
                 if (self.__oppaiLfFired) { return; }
                 self.__oppaiLfFired = true;
                 var scB = null;
                 try { scB = cc.director.getRunningScene(); } catch (e) { }
                 vlog("AT.lastFrame 触发 frame=" + (self.getCurrentFrame ? self.getCurrentFrame() : "?") +
                      " sceneBefore=" + (scB ? scB.getChildrenCount() : "-"));
-                // 关键：原版引擎会把动画名当第一个参数传给回调
-                // 游戏代码写的是 function (eventName) { if (eventName === "default") this._init(); }
-                // 而 v3.6 的绑定是 invoke(0, ...) 不传参数，导致 _init() 永不调用。
-                var animName = self.__oppaiAnimName || "default";
+                // 关键：引擎会把当前动画名当第一个参数传给回调（见 jsb_cocos2dx_studio_auto.cpp
+                // 里 oppai 的改动），游戏代码依赖它，例如：
+                //     function (eventName) { if (eventName === "default") this._init(); }
+                //     function (eventName) { if (/began\d/.test(eventName)) playAnimation("loop"+N, true); }
+                // 万一引擎没传（绑定补丁没生效），退回 play 时记下的名字，再退回 "default"。
+                var animName = engineName || self.__oppaiAnimName || "default";
                 vlog("AT.lastFrame 传参 anim=" + animName);
                 try {
                     var r = cb.call(self, animName);
