@@ -545,4 +545,65 @@
         }
         emit("MOVIE-WD 引导层视频看门狗已装");
     })();
+
+    // ------------------------------------------------------------------
+    // 战斗结束推进看门狗
+    //
+    // 战斗收尾链（反汇编 battlescene.jsc 得到）：
+    //     _show1(next) -> _nextCb = next; playAnimation("began3")
+    //     began3 播放期间应触发 loop\d 帧事件 -> playAnimation("loopN") -> _nextCb()
+    //
+    // 实测 began3 期间只有 sound_battlebegansound(frame=951)，没有 loop\d，
+    // 于是 _nextCb 永远挂着、_endType 保持 undefined，战斗收不了尾。
+    //
+    // 兜底：到最后一波（_index >= _len）且 _nextCb 挂了超过 20 秒，
+    // 就替那个缺失的帧事件调一次 _nextCb()。
+    // 20s 依据：began3 共 978 帧、_frameInternal = 1/60，正常约 16 秒。
+    // ------------------------------------------------------------------
+    (function installBattleEndWatchdog() {
+        if (typeof BattleScene === "undefined" || !BattleScene.prototype) {
+            if (!window.__oppaiBEwdTimer) {
+                window.__oppaiBEwdTimer = setInterval(function () {
+                    if (typeof BattleScene !== "undefined" && BattleScene.prototype) {
+                        clearInterval(window.__oppaiBEwdTimer);
+                        window.__oppaiBEwdTimer = null;
+                        installBattleEndWatchdog();
+                    }
+                }, 1000);
+            }
+            return;
+        }
+        if (window.__oppaiBEwdRunning) { return; }
+        window.__oppaiBEwdRunning = true;
+
+        var pendingSince = 0;
+        setInterval(function () {
+            try {
+                var s = cc.director.getRunningScene();
+                if (!(s instanceof BattleScene)) { pendingSince = 0; return; }
+
+                // 只有到了最后一波才兜底（前面几波靠 ClearLayer 正常推进）
+                if (!(typeof s._index === "number" && typeof s._len === "number" && s._index >= s._len)) {
+                    pendingSince = 0;
+                    return;
+                }
+                if (typeof s._nextCb !== "function") { pendingSince = 0; return; }
+
+                if (!pendingSince) { pendingSince = Date.now(); return; }
+                if (Date.now() - pendingSince < 20000) { return; }
+
+                emit("BATTLE-WD 战斗收尾卡住，兜底触发 _nextCb（_index=" + s._index + "/" + s._len + "）");
+                pendingSince = 0;
+                try {
+                    s._nextCb();
+                    s._nextCb = null;
+                } catch (e) {
+                    emit("BATTLE-WD 兜底失败 " + e);
+                }
+            } catch (e) { }
+        }, 1000);
+
+        emit("BATTLE-WD 战斗结束推进看门狗已装");
+    })();
+
 })();
