@@ -23,6 +23,24 @@ def get_data(session: dict, msg: dict, req_id):
     return {"code": CODE_OK, "msg": "", "data": {"player": store.get_or_create_player(_account(session))}}
 
 
+@route("player.naming")
+def naming(session: dict, msg: dict, req_id):
+    """新号起名。
+
+    反汇编 Player.naming：
+        server.request('player.naming', {name: name}, function (err, data) {
+            if (err) return;
+            if (data.code == 200) { _this._setName(name); if (cb) cb(); gameEvent.onRoleCreate(); }
+            else                  { if (cb) cb(PLAYER_ERR_DICT[data.code] || data.data); }
+        });
+    """
+    account = _account(session)
+    name = (msg or {}).get("name", "") or account
+    log.info("player.naming account=%s name=%s", account, name)
+    store.update_player(account, name=name)
+    return {"code": CODE_OK, "msg": "", "data": {"name": name}}
+
+
 @route("player.updateguidemark")
 def update_guide_mark(session: dict, msg: dict, req_id):
     """引导进度。

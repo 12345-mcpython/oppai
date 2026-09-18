@@ -138,7 +138,69 @@ python tools\selftest_game.py
 
 ## 4. 客户端补丁
 
-分 **Java(smali) 层** 和 **JS 探针** 两部分。
+分 **Java(smali) 层**、**JS 探针**、**现代化/精简** 三部分。
+
+### 4.0 现代化与精简
+
+原版 APK 是 2015 年的东西：**`minSdkVersion: 9`（Android 2.3）而且根本没有
+`targetSdkVersion`**（默认取 minSdk），56 个 Activity 里绝大多数是已经停服的
+百度/微博/推送/Bugly SDK 组件。
+
+```powershell
+# 0) 先备份！
+copy zcsmw.apk backup\zcsmw-original.apk
+
+# 1) 现代化（改 manifest / apktool.yml / 注入运行时权限申请）
+python client\modernize.py
+
+# 2) 重新编译 smali+资源，再打包（--strip 默认剔除广告图和百度支付插件）
+apktool b <解包目录> --no-apk --no-crunch
+python tools\patch_apk.py
+```
+
+`client/modernize.py` 做的事：
+
+| 项 | 改动 |
+|---|---|
+| `minSdkVersion` | `9` → `21` |
+| `targetSdkVersion` | 无 → **`27`**（见下面的警告） |
+| `usesCleartextTraffic` | `true`（模拟服是明文 HTTP） |
+| `extractNativeLibs` | `true` |
+| `requestLegacyExternalStorage` | `true` |
+| 运行时权限 | 新增 `client/PermissionHelper.smali`，在 `AppActivity.onCreate` 注入一次申请 |
+
+> #### ⚠️ targetSdk 不能提到 28
+>
+> 实测在 Android 9（API 28）上，`targetSdk >= 28` 会启用**隐藏 API
+> （non-SDK interface）限制**，而 2016 年的 QuickSDK / 百度 SDK 大量依赖反射调
+> 隐藏 API 做初始化。异常被它自己的 `try/catch` 吞掉，表现是：
+>
+> ```
+> QuickSdkApplication.onCreate
+>   -> com.quicksdk.utility.a.a() 返回 null
+>   -> IAdapterFactory.adtActivity() 空指针
+>   -> FATAL: Unable to create application ...GameApplication
+> ```
+>
+> 排障过程：先二分 `resources.arsc`（无影响）→ 再二分 dex（无影响）→
+> 最后两轮定位到 manifest 里的 `<uses-sdk>`。
+>
+> 27 已经够用：Android 14 只拦 `targetSdk < 23`，Android 12+ 的
+> 「此应用专为旧版 Android 打造」提示只在 `targetSdk < 23` 时出现。
+> 除非把 QuickSDK 整套删掉，否则不要再往上提。
+
+`tools/patch_apk.py --strip` 默认剔除：
+
+```
+assets/res/adimage/        广告图（广告服务早已下线）
+assets/res/adcolumn/
+assets/bdpwxpayplugin.apk  百度支付插件
+```
+
+**精简效果**：551.6 MB → 547.6 MB（-3.95 MB）。实话实说，**能安全砍的只有这么多** ——
+`assets/res` 占 540 MB，里面是 `.png` 289.6 MB + `.mp3` 178.6 MB，
+都是游戏必需资源。想大幅瘦身只能上有损压缩
+（pngquant 量化 + mp3 降码率，预估能到 ~280 MB，但立绘会有色带、语音音质下降）。
 
 ### 4.1 Java 层：让 SDK 登录直接成功（关键）
 

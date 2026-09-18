@@ -45,6 +45,13 @@ KEYSTORE = os.path.join(WORK, "debug.keystore")
 # 重新编译出来的 dex（apktool b --no-apk 的产物）
 DEFAULT_DEX_DIR = os.path.join(APK_DIR, "build", "apk")
 
+# 默认剔除的路径前缀（已停服/用不到的东西）
+DEFAULT_STRIP = (
+    "assets/res/adimage/",        # 广告图（广告服务早已下线）
+    "assets/res/adcolumn/",
+    "assets/bdpwxpayplugin.apk",  # 百度支付插件
+)
+
 OLD_HOST = b"cdn.shuangmawei.net"          # 19 字节
 OLD_WWW = b"www.shuangmawei.net"           # 19 字节
 OLD_OAUTH = b"http://114.55.66.97:16840"   # 25 字节 —— server.js 里硬编码的 OAUTH_HOST
@@ -126,7 +133,7 @@ def ensure_keystore():
 
 
 def repack(src_apk: str, dst_apk: str, host: str, port: int, login_port: int, hook_path: str,
-           dex_dir: str = None):
+           dex_dir: str = None, build_dir: str = None, strip=()):
     token = make_host_token(host, port)
     login_base = make_login_base(host, login_port)
     log("替换 CDN 主机名 ->", token.decode())
@@ -143,6 +150,18 @@ def repack(src_apk: str, dst_apk: str, host: str, port: int, login_port: int, ho
         if dex_files:
             log("注入重新编译的 dex:", ", ".join(f"{k}={len(v)}B" for k, v in dex_files.items()))
 
+    # 重新编译出来的 AndroidManifest.xml / resources.arsc
+    # （现代化补丁改了 manifest，必须把重编译的版本塞回去）
+    res_files = {}
+    if build_dir and os.path.isdir(build_dir):
+        for name in ("AndroidManifest.xml", "resources.arsc"):
+            path = os.path.join(build_dir, name)
+            if os.path.exists(path):
+                with open(path, "rb") as fh:
+                    res_files[name] = fh.read()
+        if res_files:
+            log("注入重新编译的资源:", ", ".join(f"{k}={len(v)}B" for k, v in res_files.items()))
+
     with open(hook_path, "rb") as fh:
         hook_js = fh.read()
     base = f"http://{host}:{port}".encode()
@@ -151,6 +170,7 @@ def repack(src_apk: str, dst_apk: str, host: str, port: int, login_port: int, ho
     hook_js = hook_js.replace(b"__CDN_BASE__", base)
 
     written = 0
+    skipped = 0
     with zipfile.ZipFile(src_apk, "r") as zin:
         infos = zin.infolist()
         with zipfile.ZipFile(dst_apk, "w", zipfile.ZIP_DEFLATED) as zout:
@@ -160,12 +180,21 @@ def repack(src_apk: str, dst_apk: str, host: str, port: int, login_port: int, ho
                 if upper.startswith("META-INF/") and upper.endswith((".SF", ".RSA", ".DSA", ".MF")):
                     continue
 
-                data = dex_files.get(name) or zin.read(name)
+                if any(name.startswith(p) for p in strip):
+                    skipped += 1
+                    continue
+
+                data = dex_files.get(name) or res_files.get(name) or zin.read(name)
                 new_info = zipfile.ZipInfo(name, date_time=info.date_time)
                 new_info.compress_type = info.compress_type
                 new_info.external_attr = info.external_attr
 
-                if name == "assets/srcex/urlconfig.jsc":
+                if name in res_files:
+                    # resources.arsc 现在要求不压缩 + 4 字节对齐
+                    new_info.compress_type = (
+                        zipfile.ZIP_STORED if name == "resources.arsc" else zipfile.ZIP_DEFLATED
+                    )
+                elif name == "assets/srcex/urlconfig.jsc":
                     data = patch_urlconfig(data, token)
                     new_info.compress_type = zipfile.ZIP_DEFLATED
                 elif name == "assets/src/util/server.jsc":
@@ -181,7 +210,7 @@ def repack(src_apk: str, dst_apk: str, host: str, port: int, login_port: int, ho
                     data = patch_project_json(data)
                     new_info.compress_type = zipfile.ZIP_DEFLATED
 
-                if info.compress_type == zipfile.ZIP_STORED:
+                if info.compress_type == zipfile.ZIP_STORED and name not in res_files:
                     new_info.compress_type = zipfile.ZIP_STORED
                 zout.writestr(new_info, data)
                 written += 1
@@ -192,7 +221,7 @@ def repack(src_apk: str, dst_apk: str, host: str, port: int, login_port: int, ho
             zout.writestr(info, hook_js)
             written += 1
 
-    log(f"重新打包完成，{written} 个条目 -> {dst_apk}")
+    log(f"重新打包完成，{written} 个条目（跳过 {skipped} 个）-> {dst_apk}")
 
 
 def align(path: str) -> str:
@@ -241,11 +270,20 @@ def main():
     ap.add_argument("--dex-dir", default=DEFAULT_DEX_DIR,
                     help="apktool b --no-apk 产出的 classes*.dex 目录；不存在就跳过")
     ap.add_argument("--no-dex", action="store_true", help="不注入 dex")
+    ap.add_argument("--build-dir", default=None,
+                    help="重编译产物目录（含 AndroidManifest.xml / resources.arsc），默认同 --dex-dir")
+    ap.add_argument("--strip", default=",".join(DEFAULT_STRIP),
+                    help="要删掉的路径前缀，逗号分隔（留空则一个都不删）")
     args = ap.parse_args()
 
     os.makedirs(WORK, exist_ok=True)
     dex_dir = None if args.no_dex else args.dex_dir
-    repack(args.src, args.out, args.host, args.port, args.login_port, args.hook, dex_dir)
+    build_dir = args.build_dir or dex_dir
+    strip = tuple(p.strip() for p in args.strip.split(",") if p.strip())
+    if strip:
+        log("将剔除:", ", ".join(strip))
+    repack(args.src, args.out, args.host, args.port, args.login_port, args.hook,
+           dex_dir, build_dir, strip)
     aligned = align(args.out)
     signed = sign(aligned)
     log("最终产物:", signed)

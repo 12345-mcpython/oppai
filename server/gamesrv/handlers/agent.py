@@ -185,13 +185,29 @@ def create_player(session: dict, msg: dict, req_id):
 
 @route("agent.gettimeinfo")
 def get_time_info(session: dict, msg: dict, req_id):
-    """客户端登录后会自己拉一次时间信息，service 端要回 timeObj。"""
-    log.info("agent.gettimeinfo msg=%s", msg)
+    """时间同步。
+
+    反汇编 dataManager.syncTime 的回调：
+
+        server.request('agent.gettimeinfo', null, function (err, res, reqTime, reqFinishTime) {
+            syncTime(res.data, reqTime, reqFinishTime);   // ← 直接吃 res.data
+            if (cb) cb();
+        });
+
+    而 syncTime(timeObj, ...) 读的是 `timeObj.timeSec` / `timeObj.timezoneOffset`，
+    所以 data 必须**直接**带这两个字段（不能套一层 timeObj）。
+    给错了会算成 NaN，客户端会不停重试（表现为一直转加载圈 + 刷 gettimeinfo）。
+    """
+    if isinstance(req_id, int) and req_id % 200 == 1:      # 客户端刷得很快，日志只留个采样
+        log.info("agent.gettimeinfo msg=%s reqId=%s", msg, req_id)
+    t = store.time_obj()
     return {
         "code": CODE_OK,
         "msg": "",
         "data": {
-            "timeObj": store.time_obj(),
+            "timeSec": t["timeSec"],
+            "timezoneOffset": t["timezoneOffset"],
+            "now": t["now"],
             "serverTime": store.now_ms(),
         },
     }
