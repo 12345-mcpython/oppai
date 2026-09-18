@@ -180,6 +180,28 @@ def active_keys(player: dict) -> list[str]:
     return [k for k in order() if k not in done][:WINDOW]
 
 
+def finish_all(player: dict) -> tuple[list[str], str]:
+    """把整条主线一口气标成「已领奖」（devtools 的作弊项）。
+
+    返回 `(done 列表, 说明文案)`。只是把 key 塞进 `done` ——
+    客户端看到 `state:"4"` 就当已领，不用真的去打关。
+    顺手把 `questStats` 也灌满，免得之后的 `13102 军阶等级达到 N 级`
+    这类任务因为计数器是 0 又退回去。
+    """
+    keys = list(order())
+    rec = _record(player)
+    rec["done"] = sorted(set(rec["done"]) | set(keys))
+    player["questStats"] = {
+        "wins": 9999,
+        "winsByTeamSize": {str(n): 9999 for n in range(1, 7)},
+        "soldierUpgrades": 9999,
+        "soldierStars": 9999,
+        "soldierMaxLv": {str(q): 99 for q in range(1, 5)},
+    }
+    _touch(player)
+    return rec["done"], f"{len(keys)} 条主线任务全部标记为已领奖"
+
+
 # ---------------------------------------------------------------------------
 # 任务进度
 #

@@ -212,6 +212,8 @@ vanilla 不传参 → 游戏代码 `function (eventName) { if (/began\d/.test(ev
 | 进关卡弹**「没有甜甜圈了 是否需要补充行动力」** | 行动力是背包道具（`100003`），不是 `player.actionPoint`；而 `data.item` 必须是**平铺映射** | `agent._module_stubs` |
 | 屏幕被青色的视频层盖住 | Android 侧 `VideoView` 还 VISIBLE | `patch.js` LGL-GUARD |
 | 日志刷屏（每帧一条） | 引擎自己的 LOGD | 引擎补丁 ③ + `vlog()` |
+| 调试台打开是**白板** | `devtools.js` 抛异常（最常见的是引用了 HTML 里没有的 id） | 页面顶部红条会写出来；也跑 `python tools\check_devtools.py` |
+| 调试台**流量面板不动** | 事件总线的长轮询断了（服务端刚重启） | 刷新页面；`/devtools/api/overview` 里看 `bus.seq` 有没有在涨 |
 
 ---
 
@@ -225,10 +227,13 @@ vanilla 不传参 → 游戏代码 `function (eventName) { if (/began\d/.test(ev
 - [x] 全自动登录 → 主场景 → 开场动画 → 主界面
 - [x] **引擎源码重建**（11 个补丁），战斗可完整跑完
 - [x] `jsc` 反汇编器 + atom 表提取器 + 运行时 REPL 探针
+- [x] **浏览器调试台**（`http://127.0.0.1:18080/devtools`）：
+      流量重放 / JS 控制台 / 存档编辑 + 作弊 / 客户端日志流 / 表查询
+      —— 见 [`docs/devtools.md`](devtools.md)
 - [x] 编成 / 上阵队伍（含士兵数据）
 - [x] **军士培养 / 突破 / 技能**（升级公式和客户端逐字段对齐，材料会被真的吃掉）
 - [x] 主线任务（窗口推进 + 领奖 + 刷新）
-- [x] 文档：协议 / 逆向手法 / 打包逻辑 / 本总览
+- [x] 文档：协议 / 逆向手法 / 打包逻辑 / 调试台 / 本总览
 
 ### 待办（按卡点排序）
 
@@ -282,6 +287,18 @@ adb install -r -d E:\code\apk\work\zcsmw-mod-signed.apk
 
 ### 8.2 调试工作流
 
+**首选浏览器调试台**（服务端自己托管，不用改 APK）：
+
+```
+http://127.0.0.1:18080/devtools
+```
+
+流量（含「客户端调了但服务端没实现」的高亮 + 一键重放）/ JS 控制台 /
+存档编辑 + 作弊 / 客户端日志流 / 表查询，五个面板。见
+[`docs/devtools.md`](devtools.md)。
+
+命令行那套仍然有用（批量、脚本化）：
+
 ```powershell
 # 服务端（用守护脚本，别用 Start-Process 直接拉 run.py，会被回收）
 python tools\serve.py
@@ -299,11 +316,14 @@ python tools\disasm_func.py  <assets>\src\data\questcenter.jsc _createQuest
 
 **排障顺序**（按复用性排序）：
 
-1. 先分清是 Java 层 / 引擎层 / JS 层 —— `dumpsys activity top`、tombstone
-2. 抓 logcat，`OPPAIPATCH|` / `OPPAIHOOK|` 前缀的日志是补丁和探针打的
-3. JS 异常先看 stack；`initUserData` 抛异常会连累一大片（见 §6）
-4. 拿不准的数据形状，直接 `new Xxx(candidate)` 在 REPL 里试 —— 几秒钟一个
-5. 实在不行就包一层打日志，别猜
+1. 先看调试台的**流量**面板 —— 「客户端调了但服务端没实现」会直接标黄，
+   请求 msg 和回包都能看到原文，还能一键重放
+2. 再分清是 Java 层 / 引擎层 / JS 层 —— `dumpsys activity top`、tombstone
+3. 抓 logcat，`OPPAIPATCH|` / `OPPAIHOOK|` 前缀的日志是补丁和探针打的
+   （调试台的**日志**面板就是这条流，不用手动 `adb logcat`）
+4. JS 异常先看 stack；`initUserData` 抛异常会连累一大片（见 §6）
+5. 拿不准的数据形状，直接在调试台控制台里试 —— 几秒钟一个
+6. 实在不行就包一层打日志，别猜
 
 > ⚠️ `adb shell input tap` 在 MuMu 上**不可靠**，注入的事件不一定到得了 App。
 > 别用它判断"点击坏了"。同理 `adb screencap` 有时抓不到 GL 层（截出来一片白），
@@ -317,6 +337,7 @@ python tools\disasm_func.py  <assets>\src\data\questcenter.jsc _createQuest
 |---|---|
 | `README.md` | 上手：项目结构、快速开始、补丁清单、协议骨架 |
 | **`docs/overview.md`**（本文） | 全景：成果、分层、逆向结论、坑速查、待办 |
+| `docs/devtools.md` | 浏览器调试台：五个面板怎么用、架构取舍、怎么加面板 |
 | `docs/protocol.md` | 协议逐项细节 + 反汇编证据（含 quest 协议、session 前缀） |
 | `docs/reverse-engineering.md` | jsc 反汇编器原理、运行时探测手法、排障套路 |
 | `docs/build.md` | 打包逻辑（为什么这么做） |

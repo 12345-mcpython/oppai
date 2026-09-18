@@ -1,0 +1,184 @@
+"""开发调试事件总线。
+
+devtools 页面（`gamesrv/devtools.py` 托管在 CDN 端口的 `/devtools`）靠它拿实时数据。
+所有产出方只管 `publish()`，消费方（浏览器）用**长轮询**拉：
+
+    GET /devtools/api/events?since=<上次拿到的 seq>&timeout=25
+
+为什么不用 SSE / WebSocket：
+    `httpd.py` 是「一线程一连接 + 一定写 Content-Length」的极简实现，
+    要支持 SSE 得给它加一条 `Transfer-Encoding: chunked` 的流式分支。
+    那条路改动共享代码（游戏本身跑在上面），风险不划算。
+    长轮询在这个场景下没有实质差别（本机、单标签页、延迟 <100ms）。
+
+事件形状（都是扁平 dict，方便前端直接渲染）::
+
+    {"seq": 12, "ts": 1789741234.5, "kind": "traffic", ...}
+
+kind 约定：
+
+    traffic  客户端发来的业务请求 + 服务端回包（成对，同一个 reqId）
+    client   客户端探针日志（adb logcat / probe.js 上报）
+    console  在客户端跑的 JS（devtools 控制台 / repl.py）
+    server   服务端自己的日志（logging handler 转发进来）
+    action   devtools 上的操作（改存档、跑作弊、恢复快照……）
+"""
+
+from __future__ import annotations
+
+import collections
+import threading
+import time
+
+# 环形缓冲长度。devtools 页面打开时先拿这一份当"历史"，
+# 2000 条够翻很久了，再多就只是吃内存。
+RING_MAX = 2000
+
+
+class _Bus:
+    def __init__(self) -> None:
+        self._cv = threading.Condition()
+        self._events: collections.deque = collections.deque(maxlen=RING_MAX)
+        self._seq = 0
+        self._dropped = 0
+        self._counts: dict[str, int] = {}
+
+    # ---------------- 产出 ----------------
+
+    def publish(self, kind: str, **fields) -> dict:
+        """发一条事件。字段名随便给，前端按 kind 渲染。"""
+        with self._cv:
+            self._seq += 1
+            event = {"seq": self._seq, "ts": time.time(), "kind": kind}
+            event.update(fields)
+            if len(self._events) == RING_MAX:
+                self._dropped += 1
+            self._events.append(event)
+            self._counts[kind] = self._counts.get(kind, 0) + 1
+            self._cv.notify_all()
+            return event
+
+    # ---------------- 消费 ----------------
+
+    def since(self, seq: int, limit: int = 500) -> list:
+        """拿 seq 之后的事件（不含 seq 本身）。"""
+        with self._cv:
+            out = [e for e in self._events if e["seq"] > seq]
+        return out[:limit]
+
+    def wait(self, seq: int, timeout: float = 25.0) -> list:
+        """长轮询：等到有 seq 之后的事件、或者超时。返回可能是空列表。"""
+        deadline = time.time() + max(0.0, timeout)
+        with self._cv:
+            while True:
+                out = [e for e in self._events if e["seq"] > seq]
+                if out or timeout <= 0:
+                    return out
+                remaining = deadline - time.time()
+                if remaining <= 0:
+                    # 超时也把「最新 seq」带回去，前端才能推进游标 ——
+                    # 否则一旦漏了一条事件，轮询会永远立刻返回空、变成忙循环。
+                    return []
+                self._cv.wait(remaining)
+
+    def latest(self) -> int:
+        with self._cv:
+            return self._seq
+
+    def snapshot(self) -> list:
+        with self._cv:
+            return list(self._events)
+
+    def clear(self) -> None:
+        with self._cv:
+            self._events.clear()
+            self._dropped = 0
+            self._counts.clear()
+            self._cv.notify_all()
+
+    def stats(self) -> dict:
+        with self._cv:
+            return {
+                "seq": self._seq,
+                "buffered": len(self._events),
+                "dropped": self._dropped,
+                "counts": dict(self._counts),
+            }
+
+
+bus = _Bus()
+
+
+def publish(kind: str, **fields) -> dict:
+    return bus.publish(kind, **fields)
+
+
+# ---------------------------------------------------------------------------
+# 把服务端日志接到总线上
+# ---------------------------------------------------------------------------
+
+class _LogBridge:
+    """logging.Handler -> 总线。
+
+    ⚠️ 只在 devtools 页面真的打开时才值得转发。不过这个私服的日志量很小
+    （一次请求几条 INFO），无条件开着更省心 —— 不然「先开页面再复现」
+    这种最常见的用法会漏掉最前面那段。
+
+    跳过 `gamesrv.http`：它是「每个 HTTP 请求两条 DEBUG」，和流量面板完全重复。
+    """
+
+    SKIP_LOGGERS = ("gamesrv.http",)
+
+    def __init__(self, level: int = 20, enabled: bool = True):
+        import logging
+
+        self.level = level
+        self.enabled = enabled
+
+        bridge = self
+
+        class _Handler(logging.Handler):
+            def emit(self, record: logging.LogRecord) -> None:
+                if not bridge.enabled:
+                    return
+                if record.levelno < bridge.level:
+                    return
+                if record.name.startswith(bridge.SKIP_LOGGERS):
+                    return
+                try:
+                    message = record.getMessage()
+                except Exception:  # noqa: BLE001
+                    message = "<格式化失败>"
+                if record.exc_info:
+                    message += " | " + str(record.exc_info[1])
+                bus.publish(
+                    "server",
+                    level=record.levelname,
+                    logger=record.name.replace("gamesrv.", "", 1),
+                    message=message[:4000],
+                )
+
+        self.handler = _Handler()
+
+    def attach(self) -> None:
+        import logging
+
+        logging.getLogger("gamesrv").addHandler(self.handler)
+
+
+_bridge: _LogBridge | None = None
+
+
+def attach_logging(level: int = 20) -> _LogBridge:
+    global _bridge
+    if _bridge is None:
+        _bridge = _LogBridge(level=level)
+        _bridge.attach()
+    return _bridge
+
+
+def set_logging_enabled(enabled: bool) -> bool:
+    if _bridge is None:
+        attach_logging()
+    _bridge.enabled = bool(enabled)
+    return _bridge.enabled

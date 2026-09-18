@@ -57,8 +57,16 @@
         }
     }
 
+    // 上报缓冲。**在 emit 之前声明**：emit 一进模块就会被调用几次，
+    // 那会儿如果 pushBuf 还是 undefined，`typeof` 判断反而会把它当成"未声明"。
+    var pushBuf = [];
+
     function emit(line) {
         lines.push(line);
+        // 另存一份给上报用（flush() 会把 lines 清空，不能共用）
+        if (pushBuf.length < 2000) {
+            pushBuf.push(line);
+        }
         try {
             console.log(TAG + "|" + line);
         } catch (e) {
@@ -138,6 +146,35 @@
     }
 
     heartbeat(flush, 1000);
+    heartbeat(pushLogs, 2000);
+
+    // ------------------------------------------------------------------
+    // 探针日志上报给 devtools
+    //
+    // 为什么不用 adb logcat 就完事：
+    //   logcat 要连 adb（模拟器一重启就断），而且环形缓冲会被冲掉，
+    //   排查"刚才那一下为什么崩了"时经常已经滚没了。
+    //   直接 POST 给服务端最稳，devtools 一收到就把 logcat 那条路静音
+    //   （见 gamesrv/devtools.py 的 _push_seen_at），不会重复。
+    //
+    // 失败不重试、不报错 —— 这是个诊断通道，不能反过来影响游戏。
+    // ------------------------------------------------------------------
+    var pushing = false;
+
+    function pushLogs() {
+        if (pushing || !pushBuf.length) {
+            return;
+        }
+        var batch = pushBuf.splice(0, 200);
+        pushing = true;
+        try {
+            xhr("POST", CDN_BASE + "/hook/log", JSON.stringify({lines: batch}), function () {
+                pushing = false;
+            });
+        } catch (e) {
+            pushing = false;
+        }
+    }
 
     // ------------------------------------------------------------------
     // 序列化

@@ -163,8 +163,16 @@ SOLDIER_JS = r"""
             c: r.base_cost || 0,
             q: r.quality || 0,
             p: r.positioning || 0,
-            t: r.template || 0
+            t: r.template || 0,
+            ck: r.char_key || ""
         };
+    }
+    // char_key -> card_type。CARD_TYPE = {TEAMMATE:1, ENEMY:2, EXP:3, SKILL:4}。
+    // 只有 1 是自军卡 —— 见 gamesrv/store.py 里 SOLDIER_KEYS 的说明，
+    // 服务端要靠它判断"这个 key 能不能当军士发给玩家"。
+    var master = {};
+    for (var m in table_soldier_master) {
+        master[m] = table_soldier_master[m].card_type;
     }
     return JSON.stringify({
         upgrade_exp: table_soldier_upgrade_exp,
@@ -172,7 +180,8 @@ SOLDIER_JS = r"""
         to_cost: table_soldier_to_cost_for_upgrade,
         lv_limit: table_soldier_lv_limit,
         constant: table_soldier_constant,
-        card: card
+        card: card,
+        master: master
     });
 })()
 """

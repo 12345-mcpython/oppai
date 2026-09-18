@@ -189,7 +189,12 @@ class _Handler(BaseHTTPRequestHandler):
             log.log(5, "[%s] %s %s", self.port_name, self.command, raw_path)
         else:
             log.debug("[%s] %s %s", self.port_name, self.command, raw_path)
-        is_poll = req.path.startswith("/hook/poll")
+        # 「高频空转」的端点：不落 capture、不打日志。
+        # `/hook/poll` 是客户端探针的轮询，`/devtools/api/events` 是调试台的长轮询 ——
+        # capture 会把**回包**整份写进 jsonl，长轮询挂着 25 秒回一批事件，
+        # 不排除的话 http-resp-*.jsonl 会被撑爆。
+        is_poll = (req.path.startswith("/hook/poll")
+                   or req.path.startswith("/devtools/api/events"))
         if not is_poll:
             logx.capture(
                 "http",

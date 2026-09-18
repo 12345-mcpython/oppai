@@ -109,6 +109,42 @@ def card_cost(key: str) -> int:
     return int((tables().get("card") or {}).get(str(key), {}).get("c") or 0)
 
 
+# CARD_TYPE（客户端 src/data/soldier.js）
+CARD_TYPE_TEAMMATE = 1
+CARD_TYPE_ENEMY = 2
+CARD_TYPE_EXP = 3
+CARD_TYPE_SKILL = 4
+
+
+def card_type(key: str) -> int:
+    """这个 key 的 `card_type`（按 **char_key** 查 table_soldier_master）。
+
+    没有这张表（老版本抽的数据）就返回 0，调用方自己决定怎么兜。
+    """
+    row = (tables().get("card") or {}).get(str(key))
+    if not isinstance(row, dict):
+        return 0
+    char_key = row.get("ck") or ""
+    if not char_key:
+        return 0
+    value = (tables().get("master") or {}).get(char_key)
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return 0
+
+
+def is_teammate(key: str) -> bool:
+    """能不能当**玩家自己的军士**发出去。
+
+    只有 `card_type == 1` 才行 —— 敌方单位（2）进了名单，客户端
+    `calcSoldierUpgrade` 会因为缺 `base_cost` 算出 NaN，直接顶到等级上限。
+    取不到 `card_type` 时保守放行（老数据），别把开发卡死。
+    """
+    value = card_type(key)
+    return value in (0, CARD_TYPE_TEAMMATE)
+
+
 def _qkey(quality, star) -> str:
     return "quality_%s_%s" % (quality, star)
 

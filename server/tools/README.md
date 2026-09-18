@@ -16,6 +16,7 @@
 | `merge_dex.py` | 把 apktool 拆出来的 `smali_classesN` 合并成单个 dex |
 | `selftest_game.py` | 不开游戏也能自测业务协议：自己按客户端格式打包加密请求打服务端，验证「加解密 + 路由 + code=200」。末尾还会走一遍**军士培养链路**（喂材料 → 重登确认等级落盘、材料没复活） |
 | `check_soldier_calc.py` | **交叉验证**：把服务端 `gamesrv/soldier.py` 的升级计算和客户端 `CharCenter.calcSoldierUpgrade` 在 44 组用例上逐字段比对。改升级公式后必跑（要求游戏在跑 + 探针已加载） |
+| `check_devtools.py` | 调试台自测：前端 id / 接口路径的静态一致性 + 把 `/devtools/api/*` 全打一遍（分「需要游戏」和「不需要」两组）+ 中文往返 + 快照回滚 |
 | `sdk_strip/` | 删掉没用到的第三方 SDK：扫引用 → 生成桩类 → 删 smali → 清 manifest / assets / lib |
 
 ## 2. 逆向 / 取数据（加新功能时用）
@@ -46,6 +47,7 @@ python tools\csb_dump.py <assets>\res\ui\battlebeganui\src\battlebeganui.csb
 
 | 脚本 | 干什么 |
 |---|---|
+| **`/devtools`** | ★ **浏览器调试台**（`gamesrv/devtools.py` + `gamesrv/web/`，挂在 CDN 端口）。流量 / JS 控制台 / 存档编辑+作弊 / 日志流 / 表查询，详见 [`../docs/devtools.md`](../docs/devtools.md) |
 | `repl.py` | **在游戏进程里执行任意 JS**。前提：装了 probe 版 APK + 服务端在跑。验证数据形状、翻运行时状态全靠它 |
 | `probe.py` | 重启客户端 + 批量执行 JS 表达式（`repl.py` 的批处理版） |
 | `shots.py` | 重启客户端并连续截图 |
@@ -88,5 +90,5 @@ python tools\csb_dump.py <assets>\res\ui\battlebeganui\src\battlebeganui.csb
 3. **REPL 试形状** —— 直接 `new Xxx(candidate)` 打日志，几秒钟一个候选，比猜快得多
 4. **补服务端** —— 在 `gamesrv/handlers/` 加路由（记得 `handlers/__init__.py` 里 import）
 5. **数据缺就抽表** —— 表在客户端 `assets/src/table/*.jsc` 里，用 `extract_client_tables.py` 的路子
-6. **验证** —— `selftest_game.py`（协议层）/ `repl.py`（运行时状态）/ 服务端日志
+6. **验证** —— `selftest_game.py`（协议层）/ `/devtools`（流量 + 存档 + 运行时状态）/ 服务端日志
 7. **记坑** —— 踩到的形状坑写进 `docs/protocol.md`，不然下次还得再踩一遍

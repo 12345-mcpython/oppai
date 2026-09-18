@@ -422,10 +422,21 @@ def save_player(player: dict) -> None:
     表现就是「反复刷新，顶上一直是这两条任务」。
     """
     account = player.get("account") or config.DEFAULT_ACCOUNT
+    save_player_dict(account, player)
+
+
+def save_player_dict(account: str, player: dict) -> None:
+    """按账号整份覆盖存档。
+
+    `save_player` 是「拿传入的这份去合并覆盖」，调用方必须先
+    `get_or_create_player()` 拿到当前存档、改完再传进来。
+    devtools 的存档编辑面板拿到的是一整个 JSON，直接用这个更直白：
+    传进来什么就是什么（仍然带上 `account`，免得两份数据对不上号）。
+    """
+    player = dict(player)
+    player["account"] = account
     with _lock:
         db = _load()
-        if account in db:
-            player = dict(db[account], **player)
         db[account] = player
         _save(db)
 

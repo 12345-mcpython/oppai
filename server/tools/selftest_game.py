@@ -80,6 +80,36 @@ def soldier_flow(ok: bool) -> bool:
     return ok
 
 
+def roster_check(ok: bool) -> bool:
+    """初始军士名单必须全是 `card_type == 1` 的自军卡。
+
+    这条纯粹是服务端自己的不变量，不用开游戏就能查，但一旦破了现象很隐蔽：
+    敌方单位（card_type 2）没有 `base_cost` 字段，客户端
+    `CharCenter.calcSoldierUpgrade` 的 `gainExp` 会算成 NaN，
+    表现是「培养点一下就顶到等级上限」，而且材料列表里也选不出它们。
+    见 docs/protocol.md §11.2。
+    """
+    from gamesrv import soldier, store
+
+    bad = []
+    for key, positioning, quality in store.SOLDIER_KEYS:
+        ctype = soldier.card_type(key)
+        if ctype != soldier.CARD_TYPE_TEAMMATE:
+            bad.append(f"{key}(card_type={ctype})")
+    if bad:
+        print(f"  BAD 初始名单里有非自军卡：{bad}")
+        return False
+    if len(store.SOLDIER_KEYS) != 18:
+        print(f"  BAD 初始名单应该是 18 个，现在是 {len(store.SOLDIER_KEYS)}")
+        return False
+    positions = sorted({p for _, p, _ in store.SOLDIER_KEYS})
+    if positions != [1, 2, 3]:
+        print(f"  BAD 初始名单没覆盖三个站位：{positions}")
+        return False
+    print(f"  OK  初始名单 {len(store.SOLDIER_KEYS)} 个，全是自军卡，站位 {positions}")
+    return ok
+
+
 def main():
     cases = [
         ("agent.getlogindata", {}),
@@ -102,6 +132,13 @@ def main():
         print(f"  {flag} {route:28s} code={code}  data={str(res.get('data'))[:70]}")
         if code != 200:
             ok = False
+
+    print()
+    try:
+        ok = roster_check(ok)
+    except Exception as exc:  # noqa: BLE001
+        print(f"  BAD 名单自检异常: {exc}")
+        ok = False
 
     print()
     try:

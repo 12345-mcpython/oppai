@@ -13,6 +13,7 @@ Kuro Game《战场双马尾》v2.2.0 已经停服。这个项目用 **纯 Python
 - [1. 成果总览](#1-成果总览)
 - [2. 项目结构](#2-项目结构)
 - [3. 快速开始](#3-快速开始)
+  - [3.4 浏览器调试台](#34-浏览器调试台)
 - [4. 客户端补丁](#4-客户端补丁)
 - [5. 协议全貌](#5-协议全貌)
 - [6. jsc 反汇编器](#6-jsc-反汇编器)
@@ -63,11 +64,15 @@ game_server/
 │   ├── gameproto.py           业务请求 / 响应打包解包
 │   ├── accounts.py            账号（登录即注册）
 │   ├── store.py               玩家 / 主角 / 队伍 / 士兵 / 模块开启状态（含字段迁移）
+│   ├── soldier.py             军士养成数值（升级曲线 / 等级上限 / 星级上限）
 │   ├── quests.py              主线任务（窗口推进 + 领奖状态机）
 │   ├── repl.py                下发给客户端探针的命令队列
+│   ├── devbus.py              调试事件总线（环形缓冲 + 长轮询等待）
+│   ├── devtools.py            ★ 浏览器调试台后端（/devtools，挂在 CDN 端口）
+│   ├── web/devtools.*         调试台前端（明文 html/css/js，改完刷新即可）
 │   ├── crypto/des.py          标准 DES（已用客户端真实密文对拍验证）
-│   ├── handlers/              业务路由（agent.* / player.* / quest.*，共 16 条）
-│   ├── data/table_quest.json  从客户端抽出来的任务表
+│   ├── handlers/              业务路由（agent.* / char.* / instance.* / player.* / quest.*，共 34 条）
+│   ├── data/table_*.json      从客户端抽出来的表（任务 / 关卡奖励 / 军士养成 / 助战 NPC）
 │   └── apps.py                cdn / gate / login / game 四个端口的实现
 ├── client/                    客户端补丁（全部在这里）
 │   ├── patch.js               ★ 必须的适配：polyfill / 引导跳过 / 响应派发 / 各种兜底
@@ -89,6 +94,8 @@ game_server/
 │   ├── repl.py                在游戏进程里执行任意 JS
 │   ├── probe.py               重启客户端 + 批量执行 JS
 │   ├── selftest_game.py       不开游戏也能自测业务协议
+│   ├── check_soldier_calc.py  服务端 vs 客户端的军士升级公式对拍
+│   ├── check_devtools.py      调试台自测（静态检查 + 接口全打一遍）
 │   ├── bisect_init.py         逐模块二分，找把 JS 主线程卡死的那个
 │   ├── shots.py               连续截图
 │   ├── sdk_strip/             删掉没用的第三方 SDK（详见 4.0）
@@ -104,6 +111,7 @@ game_server/
 │       └── find_orphans.py        找出宿主 SDK 删掉后变成孤儿的包
 └── docs/
     ├── overview.md            ★ 全景总览（先看这份）
+    ├── devtools.md            浏览器调试台（面板说明 + 架构取舍 + 怎么扩展）
     ├── build.md               打包逻辑（为什么这么做）
     ├── protocol.md            协议逐项细节
     └── reverse-engineering.md 反汇编器原理 + 运行时探测手法
@@ -169,7 +177,28 @@ python tools\selftest_game.py
 ```
 
 自己按客户端格式打包加密请求直接打服务端，验证「加解密 + 路由 + code=200」。
-改服务端时不用每次都装 APK 起游戏。
+
+### 3.4 浏览器调试台
+
+服务端起好之后直接开：
+
+```
+http://127.0.0.1:18080/devtools
+```
+
+> **不用改 APK、不用重装。** 页面由服务端托管，前端就是
+> `gamesrv/web/devtools.{html,css,js}` 三个明文文件，改完刷新即可。
+
+| 面板 | 干什么 |
+|---|---|
+| **流量** | 每条业务 `route` 的请求 msg / 回包成对展示（结果码、耗时、**客户端调了但服务端没实现**的高亮），可筛选、可导出、可重放 |
+| **控制台** | 在手机上那个游戏进程里跑 JS（`repl.py` 的网页版），带历史记录和一组常用片段 |
+| **玩家** | 存档浏览 / 直接编辑 JSON + 一组作弊按钮（等级 / 道具 / 军士 / 关卡 / 任务）+ 快照回滚 |
+| **日志** | 客户端探针日志（`adb logcat` 尾随）+ 服务端日志，按来源过滤 |
+| **数据** | 路由清单、`table_*` 反查、`table_dictionary` 文案对照 |
+
+自测：`python tools\check_devtools.py`。
+细节、架构取舍、以及**怎么给它加面板**见 [`docs/devtools.md`](docs/devtools.md)。
 
 ---
 
@@ -666,8 +695,10 @@ python tools\disasm_func.py <file.jsc> cb4AfterLogin
 - [x] **引擎源码重建**（cocos2d-js v3.6 + 11 个补丁），战斗可完整跑完
 - [x] jsc 反汇编器（含递归解析嵌套函数）+ atom 表提取器 + 运行时 REPL 探针
 - [x] **编成 / 上阵队伍**（18 个初始士兵，前锋/中卫/后卫各 6）
+- [x] **军士培养 / 突破 / 技能**（升级公式和客户端逐字段对齐，材料会被真的吃掉）
 - [x] **主线任务**（12 条窗口 + 领奖 + 窗口推进 + 刷新）
-- [x] 文档：`docs/overview.md`（全景）/ `protocol.md` / `reverse-engineering.md` / `build.md`
+- [x] **浏览器调试台**（`/devtools`：流量 / 控制台 / 存档编辑+作弊 / 日志流 / 表查询）
+- [x] 文档：`docs/overview.md`（全景）/ `protocol.md` / `reverse-engineering.md` / `build.md` / `devtools.md`
 
 ### 待办
 

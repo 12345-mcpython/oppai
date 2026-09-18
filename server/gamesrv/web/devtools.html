@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>战场双马尾 · DevTools</title>
+<link rel="stylesheet" href="/devtools/app.css">
+</head>
+<body>
+
+<header id="top">
+  <div class="brand">
+    <span class="logo">DEV</span>
+    <strong>战场双马尾 · 调试台</strong>
+    <span class="muted" id="srv-url"></span>
+  </div>
+  <div class="pills">
+    <span class="pill" id="pill-probe" title="客户端探针是否在轮询 /hook/poll">探针 <b>?</b></span>
+    <span class="pill" id="pill-logcat" title="adb logcat 尾随线程">日志 <b>?</b></span>
+    <span class="pill" id="pill-bus" title="事件总线缓冲">事件 <b>0</b></span>
+    <span class="pill" id="pill-paused" hidden>已暂停</span>
+  </div>
+  <div class="spacer"></div>
+  <button id="btn-pause" class="ghost">暂停</button>
+  <button id="btn-clearbus" class="ghost">清空事件</button>
+</header>
+
+<nav id="tabs">
+  <button data-tab="traffic" class="on">流量</button>
+  <button data-tab="console">控制台</button>
+  <button data-tab="player">玩家</button>
+  <button data-tab="logs">日志</button>
+  <button data-tab="data">数据</button>
+</nav>
+
+<main>
+
+  <!-- ============ 流量 ============ -->
+  <section id="tab-traffic" class="tab on">
+    <div class="bar">
+      <input id="tr-filter" placeholder="筛选 route / msg / 回包内容，例如 instance 或 upgradesoldier">
+      <label class="chk"><input type="checkbox" id="tr-onlybad"> 只看失败</label>
+      <label class="chk"><input type="checkbox" id="tr-onlyunknown"> 只看未实现</label>
+      <label class="chk"><input type="checkbox" id="tr-autoscroll" checked> 自动滚动</label>
+      <span class="spacer"></span>
+      <span class="muted" id="tr-count">0 条</span>
+      <button id="tr-export" class="ghost">导出 JSON</button>
+      <button id="tr-clear" class="ghost">清空</button>
+    </div>
+    <div class="split">
+      <div class="list" id="tr-list"></div>
+      <div class="detail" id="tr-detail">
+        <p class="empty">点左边任意一条看请求 / 回包</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 控制台 ============ -->
+  <section id="tab-console" class="tab">
+    <div class="bar">
+      <span class="muted">在手机上那个游戏进程里跑 JS（等于 <code>tools/repl.py</code> 的网页版）</span>
+      <span class="spacer"></span>
+      <label class="chk">超时 <input type="number" id="cc-timeout" value="15" min="1" max="60" style="width:64px"> 秒</label>
+      <button id="cc-clear" class="ghost">清空输出</button>
+    </div>
+    <div class="bar snippets" id="cc-snippets"></div>
+    <div class="cc-editor">
+      <textarea id="cc-code" spellcheck="false" placeholder="Ctrl+Enter 执行。例：JSON.stringify(dataManager.character.soldiers[1])"></textarea>
+      <button id="cc-run" class="primary">执行</button>
+    </div>
+    <div class="cc-out" id="cc-out"></div>
+  </section>
+
+  <!-- ============ 玩家 ============ -->
+  <section id="tab-player" class="tab">
+    <div class="bar">
+      <span class="muted">存档</span>
+      <select id="pl-account"></select>
+      <button id="pl-reload" class="ghost">重新载入</button>
+      <button id="pl-save" class="primary">保存 JSON</button>
+      <button id="pl-format" class="ghost">格式化</button>
+      <span class="spacer"></span>
+      <button id="pl-snapshot" class="ghost">新建快照</button>
+      <select id="pl-backups"></select>
+      <button id="pl-restore" class="danger">回滚到该快照</button>
+    </div>
+    <div class="split">
+      <div class="cheats" id="pl-cheats"></div>
+      <div class="detail">
+        <div class="muted" id="pl-summary"></div>
+        <textarea id="pl-json" spellcheck="false"></textarea>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 日志 ============ -->
+  <section id="tab-logs" class="tab">
+    <div class="bar">
+      <input id="lg-filter" placeholder="过滤关键词">
+      <label class="chk"><input type="radio" name="lgsrc" value="all" checked> 全部</label>
+      <label class="chk"><input type="radio" name="lgsrc" value="client"> 客户端</label>
+      <label class="chk"><input type="radio" name="lgsrc" value="probe"> 探针上报</label>
+      <label class="chk"><input type="radio" name="lgsrc" value="server"> 服务端</label>
+      <label class="chk"><input type="checkbox" id="lg-autoscroll" checked> 自动滚动</label>
+      <span class="spacer"></span>
+      <button id="lg-logcat-start" class="ghost">启动 logcat</button>
+      <button id="lg-logcat-stop" class="ghost">停止</button>
+      <button id="lg-logcat-clear" class="ghost">清空 logcat</button>
+      <button id="lg-clear" class="ghost">清空面板</button>
+    </div>
+    <div class="cc-out logs" id="lg-out"></div>
+  </section>
+
+  <!-- ============ 数据 ============ -->
+  <section id="tab-data" class="tab">
+    <div class="bar">
+      <select id="dt-kind">
+        <option value="routes">路由清单</option>
+        <option value="table">表浏览</option>
+        <option value="dict">文案对照（table_dictionary）</option>
+      </select>
+      <select id="dt-table" hidden></select>
+      <button id="dt-refresh-tables" class="ghost" hidden>刷新客户端表名</button>
+      <input id="dt-q" placeholder="搜索……">
+      <span class="spacer"></span>
+      <label class="chk" id="dt-limit-wrap">每页 <input type="number" id="dt-limit" value="60" min="1" max="500" style="width:64px"></label>
+      <button id="dt-prev" class="ghost">上一页</button>
+      <button id="dt-next" class="ghost">下一页</button>
+      <span class="muted" id="dt-info"></span>
+    </div>
+    <div class="dt-out" id="dt-out"></div>
+  </section>
+
+</main>
+
+<script src="/devtools/app.js"></script>
+</body>
+</html>

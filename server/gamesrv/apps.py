@@ -138,6 +138,15 @@ def remote_config() -> dict:
 def build_cdn(service):
     router = service.router
 
+    # 浏览器调试台（/devtools）。挂在 CDN 端口上是因为模拟器已经能访问它，
+    # 宿主机浏览器直接开 http://127.0.0.1:18080/devtools 就行，不用改 APK。
+    from . import devbus, devtools
+
+    devbus.attach_logging()
+    devtools.build(service)
+    _tailer = devtools._tailer                                   # noqa: SLF001
+    _tailer.start()
+
     @router.any(f"/{config.CLIENT_URL_PATH}/config/config.txt")
     def _config(req):
         log.info("远程配置请求")
@@ -312,7 +321,7 @@ def build_game(service):
 
     @router.prefix("/")
     def _game(req):
-        from . import gameproto, handlers, session as session_mod
+        from . import devbus, gameproto, handlers, session as session_mod
 
         logx.capture(
             "game-raw",
@@ -340,6 +349,13 @@ def build_game(service):
         payload = gameproto.unpack_request(payload_text.encode("utf-8", "replace"), sess["secret"])
         if payload is None:
             log.warning("GAME 无法解包: %s", req.text[:300])
+            # 解不开的也发一条 —— 排「为什么这个请求没反应」时最需要看到的
+            # 恰恰是这些，只记在 logcat 里容易漏。
+            devbus.publish("traffic", route="<解包失败>", reqId=None,
+                           session=(body_sid or "-")[:8], account=None,
+                           known=False, ok=False, ms=0,
+                           msg=req.text[:600], res=None, code=None,
+                           error="DES 解不开（多半是密钥/会话对不上）")
             return Response(200, gameproto.pack_error(1, "bad request"), content_type="text/plain")
 
         name = payload.get("route", "")
@@ -347,7 +363,38 @@ def build_game(service):
         req_id = payload.get("reqId")
         log.info("GAME route=%s reqId=%s msg=%s", name, req_id, json.dumps(msg, ensure_ascii=False)[:400])
 
-        result, known = handlers.dispatch(name, sess, msg, req_id)
+        started = time.time()
+        error = None
+        try:
+            result, known = handlers.dispatch(name, sess, msg, req_id)
+        except Exception as exc:                                  # noqa: BLE001
+            # 业务异常以前会被 httpd 兜成 500 —— 客户端那边看到的是"没反应"。
+            # 记下来再抛，保持原有行为不变。
+            error = f"{type(exc).__name__}: {exc}"
+            devbus.publish("traffic", route=name, reqId=req_id,
+                           session=(sess.get("session") or "-")[:8],
+                           account=(sess.get("info") or {}).get("account"),
+                           known=True, ok=False, error=error,
+                           ms=int((time.time() - started) * 1000),
+                           msg=msg, res=None, code=None)
+            raise
+
+        elapsed = int((time.time() - started) * 1000)
+        devbus.publish(
+            "traffic",
+            route=name,
+            reqId=req_id,
+            session=(sess.get("session") or "-")[:8],
+            account=(sess.get("info") or {}).get("account"),
+            known=bool(known),
+            ok=bool(result.get("code") == 200),
+            code=result.get("code"),
+            msg=msg,
+            res=result,
+            ms=elapsed,
+            error=error,
+        )
+
         body = gameproto.pack_response(result, sess["secret"])
         if not known:
             log.warning("GAME 未知 route，返回空 data：%s", name)

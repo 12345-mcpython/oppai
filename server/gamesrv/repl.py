@@ -24,6 +24,11 @@ _pending: list[dict] = []
 _results: dict[int, dict] = {}
 _history: list[dict] = []
 
+# 客户端最近一次来取命令的时间。devtools 用它判断「探针还活着吗」——
+# 客户端是几百毫秒一次的长轮询，所以这个值基本一直在刷新；
+# 一旦超过十来秒没动，就说明游戏关了 / 装的是 --no-probe 的包。
+last_poll_ts = 0.0
+
 
 def _next_id() -> int:
     global _seq
@@ -51,6 +56,8 @@ def submit(code: str, timeout: float = 20.0):
 
 def poll(last: int, timeout: float = 0.0):
     """给客户端取命令。没有就立刻返回 code=None。"""
+    global last_poll_ts
+    last_poll_ts = time.time()
     deadline = time.time() + timeout
     with _cv:
         while True:
