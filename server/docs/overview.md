@@ -33,14 +33,15 @@
 
 | 模块 | 状态 | 说明 |
 |---|---|---|
-| **编成 → 上阵队伍 → 加号** | ✅ | 18 个初始士兵（前锋/中卫/后卫各 6，角色不重复） |
+| **编成 → 上阵队伍 → 加号** | ✅ | 18 个初始士兵（前锋/中卫/后卫各 6，角色不重复，全是 `card_type==1` 的自军卡） |
 | **副本 / 关卡（主线战斗）** | ✅ | 11 章 / 1142 关，关卡表在客户端；服务端只存进度 |
 | **任务 → 主线任务** | ✅ | 12 条窗口；**进度接的是真实战斗**（打一次关卡胜利 = 一次任务进度） |
-| 编成 → 军士升级 | ⚠️ | `char.upgradesoldierlv` 还没接（任务 `13203 首次升级` 做不了） |
+| **编成 → 军士培养 / 突破 / 技能** | ✅ | `char.upgradesoldierlv` / `improvesoldierstar` / `upgradesoldierskill`；升级公式和客户端逐字段对齐（`tools/check_soldier_calc.py`） |
 | 日常 / 成就任务 | ⚠️ | 数据是空的（只做了主线，`type=2`） |
 | 开场/引导视频 | ✅ | 视频层清理 + 幂等守卫 |
 | 扭蛋 / 抽卡 | ⚠️ | 缺运营配置（`gachaMasterList`），靠兜底不让它崩 |
 | 培养（天赋） | ⚠️ | `TalentCenter` 构造抛异常（被容错吞掉），界面大概率是空的 |
+| 背包 / 道具消耗 | ⚠️ | `data.item` 还是硬编码的平铺映射，买东西/消耗**不落盘** |
 | 排行榜 / 交易所 / 好友 Boss 等 | ❌ | 路由只回空 data（stub） |
 
 **"能点但没内容"** 的典型原因就是上面这些数据缺口 —— 客户端不会崩，只是列表空。
@@ -196,6 +197,11 @@ vanilla 不传参 → 游戏代码 `function (eventName) { if (/began\d/.test(ev
 | 登录后**黑屏**，日志 `modules is undefined @ mainlayer.js:188` | `initUserData` 中途抛异常 → `player.initModuleState()` 没跑到 → `_moduleState` 是 undefined | §7 表 + `INITUSERDATA-GUARD` |
 | 主界面按钮**全都点不动**，引导一直让你点某个按钮 | 引导层把菜单点击吃了（`op.uiLoader.addTouchEventListener`） | `patch.js` GUIDE-SKIP |
 | 编成 → 加号**点了没人** | 士兵列表为空 / 全是同一角色 / 默认站位页没兵 | `store.SOLDIER_KEYS` |
+| 编成 → **培养**按钮点不了，弹「指挥部等级不足哦~OAQ」 | 「培养系统」在 `table_function_open[100005].unlock_lv = 6`，玩家等级不够 | `store.MIN_PLAYER_LV` |
+| 编成 → 培养里**选不出材料** | 军士的 `card_type` 不是 1（`table_soldier_master[char_key].card_type`），敌方单位不进军士卡列表 | `store.SOLDIER_KEYS` |
+| 培养点一下**直接顶到等级上限** | 材料的 `table_soldier[key].base_cost` 是 `undefined`（敌方行没有这个字段），加法变 `NaN` | 同上 |
+| 培养**预览 +3 级、点完跳 +8 级** | 服务端没复刻客户端的经验曲线 | `gamesrv/soldier.py` + `tools/check_soldier_calc.py` |
+| 培养升完**重登又变回去了** | 军士没落盘（`soldiers` 是 `null` / 升级后没 `save_player`） | `store._migrate` / `store.save_player` |
 | 任务**领不了** | 没回 `id`（客户端本地就 return，服务端收不到请求） | `quests._quest_entry` |
 | 任务进度条不显示 / 领奖按钮是灰的 | `schedule` 回了数组，实际要**对象** | 同上 |
 | 领了奖**列表不刷新** | 领过的任务要再回一次 `state:"4"`（`updateByServer` 只覆盖不清理） | `quests.block` |
@@ -220,16 +226,17 @@ vanilla 不传参 → 游戏代码 `function (eventName) { if (/began\d/.test(ev
 - [x] **引擎源码重建**（11 个补丁），战斗可完整跑完
 - [x] `jsc` 反汇编器 + atom 表提取器 + 运行时 REPL 探针
 - [x] 编成 / 上阵队伍（含士兵数据）
+- [x] **军士培养 / 突破 / 技能**（升级公式和客户端逐字段对齐，材料会被真的吃掉）
 - [x] 主线任务（窗口推进 + 领奖 + 刷新）
 - [x] 文档：协议 / 逆向手法 / 打包逻辑 / 本总览
 
 ### 待办（按卡点排序）
 
-1. **编成 → 军士升级（`char.upgradesoldierlv`）** —— 主线 210001「首次升级」
-   就等这个；同时 210002+「某军阶军士等级达到 N 级」也要它。
-   `char.improvesoldierstar`（突破）同理。
-2. **扭蛋 / 抽卡** —— 缺 `gachaMasterList` 运营配置；现在只保证不崩。
+1. **扭蛋 / 抽卡** —— 缺 `gachaMasterList` 运营配置；现在只保证不崩。
    `GUIDE_GACHA_KEY = 1002`（`GACHA_KEYS.GEM`）。
+2. **背包 / 道具要落盘** —— `data.item` 现在是 `agent._module_stubs` 里硬编码的
+   平铺映射，所以抽卡消耗、商店购买、培养花掉的萌钞都**不会真的扣**。
+   要先在 `store` 里给玩家加一份 `items`，再把 `_module_stubs` 改成读它。
 3. **培养（天赋）** —— `TalentCenter` 构造抛 `this._talentTypes[v.type] is undefined`，
    已试过 7~8 种形状都没在 REPL 里复现，怀疑 `initUserData` 传进去的不是 `data.talents`，
    需要在探针里把构造参数打出来再登一次才能确定。

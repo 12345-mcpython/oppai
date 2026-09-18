@@ -14,7 +14,8 @@
 | `build_apk.py` | 打包 APK 全套：改 assets（URL 原地等长替换）→ 写 `patch.js`/`probe.js` → apktool 完整打包 → zipalign → 签名。`--no-probe` 出正式包。**幂等**，可以反复跑 |
 | `serve.py` | 服务端守护：`run.py` 挂了自动拉起。**推荐用这个起服务端**，别用 `Start-Process python run.py`（会被回收） |
 | `merge_dex.py` | 把 apktool 拆出来的 `smali_classesN` 合并成单个 dex |
-| `selftest_game.py` | 不开游戏也能自测业务协议：自己按客户端格式打包加密请求打服务端，验证「加解密 + 路由 + code=200」 |
+| `selftest_game.py` | 不开游戏也能自测业务协议：自己按客户端格式打包加密请求打服务端，验证「加解密 + 路由 + code=200」。末尾还会走一遍**军士培养链路**（喂材料 → 重登确认等级落盘、材料没复活） |
+| `check_soldier_calc.py` | **交叉验证**：把服务端 `gamesrv/soldier.py` 的升级计算和客户端 `CharCenter.calcSoldierUpgrade` 在 44 组用例上逐字段比对。改升级公式后必跑（要求游戏在跑 + 探针已加载） |
 | `sdk_strip/` | 删掉没用到的第三方 SDK：扫引用 → 生成桩类 → 删 smali → 清 manifest / assets / lib |
 
 ## 2. 逆向 / 取数据（加新功能时用）

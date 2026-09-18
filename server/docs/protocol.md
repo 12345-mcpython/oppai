@@ -676,3 +676,111 @@ for (var key in table_item) this._items[key] = this._createItem(key, items[key] 
 
 所以 `data.item` 要直接是 `{"100003": 999, "100002": 10000000, "100001": 100000}`
 —— 早先按 `{items:{...}, package:{}, limitTimeItems:[]}` 给，所有道具都是 0。
+
+## 11. 军士养成（char.*）
+
+### 11.1 功能是按「指挥部等级」解锁的
+
+`table_function_open` 里每个系统都带解锁条件，`unlock_lv` 是**玩家等级**：
+
+| key | 系统 | 条件 |
+|-----|------|------|
+| 100004 | 编成系统 | `unlock_lv: 1` |
+| **100005** | **培养系统** | **`unlock_lv: 6`** |
+| 100012 | 演习场 | `unlock_lv: 27` |
+| 100020 | 第 4 个上阵位置 | `unlock_lv: 11` |
+| 100021 | 第 5 个上阵位置 | `unlock_lv: 25` |
+| 100025 / 100027 / 100028 / 100029 | 任务派遣 / 战术模块 / 模块一览 / 分区战场 | `unlock_lv: 20` / 25 / 25 / 25 |
+
+等级不够时客户端按钮是灰的、点了弹 `table_dictionary` 里的
+「指挥部等级不足哦~OAQ」/「指挥部达到25级开启哦~加油升级吧」。
+
+所以 `store.new_player()` 直接给 `lv = MIN_PLAYER_LV(30)`，不是 1 —— 私服没必要从 1 级刷起。
+`_migrate()` 会把老存档低于 30 的补上去（否则「编成 -> 培养」永远点不开）。
+
+### 11.2 军士必须是 `card_type == 1` 的自军卡
+
+`Soldier._loadMasterAttr` 就一句：
+
+```js
+this._cardType = table_soldier_master[this._charKey].card_type;
+```
+
+`CARD_TYPE = {TEAMMATE: 1, ENEMY: 2, EXP: 3, SKILL: 4}`。
+**key 是 `char_key`（角色），不是士兵 key**（`sasm010104` 的 char_key 是 `sasm`）。
+
+踩过大坑：早期初始名单是「实测能 `new` 出来」才挑的，结果挑中一堆 `card_type == 2`
+的敌方单位（`sfog` 是先代巫女 BOSS）。后果：
+
+1. 「编成 -> 培养」的材料列表只收 `cardType == TEAMMATE`，18 个里只剩 7 个；
+2. `CharCenter.calcSoldierUpgrade` 里 `gainExp` 会变成 `NaN` ——
+   敌方行没有 `base_cost` 字段，`undefined` 参与加法就是 `NaN`，
+   `while (tarExp < maxExp)` 永远为假，直接顶到等级上限。
+
+挑名单用：
+
+```js
+table_soldier[k].quality === 4 && table_soldier_master[table_soldier[k].char_key].card_type === 1
+```
+
+### 11.3 培养：升级是客户端先算、服务端复刻
+
+`SoldierDetailLayer._updateUpgradeData` 在**面板刷新时**就本地算出目标等级显示出来：
+
+```js
+var res = dataManager.character.calcSoldierUpgrade(this._upgradeMaterials, this._soldier);
+this._needExp   = this._soldier.maxExp - this._soldier.curExp;
+this._needMoney = res.needMoney;
+this._ownMoney  = dataManager.bag.getItemCount(ITEM_KEY.MONEY);   // 萌钞 100002
+```
+
+点「升级」才把材料发给服务端，服务端回什么等级面板就显示什么等级
+（`Soldier.requestUpgradeCb` -> `upgrade(data.soldier)`）。
+所以服务端把 `calcSoldierUpgrade` 逐行复刻了一份（`gamesrv/soldier.py`），
+不然会出现「预览 +3 级，点完跳 +8 级」。
+
+请求 / 响应：
+
+```
+char.upgradesoldierlv   {id, key, materials: [军士id, ...]}
+  -> {"code":200,"data":{"soldier":{"lv":新等级,"curExp":经验,"skillLv":技能等级}}}
+
+char.improvesoldierstar {id}
+  -> {"code":200,"data":{"soldier":{"star":新星级}}}
+
+char.upgradesoldierskill{id, materialId}
+  -> 只要 code==200
+
+char.sellsoldiers       {materials: [军士id, ...]}
+  -> {"code":200,"data":{"rewards":[]}}
+```
+
+⚠️ **`materials` 是军士 id 的数字数组，不是对象数组**。
+`SoldierCheckBoxListLayer._targets` 是以 id 为下标的稀疏数组，确认时
+`for (k in _targets) if (_targets[k]) out.push(k)`。
+`char.sellsoldiers` 用的也是同一个字段名 `materials`（不是 `keys`）。
+
+材料会被**真的吃掉**：客户端 `requestUpgradeCb` 立刻调 `character.removeSoldier(materials)`，
+服务端不删的话重登材料就复活了。
+
+数值来源（`table_soldier` 系列表，见 `tools/extract_client_tables.py` 的 `SOLDIER_JS`）：
+
+```
+gainExp   += table_soldier_to_exp[材料.lv]["quality_<品质>_<星级>"]
+needMoney += table_soldier[材料.key].base_cost            // 是 base_cost，不是 base_exp
+           + table_soldier_to_cost_for_upgrade[材料.lv]["quality_<品质>_<星级>"]
+
+tarLv = 目标.lv; tarExp = 目标.curExp + gainExp
+while (true) {
+    if (tarLv >= 目标.maxLv) { tarLv = 目标.maxLv; tarExp = 0; break; }
+    need = table_soldier_upgrade_exp[tarLv]["quality_<品质>"];    // 注意没有星级的维度
+    if (tarExp < need) break;
+    tarExp -= need; tarLv++;
+}
+```
+
+等级上限 `table_soldier_lv_limit[星级]["quality_<品质>"]`（1 星 30、2 星 40 … 5 星 70），
+星级上限 / 技能上限在 `table_soldier_constant` 的 `max_star_<品质>` / `max_skill_lv_<品质>`。
+
+对齐验证：`python tools/check_soldier_calc.py`（44 个用例，和服务端算的逐字段比对）。
+链路验证：`python tools/selftest_game.py`（喂两个材料 -> 重登确认等级落盘、材料没复活）。

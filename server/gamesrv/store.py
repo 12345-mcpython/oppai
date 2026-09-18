@@ -73,6 +73,14 @@ ITEM_ACTION_POINT = "100003"
 # 新手引导位掩码全 1 = 所有引导都已完成。见 new_player() 里的说明。
 GUIDE_MARK_DONE = 0x7FFFFFFF
 
+# 玩家「指挥部」初始等级。客户端按等级解锁功能，最靠前的门槛是编成里的
+# 「培养 / 升级军士」= 6 级，所以默认给 30 一步到位（顺带过了 25 级那批）。
+MIN_PLAYER_LV = 30
+
+# 初始士兵名单的版本号。改动 SOLDIER_KEYS 时 +1，老存档的军士会被整个重发
+# （`_migrate` 里判断）—— 注意这会重置军士等级。
+ROSTER_VERSION = 3
+
 # 初始士兵。(key, 站位, 品质)，key 取自客户端 table_soldier。
 #
 # 站位必须三个都有：SOLDIER_POSITIONING = {FRONT:1, MIDDLE:2, BACK:3}，
@@ -83,31 +91,45 @@ GUIDE_MARK_DONE = 0x7FFFFFFF
 # 「相同的角色只能选择一个作为上阵军士」，同一个 char_key 只会出现一个。
 # 之前给的是 sads010101~04，四个全是同一个角色 sads，所以列表里基本是空的。
 #
+# ⚠️⚠️ **必须是「玩家可获得」的军士**，判据是
+#     table_soldier_master[char_key].card_type === CARD_TYPE.TEAMMATE(1)
+# `Soldier._loadMasterAttr` 就一句 `this._cardType = table_soldier_master[char_key].card_type`，
+# 只有 1 是自军卡（2=ENEMY，3=EXP，4=SKILL）。
+#
+# 早先这份名单是按「能 new 出来」挑的，结果挑中一堆 card_type==2 的**敌方单位**
+# （sfog 是先代巫女 BOSS，sads/safj/sbdsl 等也全是敌人），后果有两个：
+#   1. 「编成 -> 培养」选不出材料 —— 材料列表只收 cardType==TEAMMATE，
+#      18 个里只剩 7 个；
+#   2. `CharCenter.calcSoldierUpgrade` 的 gainExp 算成 NaN —— 那些行没有
+#      `base_exp` 字段，`table_soldier[key].base_exp` 是 undefined，
+#      加法得 NaN，`while (gainExp < maxExp)` 永远为假，直接顶到 maxLv。
+# 现在按 card_type==1 + quality==4 + 三站位各 6 个挑，实测 18 个全部构造成功且 ct=1。
+#
 # ⚠️ 一个士兵构造失败会**整份士兵列表全丢**（CharCenter 里是整体 try），
 # 所以只能用实测能 new 出来的 key。lfcz01/lfcz02/lfcz03（废柴子系）
 # 在客户端会抛 "TypeError: row is undefined"，千万别放进来。
 SOLDIER_KEYS = [
     # 前锋 FRONT = 1
-    ("sfog010104", 1, 4),      # SFOG
-    ("sads010104", 1, 4),      # 阿达斯-中士
-    ("safj010104", 1, 4),      # 金-观众
     ("sasm010104", 1, 4),      # 阿斯麦
-    ("sbdsl010104", 1, 4),     # 小兵巴蒂萨雷-中士
     ("sbns010104", 1, 4),      # 柏妮丝
+    ("sglrs010104", 1, 4),
+    ("shx010104", 1, 4),
+    ("sjm010104", 1, 4),
+    ("skdln010104", 1, 4),
     # 中卫 MIDDLE = 2
-    ("safdf010104", 2, 4),     # 戴夫-观众
     ("sbd010104", 2, 4),       # 巴度
-    ("sbe010104", 2, 4),       # 贝尔-中士
     ("sbq010104", 2, 4),       # 贝琪
-    ("scsflkl010104", 2, 4),   # 富兰克林-厨师
-    ("scslsbs010104", 2, 4),   # 丽思贝丝-厨师
+    ("sflr010104", 2, 4),
+    ("sfn010104", 2, 4),
+    ("shs010104", 2, 4),
+    ("sjlt010104", 2, 4),
     # 后卫 BACK = 3
     ("saf010104", 3, 4),       # 爱芙
-    ("salks010104", 3, 4),     # 艾丽科思-中士
     ("same010104", 3, 4),      # 爱莫儿
-    ("sbl010104", 3, 4),       # 伯伦-普通
-    ("scsslbs010104", 3, 4),   # 沙隆巴斯-厨师
     ("scyy010104", 3, 4),      # 长月遥
+    ("sda010104", 3, 4),
+    ("sdde010104", 3, 4),
+    ("sdfn010104", 3, 4),
 ]
 
 
@@ -259,13 +281,20 @@ def new_team(index: int) -> dict:
 
 
 def new_player(account: str) -> dict:
-    """新建一个 1 级玩家。"""
+    """新建玩家。
+
+    ⚠️ 等级直接给 MIN_PLAYER_LV 而不是 1：客户端一大堆功能是按「指挥部等级」
+    解锁的（编成里培养/升级军士要 6 级，有的入口要 25 级，提示语在
+    table_dictionary[2401]「指挥部等级#@1@#开启」/ [4207]），
+    1 级进去点什么都提示"指挥部等级不足哦~OAQ"。
+    私服没必要让人从 1 级刷起，想体验原版就从 MIN_PLAYER_LV 改回去。
+    """
     now = int(time.time())
     return {
         "id": 1,
         "account": account,
         "name": account,
-        "lv": 1,
+        "lv": MIN_PLAYER_LV,
         "curExp": 0,
         "maxSoldiersCount": 50,
         "actionPoint": 100,
@@ -277,6 +306,11 @@ def new_player(account: str) -> dict:
         "medalBgId": 0,
         "curTeamIdx": 0,
         "moduleState": new_module_state(),
+        # 军士（18 个初始军士）。**建号时就发**，不是等第一次登录现生成 ——
+        # `ensure_soldiers` 只在内存里补，登录接口不写盘，所以「现生成」的版本
+        # 每次都可能是新的，军士升级/突破的结果会莫名其妙回退。
+        "soldiers": new_soldiers(),
+        "rosterVersion": ROSTER_VERSION,
         # 新手引导位掩码（客户端 guideManager.checkGuide 用 id & (1 << n) 判断）。
         # 全 1 表示所有引导都已完成 —— 否则 GuideLayer 会一直拦着菜单点击：
         #   op.uiLoader.addTouchEventListener 里，只要
@@ -311,6 +345,22 @@ def _migrate(player: dict) -> bool:
     """
     fresh = new_player(player.get("account", "player"))
     changed = False
+    # 军士名单要在下面「按 key 补齐」之前处理 —— rosterVersion 也是 new_player
+    # 里的字段，先补齐的话这里就永远看不出「版本变了」。
+    #
+    # 军士列表必须是真列表。踩过一次：存档里存成了 null，
+    # `find_soldier` 于是每次现发一份新的，升级结果一重登就回退。
+    #
+    # ROSTER_VERSION 变了就整个重发：名单本身改了（比如把敌方单位换成自军卡），
+    # 老存档里存的还是旧 key，留着没用。**代价是军士等级会重置**，
+    # 所以版本号只在真的换名单时才动。
+    if (not isinstance(player.get("soldiers"), list) or not player["soldiers"]
+            or int(player.get("rosterVersion") or 0) != ROSTER_VERSION):
+        player["soldiers"] = new_soldiers()
+        player["rosterVersion"] = ROSTER_VERSION
+        changed = True
+        log.info("玩家 %s 军士名单重建（roster v%s），共 %d 个",
+                 player.get("account"), ROSTER_VERSION, len(player["soldiers"]))
     for key, value in fresh.items():
         if key not in player:
             player[key] = value
@@ -325,6 +375,12 @@ def _migrate(player: dict) -> bool:
         if key not in state:
             state[key] = value
             changed = True
+    # 老存档是 1 级建的，光靠 new_player 改默认值救不回来，这里补一次升级。
+    # 见 new_player 的注释：指挥部等级不够，编成里「培养」「升级军士」直接不给点。
+    if int(player.get("lv") or 1) < MIN_PLAYER_LV:
+        player["lv"] = MIN_PLAYER_LV
+        changed = True
+        log.info("玩家 %s 指挥部等级补到 %d", player.get("account"), MIN_PLAYER_LV)
     return changed
 
 

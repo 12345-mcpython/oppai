@@ -136,6 +136,48 @@ LEVEL_JS = r"""
 """
 
 
+# 军士养成表。
+#
+# 「培养（升级）」这条链路的数值全在客户端本地算，服务端要复刻一遍才不会
+# 「界面预览升到 X 级、点完变成 Y 级」。`CharCenter.calcSoldierUpgrade` 用到：
+#
+#   table_soldier_to_exp[lv]["quality_<q>_<star>"]          一个 lv 级材料的「经验值」
+#   table_soldier[key].base_exp / base_cost                 卡片自身的经验/金币基准值
+#   table_soldier_to_cost_for_upgrade[lv]["quality_<q>_<star>"]  额外金币
+#   table_soldier_upgrade_exp[lv]["quality_<q>"]            升到下一级需要多少经验
+#   table_soldier_lv_limit[star]["quality_<q>"]             等级上限
+#
+# `card` 只留服务端会用到的几个字段，整张表压下来也就百来 KB。
+#
+# ⚠️ `base_exp` 只有 card_type==TEAMMATE 的行才有；敌方行是 undefined，
+# 客户端那边一加就变 NaN（表现：培养直接顶到等级上限）。所以服务端取值一律
+# 用 `card[key].e`（抽取时已经 `|| 0`）。
+SOLDIER_JS = r"""
+(function () {
+    var card = {};
+    for (var k in table_soldier) {
+        var r = table_soldier[k];
+        if (!r) { continue; }
+        card[k] = {
+            e: r.base_exp || 0,
+            c: r.base_cost || 0,
+            q: r.quality || 0,
+            p: r.positioning || 0,
+            t: r.template || 0
+        };
+    }
+    return JSON.stringify({
+        upgrade_exp: table_soldier_upgrade_exp,
+        to_exp: table_soldier_to_exp,
+        to_cost: table_soldier_to_cost_for_upgrade,
+        lv_limit: table_soldier_lv_limit,
+        constant: table_soldier_constant,
+        card: card
+    });
+})()
+"""
+
+
 def _dump(base: str, js: str, name: str):
     result = eval_remote(base, js, timeout=30.0)
     if not result.get("ok"):
@@ -174,6 +216,8 @@ def main() -> int:
     if _dump(base, NPC_JS, "table_friend_support_npc.json") is None:
         return 1
     if _dump(base, LEVEL_JS, "table_level_reward.json") is None:
+        return 1
+    if _dump(base, SOLDIER_JS, "table_soldier.json") is None:
         return 1
     return 0
 
