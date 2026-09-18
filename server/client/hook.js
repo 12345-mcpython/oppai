@@ -1311,18 +1311,37 @@
     })();
 
     // ------------------------------------------------------------------
-    // ccui.WebView polyfill
+    // ccui.WebView polyfill（会真的把内容显示出来）
     //
     // 原版 .so 有 experimental_webView_WebView 绑定，v3.6 仓库里没有。
-    // 游戏公告层 noticelayer.js 用 new ccui.WebView()，缺了就抛
-    // "ccui.WebView is not a constructor"。
+    // 游戏公告层 noticelayer.js 用 new ccui.WebView() 加载 NOTICE_URL。
     //
-    // 公告内容来自远端 URL（服务器已停），所以做占位实现：
-    // 能构建、能 loadURL、会异步回调 onDidFinishLoading，让流程能继续。
+    // NOTICE_URL 已经被重定向到私服（cdn.shuangmawei.net -> 10.110.29.230:18080），
+    // 所以这里：抓页面 -> 剥 HTML 标签 -> 用 ccui.Text 渲染出来。
+    // 服务端改公告，客户端就能看到。
     // ------------------------------------------------------------------
     (function () {
         if (typeof ccui === "undefined") { return; }
-        if (typeof ccui.WebView === "function") { emit("WEBVIEW 已存在，跳过"); return; }
+        if (typeof ccui.WebView === "function" && ccui.WebView.__oppaiReal) {
+            emit("WEBVIEW 已经装过真实现");
+            return;
+        }
+
+        // ---- HTML -> 纯文本（够用就行）----
+        function htmlToText(html) {
+            var t = String(html || "");
+            t = t.replace(/<script[\s\S]*?<\/script>/gi, "");
+            t = t.replace(/<style[\s\S]*?<\/style>/gi, "");
+            t = t.replace(/<br\s*\/?>/gi, "\n");
+            t = t.replace(/<\/(p|div|h[1-6]|li|tr)>/gi, "\n");
+            t = t.replace(/<li[^>]*>/gi, "  · ");
+            t = t.replace(/<[^>]+>/g, "");
+            t = t.replace(/&nbsp;/g, " ").replace(/&lt;/g, "<")
+                 .replace(/&gt;/g, ">").replace(/&amp;/g, "&").replace(/&quot;/g, '"');
+            t = t.replace(/\r/g, "");
+            t = t.replace(/\n{3,}/g, "\n\n");
+            return t.replace(/^[ \t]+|[ \t]+$/gm, "").replace(/^\n+|\n+$/g, "");
+        }
 
         var WV = ccui.Widget.extend({
             ctor: function () {
@@ -1334,24 +1353,74 @@
                 this._cbFail = null;
                 this._cbJS = null;
                 this._cbShouldStart = null;
+                this._label = null;
             },
+
+            _render: function (text) {
+                if (this._label) {
+                    try { this._label.removeFromParent(); } catch (e) { }
+                    this._label = null;
+                }
+                var size = null;
+                try { size = this.getContentSize(); } catch (e) { }
+                var w = (size && size.width > 40) ? (size.width - 40) : 640;
+                var h = (size && size.height > 40) ? (size.height - 40) : 400;
+
+                var label = new ccui.Text();
+                try {
+                    label.setString(text);
+                    label.setFontSize(20);
+                    label.setTextColor(cc.color(91, 74, 47));
+                    label.ignoreContentAdaptWithSize(false);
+                    label.setTextAreaSize(cc.size(w, h));
+                    label.setTextHorizontalAlignment(cc.TEXT_ALIGNMENT_LEFT);
+                    label.setTextVerticalAlignment(cc.VERTICAL_TEXT_ALIGNMENT_TOP);
+                } catch (e) {
+                    emit("WEBVIEW 建 label 出错 " + e);
+                }
+                var sz = null;
+                try { sz = this.getContentSize(); } catch (e) { }
+                if (sz) { label.setPosition(cc.p(sz.width / 2, sz.height / 2)); }
+                label.setLocalZOrder(1);
+                this.addChild(label);
+                this._label = label;
+            },
+
             loadURL: function (url) {
                 this._url = url || "";
                 emit("WEBVIEW.loadURL " + this._url);
                 var self = this;
-                // 让公告层的 onDidFinishLoading 能收到，流程不至于卡住
-                setTimeout(function () {
-                    try {
-                        if (self._cbFinish) { self._cbFinish(self, self._url); }
-                    } catch (e) { emit("WEBVIEW cbFinish ERR " + e); }
-                }, 50);
+                try {
+                    var xhr = cc.loader.getXMLHttpRequest();
+                    xhr.open("GET", this._url, true);
+                    xhr.onreadystatechange = function () {
+                        if (xhr.readyState !== 4) { return; }
+                        if (xhr.status >= 200 && xhr.status < 300) {
+                            var text = htmlToText(xhr.responseText);
+                            emit("WEBVIEW 内容 " + text.length + " 字");
+                            self._render(text || "（公告为空）");
+                            try { if (self._cbFinish) { self._cbFinish(self, self._url); } } catch (e) { }
+                        } else {
+                            emit("WEBVIEW 加载失败 status=" + xhr.status);
+                            self._render("公告加载失败（HTTP " + xhr.status + "）");
+                            try { if (self._cbFail) { self._cbFail(self, self._url); } } catch (e) { }
+                        }
+                    };
+                    xhr.send();
+                } catch (e) {
+                    emit("WEBVIEW xhr 出错 " + e);
+                    self._render("公告加载失败");
+                }
             },
+
             loadFile: function (p) { this.loadURL(p); },
-            loadHTMLString: function (html, base) { this._url = base || ""; },
-            loadData: function () { },
-            reload: function () {
-                if (this._url) { this.loadURL(this._url); }
+            loadHTMLString: function (html, base) {
+                this._render(htmlToText(html));
+                var self = this;
+                setTimeout(function () { try { if (self._cbFinish) { self._cbFinish(self, base || ""); } } catch (e) { } }, 30);
             },
+            loadData: function () { },
+            reload: function () { if (this._url) { this.loadURL(this._url); } },
             stopLoading: function () { },
             setJavascriptInterfaceScheme: function (s) { this._scheme = s; },
             setScalesPageToFit: function (b) { this._scales = !!b; },
@@ -1366,9 +1435,79 @@
             evaluateJS: function (js) { },
             getURL: function () { return this._url; }
         });
+        WV.__oppaiReal = true;
 
         ccui.WebView = WV;
-        emit("WEBVIEW ccui.WebView polyfill 已装");
+        emit("WEBVIEW ccui.WebView 已装（会渲染公告内容）");
+    })();
+
+    // ------------------------------------------------------------------
+    // ccui.VideoPlayer polyfill
+    //
+    // 原版 .so 有 experimental_video_VideoPlayer 绑定，v3.6 仓库里没有。
+    // 战斗引导层 launchguidelayer.js:432 用 new ccui.VideoPlayer() 播开场视频，
+    // 缺了就抛 "ccui.VideoPlayer is undefined"，引导流程中断。
+    //
+    // 这里做占位实现：能建、能设文件名、play() 后异步回调 COMPLETED，
+    // 让流程继续。（真播视频需要原生绑定。）
+    // ------------------------------------------------------------------
+    (function () {
+        if (typeof ccui === "undefined") { return; }
+        if (typeof ccui.VideoPlayer === "function" && ccui.VideoPlayer.__oppaiFake) {
+            return;
+        }
+
+        var VP = ccui.Widget.extend({
+            ctor: function () {
+                this._super();
+                this._file = "";
+                this._url = "";
+                this._playing = false;
+                this._fullscreen = false;
+                this._keepAspect = true;
+                this._listeners = [];
+                this._timer = null;
+            },
+            setFileName: function (f) { this._file = f || ""; },
+            getFileName: function () { return this._file; },
+            setURL: function (u) { this._url = u || ""; },
+            getURL: function () { return this._url; },
+            setFullScreenEnabled: function (b) { this._fullscreen = !!b; },
+            isFullScreenEnabled: function () { return this._fullscreen; },
+            setKeepAspectRatioEnabled: function (b) { this._keepAspect = !!b; },
+            isKeepAspectRatioEnabled: function () { return this._keepAspect; },
+            addEventListener: function (cb) {
+                if (typeof cb === "function") { this._listeners.push(cb); }
+            },
+            _emit: function (type) {
+                for (var i = 0; i < this._listeners.length; i++) {
+                    try { this._listeners[i](this, type); }
+                    catch (e) { emit("VIDEO 回调出错 " + e); }
+                }
+            },
+            play: function () {
+                this._playing = true;
+                emit("VIDEO play(占位) " + (this._file || this._url));
+                var self = this;
+                // ccui.VideoPlayer 的事件常量：0=COMPLETED 1=PAUSED 2=STOPPED 3=PLAYING
+                setTimeout(function () {
+                    self._playing = false;
+                    self._emit(0);
+                }, 300);
+            },
+            pause: function () { this._emit(1); },
+            resume: function () { this._playing = true; },
+            stop: function () { this._playing = false; this._emit(2); },
+            seekTo: function (s) { },
+            isPlaying: function () { return this._playing; },
+            onPlayEvent: function (type) { this._emit(type); },
+            currentTime: function () { return 0; },
+            getDuration: function () { return 0; }
+        });
+        VP.__oppaiFake = true;
+
+        ccui.VideoPlayer = VP;
+        emit("VIDEO ccui.VideoPlayer polyfill 已装（占位，不真正播放）");
     })();
 
     var tries = 0;

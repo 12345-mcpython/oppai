@@ -9,7 +9,9 @@
 
 from __future__ import annotations
 
+import io
 import json
+import os
 import time
 
 from . import config, logx
@@ -17,8 +19,16 @@ from .httpd import Response
 
 log = logx.get("apps")
 
-# 公告页（原服务器返回的是一张 HTML 公告，这里留空即可）
-NOTICE_HTML = (
+# ---------------------------------------------------------------------------
+# 公告页
+#
+# 客户端 NOTICE_URL 已经被重定向到本服（见 docs/protocol.md 的等长替换），
+# 请求路径是 /<CLIENT_URL_PATH>/notice/index.html。
+#
+# 内容优先从 var/notice.html 读 —— 私服想改公告直接编辑那个文件、
+# 重启服务端即可，不用动代码。文件不存在就用下面的默认文案。
+# ---------------------------------------------------------------------------
+_DEFAULT_NOTICE = (
     "<!DOCTYPE html><html><head><meta charset=\"utf-8\">"
     "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
     "<style>body{margin:0;padding:24px;background:#f5f0e1;color:#5b4a2f;"
@@ -29,6 +39,27 @@ NOTICE_HTML = (
     "<p>点击右上角关闭即可返回登录界面。</p>"
     "</body></html>"
 )
+
+_NOTICE_PATH = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "var", "notice.html"
+)
+
+
+def notice_html() -> str:
+    """每次请求都重新读，改完公告不用重启也能生效。"""
+    try:
+        if os.path.isfile(_NOTICE_PATH):
+            with io.open(_NOTICE_PATH, encoding="utf-8") as fh:
+                text = fh.read()
+            if text.strip():
+                return text
+    except Exception as exc:                      # noqa: BLE001
+        log.warning("读 %s 失败，用默认公告: %s", _NOTICE_PATH, exc)
+    return _DEFAULT_NOTICE
+
+
+# 兼容旧引用
+NOTICE_HTML = _DEFAULT_NOTICE
 
 
 # ---------------------------------------------------------------------------
@@ -130,7 +161,7 @@ def build_cdn(service):
         # 客户端启动后会用一个 WebView 弹「公告」，这里返回一张干净的页面。
         # 注意不能返回 404，否则 WebView 会显示 ERR_HTTP_RESPONSE_CODE_FAILURE。
         log.info("公告页请求")
-        return Response(200, NOTICE_HTML, content_type="text/html; charset=utf-8")
+        return Response(200, notice_html(), content_type="text/html; charset=utf-8")
 
     # ---------------- 客户端探针通道 ----------------
     @router.any("/hook/ping")
