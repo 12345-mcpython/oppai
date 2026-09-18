@@ -34,11 +34,11 @@
 | 模块 | 状态 | 说明 |
 |---|---|---|
 | **编成 → 上阵队伍 → 加号** | ✅ | 18 个初始士兵（前锋/中卫/后卫各 6，角色不重复） |
-| **任务 → 主线任务** | ✅ | 12 条窗口，顶上一条可领，领完窗口往后滑 |
+| **副本 / 关卡（主线战斗）** | ✅ | 11 章 / 1142 关，关卡表在客户端；服务端只存进度 |
+| **任务 → 主线任务** | ✅ | 12 条窗口；**进度接的是真实战斗**（打一次关卡胜利 = 一次任务进度） |
+| 编成 → 军士升级 | ⚠️ | `char.upgradesoldierlv` 还没接（任务 `13203 首次升级` 做不了） |
 | 日常 / 成就任务 | ⚠️ | 数据是空的（只做了主线，`type=2`） |
-| **战斗** | ✅ | 引擎层修了 3 个 bug 才能跑，见 §3.3 |
 | 开场/引导视频 | ✅ | 视频层清理 + 幂等守卫 |
-| 副本 / 关卡（`instance`） | ❌ | `levels: [] / chapters: []`，**下一个卡点** |
 | 扭蛋 / 抽卡 | ⚠️ | 缺运营配置（`gachaMasterList`），靠兜底不让它崩 |
 | 培养（天赋） | ⚠️ | `TalentCenter` 构造抛异常（被容错吞掉），界面大概率是空的 |
 | 排行榜 / 交易所 / 好友 Boss 等 | ❌ | 路由只回空 data（stub） |
@@ -202,6 +202,8 @@ vanilla 不传参 → 游戏代码 `function (eventName) { if (/began\d/.test(ev
 | **反复刷新还是同两条任务** | 领奖进度没写回文件（`get_or_create_player` 返回的是临时副本） | `store.save_player` |
 | 战斗结束卡住 | `setLastFrameCallFunc` 不传动画名 | 引擎补丁 ① |
 | 战斗中原生崩溃（SIGSEGV） | `RotationSkewFrame::onApply` 运算符优先级 | 引擎补丁 ② |
+| 编好队点战斗弹**「队伍数据异常，请重新登陆」**然后闪退 | 客户端 `Soldier._originData` 防篡改快照比对失败 —— 少发 `skillLv`（`_mainSkill.lv = args.skillLv \|\| 1`） | `store.new_soldier` |
+| 进关卡弹**「没有甜甜圈了 是否需要补充行动力」** | 行动力是背包道具（`100003`），不是 `player.actionPoint`；而 `data.item` 必须是**平铺映射** | `agent._module_stubs` |
 | 屏幕被青色的视频层盖住 | Android 侧 `VideoView` 还 VISIBLE | `patch.js` LGL-GUARD |
 | 日志刷屏（每帧一条） | 引擎自己的 LOGD | 引擎补丁 ③ + `vlog()` |
 
@@ -223,15 +225,17 @@ vanilla 不传参 → 游戏代码 `function (eventName) { if (/began\d/.test(ev
 
 ### 待办（按卡点排序）
 
-1. **副本 / 关卡（`instance`）** —— 主线任务的条件都是「通关 N 次」，
-   没有关卡就没法自然完成。关卡表同样可以抽出来（`table_level` / `table_chapter`）。
+1. **编成 → 军士升级（`char.upgradesoldierlv`）** —— 主线 210001「首次升级」
+   就等这个；同时 210002+「某军阶军士等级达到 N 级」也要它。
+   `char.improvesoldierstar`（突破）同理。
 2. **扭蛋 / 抽卡** —— 缺 `gachaMasterList` 运营配置；现在只保证不崩。
+   `GUIDE_GACHA_KEY = 1002`（`GACHA_KEYS.GEM`）。
 3. **培养（天赋）** —— `TalentCenter` 构造抛 `this._talentTypes[v.type] is undefined`，
    已试过 7~8 种形状都没在 REPL 里复现，怀疑 `initUserData` 传进去的不是 `data.talents`，
    需要在探针里把构造参数打出来再登一次才能确定。
-4. **日常 / 成就任务** —— 只做了 `type=2`（主线）。
-5. **其余 stub 路由** —— `rank.*` / `exchange.*` / `boss.*` / `shop.*` 等，
-   照着对应模块的 `updateByServer` 反汇编补 key 即可。
+4. **日常 / 成就任务** —— 只做了 `type=2`（主线）；日常 246 条 / 成就 91 条。
+5. **其余 stub 路由** —— `rank.*` / `exchange.*` / `boss.*` / `shop.*` / `mail.*`
+   / `friendsupport.getrecommendsoldiers` 等，照着对应模块的 `updateByServer` 反汇编补 key 即可。
 6. `hashKey` / `hmac64` 还没复刻（登录靠单位元绕过）；自研 DH 的完整算法也没还原。
 
 ---
