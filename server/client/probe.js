@@ -918,9 +918,116 @@
             }
             initUserDataRan = true;
             emit("initUserData 首次执行");
-            return orig.apply(this, arguments);
+            window.__oppaiInitUserData = function () { return orig.apply(dm, arguments); };
+            try {
+                return orig.apply(this, arguments);
+            } catch (e) {
+                // 这里一旦抛异常，initUserData 剩下的一半（含 player.initModuleState）
+                // 就全都不执行，主界面必然 TypeError: modules is undefined
+                emit("INITUSERDATA 抛异常: " + e + " | stack=" + (e && e.stack));
+                throw e;
+            }
         };
         return true;
+    }
+
+    // ------------------------------------------------------------------
+    // 登录期调用序列追踪
+    //
+    // initUserData 在 new 完所有模块之后还会按顺序调
+    //     player.setCharacter / initTeams / initAsst /
+    //     guideManager.init / uiLayoutManager.init /
+    //     player.initModuleState / initXgNotifications
+    // 中间任何一步抛异常，后面的都不会执行 —— 实测 player._moduleState 一直是
+    // undefined（就是 initModuleState 没跑到），主界面 _initModuleButtons 于是死在
+    //     TypeError: modules is undefined @ mainlayer.js:188
+    // 这里把这一段逐个包起来，谁抛的一目了然。
+    // ------------------------------------------------------------------
+    // 只在登录窗口内打 CALL，避免主界面每帧调用刷屏；THROW 永远打。
+    var traceUntil = 0;
+    var own = Object.prototype.hasOwnProperty;
+
+    function traceObj(obj, label, names) {
+        if (!obj) {
+            return 0;
+        }
+        var keys = names;
+        if (names === "ALL") {
+            keys = [];
+            for (var k in obj) {
+                if (own.call(obj, k) && typeof obj[k] === "function") {
+                    keys.push(k);
+                }
+            }
+        }
+        var n = 0;
+        for (var i = 0; i < keys.length; i++) {
+            (function (key) {
+                var f = obj[key];
+                if (typeof f !== "function" || f.__oppaiTraced) {
+                    return;
+                }
+                var W = function () {
+                    var now = Date.now ? Date.now() : 0;
+                    if (now < traceUntil) {
+                        emit("CALL " + label + "." + key);
+                    }
+                    try {
+                        return f.apply(this, arguments);
+                    } catch (e) {
+                        emit("THROW " + label + "." + key + ": " + e + " | stack=" + (e && e.stack));
+                        throw e;
+                    }
+                };
+                W.__oppaiTraced = true;
+                obj[key] = W;
+                n++;
+            })(keys[i]);
+        }
+        return n;
+    }
+
+    function hookInterfaceTrace() {
+        var n = 0;
+        if (window.Player && Player.prototype) {
+            n += traceObj(Player.prototype, "Player", [
+                "setCharacter", "initTeams", "initAsst", "initModuleState",
+                "initXgNotifications", "initPlayerLvFunc", "updateByServer"
+            ]);
+        }
+        if (window.Gacha && Gacha.prototype) {
+            n += traceObj(Gacha.prototype, "Gacha", "ALL");
+        }
+        if (window.guideManager && !guideManager.__oppaiTraced) {
+            guideManager.__oppaiTraced = true;
+            n += traceObj(guideManager, "guideManager", "ALL");
+        }
+        if (window.uiLayoutManager && !uiLayoutManager.__oppaiTraced) {
+            uiLayoutManager.__oppaiTraced = true;
+            n += traceObj(uiLayoutManager, "uiLayoutManager", "ALL");
+        }
+        return n;
+    }
+
+    // Player / Gacha 这些类是懒加载的，轮询等它们出现
+    function startInterfaceTrace() {
+        traceUntil = (Date.now ? Date.now() : 0) + 60000;
+        if (hookInterfaceTrace() > 0 && window.Player && Player.prototype &&
+            Player.prototype.initModuleState && Player.prototype.initModuleState.__oppaiTraced) {
+            emit("TRACE 已挂钩");
+            return;
+        }
+        if (!window.__oppaiTraceTimer) {
+            var tries = 0;
+            window.__oppaiTraceTimer = setInterval(function () {
+                tries++;
+                hookInterfaceTrace();
+                if (tries > 240) {
+                    clearInterval(window.__oppaiTraceTimer);
+                    window.__oppaiTraceTimer = null;
+                }
+            }, 500);
+        }
     }
 
     function hookAll() {
@@ -936,6 +1043,7 @@
         hookLoginUi();
         hookModuleCtors();
         hookInitUserData();
+        startInterfaceTrace();
         startAutoLoginWatch();
     }
 

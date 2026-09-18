@@ -485,4 +485,299 @@
         emit("LGL-GUARD onPlayerMovieCallBack 已加幂等守卫 + 视频层清理");
     })();
 
+
+    // ------------------------------------------------------------------
+    // 新手引导：直接跳过
+    //
+    // 客户端所有菜单点击都走 src/ex/uiloader.js 的 op.uiLoader.addTouchEventListener：
+    //
+    //     op.uiLoader.addTouchEventListener = function (node, event, target) {
+    //         node.addTouchEventListener(function (sender, type) {
+    //             if (type == ccui.Widget.TOUCH_ENDED) {
+    //                 if (GuideLayer.getInstance() && GuideLayer.getInstance().isGuide())
+    //                     return GuideLayer.getInstance().nextStep(sender);   // ← 把点击吃掉
+    //             }
+    //             event.call(target, sender, type);
+    //         });
+    //     };
+    //
+    // 私服没有完整的引导数据（引导条件里还有「扭蛋」这种依赖运营配置的项），
+    // 引导会永远卡在某一step（例如「去点任务」），于是编成 / 商店 / 抽卡 这些
+    // 按钮全都没反应 —— 点下去只会喂给 GuideLayer.nextStep()。
+    // 这里让引导直接「已全部结束」，并把已经挂在场景上的引导层隐藏、停掉它的
+    // 触摸监听，菜单就恢复可点。
+    // ------------------------------------------------------------------
+    (function installGuideSkip() {
+        function patchManager() {
+            var gm = window.guideManager;
+            if (!gm) {
+                return false;
+            }
+            if (gm.__oppaiSkip) {
+                return true;
+            }
+            gm.__oppaiSkip = true;
+            gm.isGuideEnded = function () { return true; };
+            gm.isNeedGuide = function () { return false; };
+            gm.isFinishAllGuide = function () { return true; };
+            gm.isFinishAllGuideFit = function () { return true; };
+            gm.checkGuide = function () { return true; };
+            gm.checkGuideFit = function () { return true; };
+            gm.isCanEnterGuide = function () { return false; };
+            emit("GUIDE-SKIP guideManager 已改成「引导全部结束」");
+            return true;
+        }
+
+        function patchLayer() {
+            if (typeof GuideLayer === "undefined" || !GuideLayer.prototype) {
+                return false;
+            }
+            if (!GuideLayer.prototype.__oppaiSkip) {
+                GuideLayer.prototype.__oppaiSkip = true;
+                GuideLayer.prototype.isGuide = function () { return false; };
+                GuideLayer.prototype.isGuideWaiting = function () { return false; };
+                GuideLayer.prototype.isPauseGuide = function () { return true; };
+                GuideLayer.prototype.startGuide = function () { };
+                GuideLayer.prototype.playGuide = function () { };
+                GuideLayer.prototype.playGuideWithPrevLayer = function () { };
+                emit("GUIDE-SKIP GuideLayer.isGuide 恒为 false");
+            }
+            var l = null;
+            try { l = GuideLayer.getInstance(); } catch (e) { }
+            if (l) {
+                try {
+                    if (l.isVisible()) {
+                        l.setVisible(false);
+                    }
+                } catch (e) { }
+                try {
+                    if (l._touchListener && l._touchListener.setEnabled) {
+                        l._touchListener.setEnabled(false);
+                    }
+                } catch (e) { }
+                try {
+                    if (l._touchListener && l._touchListener.setSwallowTouches) {
+                        l._touchListener.setSwallowTouches(false);
+                    }
+                } catch (e) { }
+            }
+            return true;
+        }
+
+        patchManager();
+        patchLayer();
+        if (!window.__oppaiGuideSkipTimer) {
+            // 引导层是懒加载/可重建的，定期再抹一遍
+            window.__oppaiGuideSkipTimer = setInterval(function () {
+                patchManager();
+                patchLayer();
+            }, 1000);
+        }
+    })();
+
+
+    // ------------------------------------------------------------------
+    // 数据模块构造容错
+    //
+    // dataManager.initUserData() 会 new 三十来个数据模块，模块构造函数里只要有一个
+    // 字段没对齐就整体抛异常，后面所有模块、以及 player.initModuleState() 全都不会
+    // 执行 —— 主界面必然黑屏。模拟服的数据不可能和原服完全一致，这里统一兜住，
+    // 出错信息照样打到 logcat（OPPAIPATCH|CTOR ...），方便继续按字段补数据。
+    // ------------------------------------------------------------------
+    (function installModuleCtorTolerance() {
+        var MODULE_CLASSES = [
+            "Player", "Instance", "Bag", "CharCenter", "Gacha", "Mailbox", "QuestCenter",
+            "FavorCenter", "FavorEventCenter", "Friend", "ExchangeCenter", "TalentCenter",
+            "SignCenter", "Shop", "ArenaCenter", "Rank", "Score", "Society", "SocietyClg",
+            "BossCenter", "Chat", "Detect", "Medal", "EquipmentCenter", "Share",
+            "SubareaAchievement", "ConsumeActivity", "Diary", "FriendSupport", "NoviceQuestCenter"
+        ];
+        var wrapped = {};
+
+        function wrapOne(name) {
+            var C = window[name];
+            if (typeof C !== "function") {
+                return false;
+            }
+            var W = function () {
+                try {
+                    C.apply(this, arguments);
+                } catch (e) {
+                    var dbg = "";
+                    try { dbg = " args=" + JSON.stringify(arguments[0]); } catch (e2) { dbg = " args=<unserializable>"; }
+                    if (dbg.length > 400) { dbg = dbg.slice(0, 400) + "..."; }
+                    emit("CTOR " + name + " 容错跳过: " + e + dbg);
+                }
+            };
+            W.prototype = C.prototype;
+            W.__oppaiTolerant = true;
+            window[name] = W;
+            wrapped[name] = true;
+            return true;
+        }
+
+        function patch() {
+            var missing = 0;
+            for (var i = 0; i < MODULE_CLASSES.length; i++) {
+                var name = MODULE_CLASSES[i];
+                if (wrapped[name]) {
+                    continue;
+                }
+                if (!wrapOne(name)) {
+                    missing++;
+                }
+            }
+            return missing;
+        }
+
+        if (patch() === 0) {
+            emit("CTOR-GUARD 数据模块构造容错已装齐");
+            return;
+        }
+        var tries = 0;
+        if (!window.__oppaiCtorTimer) {
+            window.__oppaiCtorTimer = setInterval(function () {
+                if (patch() === 0 || ++tries > 240) {
+                    clearInterval(window.__oppaiCtorTimer);
+                    window.__oppaiCtorTimer = null;
+                    emit("CTOR-GUARD 数据模块构造容错安装结束，缺 " + patch() + " 个");
+                }
+            }, 500);
+        }
+    })();
+
+
+    // ------------------------------------------------------------------
+    // 扭蛋配置兜底
+    //
+    // 私服没有扭蛋的运营配置：data.gachaMasterList 是空的，_gachaMasterObj 也就是
+    // 空对象。而 guideManager.init() -> _loadGuideFlag() -> checkGuide() 会去算
+    // 「抽卡类」引导条件，链路是
+    //     Gacha.getGachaFullInfo(key) -> getGachaMaster(key) 返回 undefined
+    //     -> 接着读 master.name，抛
+    //     TypeError: master is undefined @ src/data/gacha.js:745
+    // 这个异常会把 dataManager.initUserData 的后半段整个挡掉（player.initModuleState
+    // 根本没跑到），主界面随后就死在
+    //     TypeError: modules is undefined @ src/ui/main/mainlayer.js:188  → 黑屏
+    // 所以这里给 getGachaFullInfo 兜一个空壳，让引导条件判断能正常算完。
+    // ------------------------------------------------------------------
+    (function installGachaGuard() {
+        function patch() {
+            if (typeof Gacha === "undefined" || !Gacha.prototype) {
+                return false;
+            }
+            if (Gacha.prototype.__oppaiGachaGuard) {
+                return true;
+            }
+            Gacha.prototype.__oppaiGachaGuard = true;
+            var orig = Gacha.prototype.getGachaFullInfo;
+            if (typeof orig !== "function") {
+                return true;
+            }
+            Gacha.prototype.getGachaFullInfo = function (masterKey, times) {
+                var master = null;
+                try { master = this.getGachaMaster(masterKey); } catch (e) { }
+                if (!master) {
+                    return {
+                        key: masterKey,
+                        masterKey: masterKey,
+                        times: times || 1,
+                        name: "",
+                        form: 0,
+                        resIdx: 0,
+                        totalTimes: 0,
+                        todayTimes: 0,
+                        remainTimes: 0,
+                        itemKey: "",
+                        itemCount: 0,
+                        voucherKey: "",
+                        voucherCount: 0,
+                        useVoucher: 0,
+                        sale: {},
+                        saleObj: {},
+                        master: {},
+                    };
+                }
+                return orig.apply(this, arguments);
+            };
+            emit("GACHA-GUARD getGachaFullInfo 已加空壳兜底");
+            return true;
+        }
+
+        if (patch()) {
+            return;
+        }
+        if (!window.__oppaiGachaGuardTimer) {
+            window.__oppaiGachaGuardTimer = setInterval(function () {
+                if (patch()) {
+                    clearInterval(window.__oppaiGachaGuardTimer);
+                    window.__oppaiGachaGuardTimer = null;
+                }
+            }, 500);
+        }
+    })();
+
+
+    // ------------------------------------------------------------------
+    // initUserData 兜底
+    //
+    // dataManager.initUserData() 顺序是「先 new 三十来个数据模块，再依次调
+    // player.setCharacter / initTeams / initAsst / guideManager.init /
+    // uiLayoutManager.init / player.initModuleState / initXgNotifications」。
+    // 中间任何一步抛异常，后面的就全都不执行；其中 player.initModuleState()
+    // 一旦没跑到，主界面 _initModuleButtons 立刻
+    //     TypeError: modules is undefined @ mainlayer.js:188  → 黑屏。
+    // 私服数据本来就不可能和原服一模一样，所以这里无论如何都保证
+    // _moduleState 被建出来。
+    // ------------------------------------------------------------------
+    (function installInitUserDataGuard() {
+        function patch() {
+            var dm = window.dataManager;
+            if (!dm || typeof dm.initUserData !== "function") {
+                return false;
+            }
+            if (dm.__oppaiInitGuard) {
+                return true;
+            }
+            dm.__oppaiInitGuard = true;
+            var orig = dm.initUserData;
+            dm.initUserData = function (data) {
+                var err = null;
+                try {
+                    orig.apply(this, arguments);
+                } catch (e) {
+                    err = e;
+                    emit("INITUSERDATA-GUARD initUserData 抛异常: " + e);
+                }
+                try {
+                    var p = dm.player;
+                    if (p && !p._moduleState && typeof p.initModuleState === "function") {
+                        p.initModuleState();
+                        emit("INITUSERDATA-GUARD 补跑 player.initModuleState()");
+                    }
+                } catch (e2) {
+                    emit("INITUSERDATA-GUARD 补跑 initModuleState 失败: " + e2);
+                }
+                if (err) {
+                    // 抛出去让上层照旧走失败分支
+                    throw err;
+                }
+            };
+            emit("INITUSERDATA-GUARD 已安装");
+            return true;
+        }
+
+        if (patch()) {
+            return;
+        }
+        if (!window.__oppaiInitGuardTimer) {
+            window.__oppaiInitGuardTimer = setInterval(function () {
+                if (patch()) {
+                    clearInterval(window.__oppaiInitGuardTimer);
+                    window.__oppaiInitGuardTimer = null;
+                }
+            }, 500);
+        }
+    })();
+
 })();

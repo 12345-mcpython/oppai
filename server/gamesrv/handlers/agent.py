@@ -74,7 +74,14 @@ def _module_stubs() -> dict:
         "favorevent": {"favorEvents": [], "events": [], "removedFeEventKeys": []},
         "friend": {"friendMapList": [], "recommendationList": [], "isNeedShowTip": 0},
         "exchange": {},
-        "talents": {"talentTypes": [], "talents": {}, "updateByPlayer": 0},
+        # TalentCenter 的构造参数**不是** {talentTypes, talents, updateByPlayer} 那种
+        # 嵌套结构，而是「天赋类型 -> 当前选中的天赋 key」的平铺映射：
+        #     TalentCenter.ctor(args) -> _initTalentTypes(args)
+        # 它会拿每个 key 去查 table_talent_type 取 unlock_lv / default_talent_key。
+        # key 取自 table_talent_type：101 军士课题 / 102 机甲课题 / 103 克制课题。
+        # 之前给的是空数组，_initTalents 里 this._talentTypes[v.type] 直接 undefined
+        # 抛 TypeError，把整个 initUserData 挡断。
+        "talents": {"101": "1001", "102": "2001", "103": "3001"},
         "sign": {
             "signs": [],
             "normalSigns": [],

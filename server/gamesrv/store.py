@@ -67,15 +67,64 @@ CHAR_TYPE_SOLDIER = "s"
 # 新手引导位掩码全 1 = 所有引导都已完成。见 new_player() 里的说明。
 GUIDE_MARK_DONE = 0x7FFFFFFF
 
-# 初始士兵。key 都取自客户端 table_soldier（表里有 1558 条），
-# 挑了几个不同品质的，方便在「编成」里看出差别。
-# 之前 soldiers 一直是空列表，导致编成界面加了人也不显示。
+# 初始士兵。(key, 站位, 品质)，key 取自客户端 table_soldier。
+#
+# 站位必须三个都有：SOLDIER_POSITIONING = {FRONT:1, MIDDLE:2, BACK:3}，
+# 「编成 -> 上阵队伍 -> 加号」的队员选择界面是按站位分页的，
+# 只有前锋的话切到「炮弹」页就是「没有符合要求的军士哦~」。
+#
+# 而且每个士兵的 char_key 必须互不相同 —— 客户端规则是
+# 「相同的角色只能选择一个作为上阵军士」，同一个 char_key 只会出现一个。
+# 之前给的是 sads010101~04，四个全是同一个角色 sads，所以列表里基本是空的。
+#
+# ⚠️ 一个士兵构造失败会**整份士兵列表全丢**（CharCenter 里是整体 try），
+# 所以只能用实测能 new 出来的 key。lfcz01/lfcz02/lfcz03（废柴子系）
+# 在客户端会抛 "TypeError: row is undefined"，千万别放进来。
 SOLDIER_KEYS = [
-    "sads010101",   # quality 1
-    "sads010102",   # quality 2
-    "sads010103",   # quality 3
-    "sads010104",   # quality 4
+    # 前锋 FRONT = 1
+    ("sfog010104", 1, 4),      # SFOG
+    ("sads010104", 1, 4),      # 阿达斯-中士
+    ("safj010104", 1, 4),      # 金-观众
+    ("sasm010104", 1, 4),      # 阿斯麦
+    ("sbdsl010104", 1, 4),     # 小兵巴蒂萨雷-中士
+    ("sbns010104", 1, 4),      # 柏妮丝
+    # 中卫 MIDDLE = 2
+    ("safdf010104", 2, 4),     # 戴夫-观众
+    ("sbd010104", 2, 4),       # 巴度
+    ("sbe010104", 2, 4),       # 贝尔-中士
+    ("sbq010104", 2, 4),       # 贝琪
+    ("scsflkl010104", 2, 4),   # 富兰克林-厨师
+    ("scslsbs010104", 2, 4),   # 丽思贝丝-厨师
+    # 后卫 BACK = 3
+    ("saf010104", 3, 4),       # 爱芙
+    ("salks010104", 3, 4),     # 艾丽科思-中士
+    ("same010104", 3, 4),      # 爱莫儿
+    ("sbl010104", 3, 4),       # 伯伦-普通
+    ("scsslbs010104", 3, 4),   # 沙隆巴斯-厨师
+    ("scyy010104", 3, 4),      # 长月遥
 ]
+
+
+# 功能模块（主界面按钮）开启状态。key 是客户端 table_function_open /
+# table_main_layer.module_key 里的数字编号，客户端有两处读它：
+#
+#   moduleManager.isModuleUnlock(key):
+#       var module = dataManager.player.moduleState[key];
+#       return module.isUnlock;
+#   mainlayer._initModuleButtons:
+#       var modules = dataManager.player.moduleState;   // ← 缺失时是 undefined
+#       ...
+#       var module = modules[row.module_key];
+#       var isUnlock = module.isUnlock;                 // ← 抛 TypeError
+#
+# 缺这个字段主界面构造就会死在
+#   TypeError: modules is undefined @ src/ui/main/mainlayer.js:188
+# 表现就是登录后黑屏。全 1 = 所有功能都开放。
+MODULE_KEYS = [str(100001 + i) for i in range(32)]
+
+
+def new_module_state() -> dict:
+    return {k: {"isUnlock": 1, "unlockLv": 1} for k in MODULE_KEYS}
 
 
 def new_hero() -> dict:
@@ -97,11 +146,13 @@ def new_hero() -> dict:
     }
 
 
-def new_soldier(index: int, key: str, lv: int = 1, star: int = 1) -> dict:
+def new_soldier(index: int, key: str, positioning: int = 1, quality: int = 1,
+                lv: int = 1, star: int = 1) -> dict:
     """士兵。字段名来自客户端 src/data/soldier.js 的 Soldier（_init 里读的）。
 
     客户端 Soldier._init 会拿 key 去查 table_soldier 取 char_key / quality /
-    各项属性，所以这里只需要给出会变的那几个字段。
+    各项属性，所以这里只需要给出会变的那几个字段；positioning / quality 也照
+    table_soldier 填一份，免得客户端某处直接读服务端这份。
     """
     return {
         "id": index,
@@ -110,8 +161,8 @@ def new_soldier(index: int, key: str, lv: int = 1, star: int = 1) -> dict:
         "lv": lv,
         "star": star,
         "curExp": 0,
-        "quality": 1,
-        "positioning": 1,
+        "quality": quality,
+        "positioning": positioning,
         "skillLvList": [],
         "equipments": [],
         "isLock": 0,
@@ -123,8 +174,9 @@ def new_soldier(index: int, key: str, lv: int = 1, star: int = 1) -> dict:
 
 
 def new_soldiers() -> list:
-    """初始士兵列表（每样一个）。"""
-    return [new_soldier(i + 1, k) for i, k in enumerate(SOLDIER_KEYS)]
+    """初始士兵列表（三个站位各 6 个，角色互不重复）。"""
+    return [new_soldier(i + 1, key, pos, quality)
+            for i, (key, pos, quality) in enumerate(SOLDIER_KEYS)]
 
 
 def new_mecha() -> dict:
@@ -181,6 +233,7 @@ def new_player(account: str) -> dict:
         "medalClothesId": 0,
         "medalBgId": 0,
         "curTeamIdx": 0,
+        "moduleState": new_module_state(),
         # 新手引导位掩码（客户端 guideManager.checkGuide 用 id & (1 << n) 判断）。
         # 全 1 表示所有引导都已完成 —— 否则 GuideLayer 会一直拦着菜单点击：
         #   op.uiLoader.addTouchEventListener 里，只要
@@ -202,6 +255,31 @@ def new_player(account: str) -> dict:
     }
 
 
+def _migrate(player: dict) -> bool:
+    """给老存档补齐后来才加上的字段。
+
+    客户端对这些字段是「直接读属性」的，缺一个就在主界面抛 JS 异常，
+    所以宁可在这里无条件补齐。返回是否改动过。
+    """
+    fresh = new_player(player.get("account", "player"))
+    changed = False
+    for key, value in fresh.items():
+        if key not in player:
+            player[key] = value
+            changed = True
+    # moduleState 要按 key 合并，不能整个覆盖掉玩家已有的开启状态
+    state = player.get("moduleState")
+    if not isinstance(state, dict):
+        state = {}
+        player["moduleState"] = state
+        changed = True
+    for key, value in new_module_state().items():
+        if key not in state:
+            state[key] = value
+            changed = True
+    return changed
+
+
 def player_exists(account: str) -> bool:
     with _lock:
         return account in _load()
@@ -214,6 +292,9 @@ def get_or_create_player(account: str) -> dict:
             db[account] = new_player(account)
             _save(db)
             log.info("创建玩家 %s", account)
+        elif _migrate(db[account]):
+            _save(db)
+            log.info("补齐玩家 %s 缺失的字段", account)
         return db[account]
 
 
@@ -221,6 +302,7 @@ def update_player(account: str, **fields) -> dict:
     with _lock:
         db = _load()
         player = db.setdefault(account, new_player(account))
+        _migrate(player)
         player.update(fields)
         _save(db)
         return player
