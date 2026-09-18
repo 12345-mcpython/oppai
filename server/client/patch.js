@@ -98,14 +98,19 @@
         }
     })();
     // ------------------------------------------------------------------
-    // ActionTimeline 回调诊断 + 兜底
+    // ActionTimeline 最后一帧回调：补动画名（引擎未传时的兜底）
     //
-    // 游戏 UpdateScene 的启动链：
-    //     ctor() -> _logo() -> tl.setLastFrameCallFunc(cb) -> cb 调 _init()
-    // 实测 Layer 节点的 action 恒为 1（永不结束），回调不触发，
-    // 游戏就卡在 logo 那一屏（表现为黑屏）。
+    // 游戏多处依赖「回调的第一个参数是动画名」，例如：
+    //     UpdateScene._logo : function (eventName) { if (eventName === "default") this._init(); }
+    //     BattleScene      : function (eventName) { if (/began\d/.test(eventName)) playAnimation("loop"+N, true); }
+    // 而 vanilla cocos2d-js v3.6 的自动绑定是 func->invoke(0, ...)，不传参数。
     //
-    // 这里包一层：记录调用 + 加 fired 标志 + 定时器兜底。
+    // 根治在引擎层（jsb_cocos2dx_studio_auto.cpp 已改成 invoke(1, argv, ...)，
+    // argv[0] = ActionTimeline::getCurrentAnimationName()）。这里只做兜底：
+    //     引擎传的 engineName  >  play 时记下的 self.__oppaiAnimName  >  "default"
+    //
+    // 注意：**不能**加"只触发一次"的守卫 —— 游戏复用同一个 ActionTimeline 播
+    // 整段序列（began1→loop1→end1→…→end3），每段推进都靠这个回调，挡掉就卡死。
     // ------------------------------------------------------------------
     (function () {
         var AT = (typeof ccs !== "undefined") ? ccs.ActionTimeline : null;
@@ -125,10 +130,10 @@
             try { dur = self.getDuration ? self.getDuration() : 0; } catch (e) { }
             vlog("AT.setLastFrameCallFunc 已调用 duration=" + dur);
 
-            self.__oppaiLfFired = false;
+            // 注意：这里**不能**加"只触发一次"的守卫。
+            // 游戏复用同一个 ActionTimeline 播整段序列（began1→loop1→end1→…→end3），
+            // 每一段的推进都依赖最后一帧回调，挡掉第二次就会卡死收尾。
             var wrapped = function (engineName) {
-                if (self.__oppaiLfFired) { return; }
-                self.__oppaiLfFired = true;
                 var scB = null;
                 try { scB = cc.director.getRunningScene(); } catch (e) { }
                 vlog("AT.lastFrame 触发 frame=" + (self.getCurrentFrame ? self.getCurrentFrame() : "?") +
@@ -151,17 +156,11 @@
                     throw e;
                 }
             };
-            self.__oppaiLfOnEngine = true;
 
-            if (dur > 0) {
-                var ms = Math.round((dur / 60) * 1000) + 800;
-                setTimeout(function () {
-                    if (!self.__oppaiLfFired) {
-                        vlog("AT.lastFrame 兜底触发（引擎没触发）after " + ms + "ms");
-                        wrapped();
-                    }
-                }, ms);
-            }
+            // 原来这里还有一个「dur/60 秒后兜底再触发一次」的 setTimeout，
+            // 是配合上面那个「只触发一次」守卫用的。守卫去掉后它会无条件
+            // 多触发一次回调，反而把游戏的状态机搞乱（同一段动画的收尾跑了两次），
+            // 所以一起删掉。引擎现在会把动画名正确传进来，不需要兜底。
             return origSet.call(self, wrapped);
         };
 
@@ -484,128 +483,6 @@
             }, 1500);
         }
         emit("LGL-GUARD onPlayerMovieCallBack 已加幂等守卫 + 视频层清理");
-    })();
-
-    // ------------------------------------------------------------------
-    // 引导层视频看门狗
-    //
-    // 视频能满屏正常播放，但播完后引擎的 COMPLETED(3) 事件没送到 JS，
-    // 于是 onPlayerMovieCallBack 永不触发、游戏卡在视频最后一帧。
-    //
-    // 兜底：轮询 _videoPlayer.isPlaying()，停播超过 2 秒就替引擎调一次
-    // onPlayerMovieCallBack(this, 3)。重复调用由幂等守卫挡掉。
-
-    // ------------------------------------------------------------------
-    (function installMovieWatchdog() {
-        if (typeof LaunchGuideLayer === "undefined" || !LaunchGuideLayer.prototype) {
-            if (!window.__oppaiMovieWdTimer) {
-                window.__oppaiMovieWdTimer = setInterval(function () {
-                    if (typeof LaunchGuideLayer !== "undefined" && LaunchGuideLayer.prototype) {
-                        clearInterval(window.__oppaiMovieWdTimer);
-                        window.__oppaiMovieWdTimer = null;
-                        installMovieWatchdog();
-                    }
-                }, 500);
-            }
-            return;
-        }
-        if (window.__oppaiMovieWdRunning) { return; }
-        window.__oppaiMovieWdRunning = true;
-
-        var stoppedSince = 0;
-        setInterval(function () {
-            try {
-                var g = window.__oppaiGuideRef;
-                if (!g || !g._videoPlayer) { stoppedSince = 0; return; }
-
-                var playing = true;
-                try { playing = g._videoPlayer.isPlaying(); } catch (e) { playing = false; }
-
-                if (playing) { stoppedSince = 0; return; }
-
-                if (!stoppedSince) { stoppedSince = Date.now(); return; }
-                if (Date.now() - stoppedSince < 2000) { return; }
-
-                emit("MOVIE-WD 视频已停播，兜底触发 COMPLETED");
-                stoppedSince = 0;
-                try {
-                    g.onPlayerMovieCallBack(g, 3);
-                } catch (e) {
-                    emit("MOVIE-WD 兜底回调出错 " + e);
-                }
-            } catch (e) { }
-        }, 500);
-
-        // 记录当前引导层实例（ctor 时挂上）
-        var origCtor = LaunchGuideLayer.prototype.ctor;
-        if (typeof origCtor === "function") {
-            LaunchGuideLayer.prototype.ctor = function () {
-                var r = origCtor.apply(this, arguments);
-                window.__oppaiGuideRef = this;
-                return r;
-            };
-        }
-        emit("MOVIE-WD 引导层视频看门狗已装");
-    })();
-
-    // ------------------------------------------------------------------
-    // 战斗结束推进看门狗
-    //
-    // 战斗收尾链（反汇编 battlescene.jsc 得到）：
-    //     _show1(next) -> _nextCb = next; playAnimation("began3")
-    //     began3 播放期间应触发 loop\d 帧事件 -> playAnimation("loopN") -> _nextCb()
-    //
-    // 实测 began3 期间只有 sound_battlebegansound(frame=951)，没有 loop\d，
-    // 于是 _nextCb 永远挂着、_endType 保持 undefined，战斗收不了尾。
-    //
-    // 兜底：到最后一波（_index >= _len）且 _nextCb 挂了超过 20 秒，
-    // 就替那个缺失的帧事件调一次 _nextCb()。
-    // 20s 依据：began3 共 978 帧、_frameInternal = 1/60，正常约 16 秒。
-    // ------------------------------------------------------------------
-    (function installBattleEndWatchdog() {
-        if (typeof BattleScene === "undefined" || !BattleScene.prototype) {
-            if (!window.__oppaiBEwdTimer) {
-                window.__oppaiBEwdTimer = setInterval(function () {
-                    if (typeof BattleScene !== "undefined" && BattleScene.prototype) {
-                        clearInterval(window.__oppaiBEwdTimer);
-                        window.__oppaiBEwdTimer = null;
-                        installBattleEndWatchdog();
-                    }
-                }, 1000);
-            }
-            return;
-        }
-        if (window.__oppaiBEwdRunning) { return; }
-        window.__oppaiBEwdRunning = true;
-
-        var pendingSince = 0;
-        setInterval(function () {
-            try {
-                var s = cc.director.getRunningScene();
-                if (!(s instanceof BattleScene)) { pendingSince = 0; return; }
-
-                // 只有到了最后一波才兜底（前面几波靠 ClearLayer 正常推进）
-                if (!(typeof s._index === "number" && typeof s._len === "number" && s._index >= s._len)) {
-                    pendingSince = 0;
-                    return;
-                }
-                if (typeof s._nextCb !== "function") { pendingSince = 0; return; }
-
-                if (!pendingSince) { pendingSince = Date.now(); return; }
-                if (Date.now() - pendingSince < 20000) { return; }
-
-                emit("BATTLE-WD 战斗收尾卡住，兜底触发 _nextCb（_index=" + s._index + "/" + s._len + "）");
-                pendingSince = 0;
-                try {
-                    s._nextCb();
-                    s._nextCb = null;
-                } catch (e) {
-                    emit("BATTLE-WD 兜底失败 " + e);
-                }
-            } catch (e) { }
-        }, 1000);
-
-        emit("BATTLE-WD 战斗结束推进看门狗已装");
     })();
 
 })();
