@@ -84,6 +84,44 @@ QUEST_JS = r"""
 })()
 """
 
+# 助战（好友支援）推荐用的 NPC 名单。
+#
+# 为什么要抽：客户端的 `SupportChoiceItem.createSolider(item, topType)` 里是
+#     if (item.npcId) { var npc = table_friend_support_npc[item.npcId]; ... }
+# 也就是说**服务端只需要回 npcId**，NPC 的兵种/等级/名字客户端自己表里有。
+# 但服务端得知道有哪些合法 npcId，所以把这张表抽出来。
+# 行里形如 `"general": "sasm010103#1#30#1"`，即 `key#星#等级#技能等级`。
+NPC_JS = r"""
+(function () {
+    var out = {};
+    for (var k in table_friend_support_npc) {
+        out[k] = table_friend_support_npc[k];
+    }
+    return JSON.stringify(out);
+})()
+"""
+
+
+def _dump(base: str, js: str, name: str):
+    result = eval_remote(base, js, timeout=30.0)
+    if not result.get("ok"):
+        print("!! 抽取失败:", result, file=sys.stderr)
+        return None
+    value = result["value"]
+    # /control/eval 会把 JS 的返回值 JSON 编码一次；如果 JS 本身返回的是字符串
+    # （我们这里 return JSON.stringify(...)），拿到手就是「字符串里的 JSON」，
+    # 所以这里一路解到 dict 为止。
+    while isinstance(value, str):
+        value = json.loads(value)
+    if not isinstance(value, dict):
+        print("!! 抽取结果不是对象:", type(value), file=sys.stderr)
+        return None
+    path = os.path.join(DATA_DIR, name)
+    with open(path, "w", encoding="utf-8") as fh:
+        json.dump(value, fh, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    print(f"[extract] {path}  ({len(value)} 条)")
+    return value
+
 
 def main() -> int:
     from gamesrv import config
@@ -91,29 +129,16 @@ def main() -> int:
     os.makedirs(DATA_DIR, exist_ok=True)
     base = f"http://127.0.0.1:{config.CDN_PORT}"
 
-    result = eval_remote(base, QUEST_JS, timeout=30.0)
-    if not result.get("ok"):
-        print("!! 抽取失败:", result, file=sys.stderr)
+    table = _dump(base, QUEST_JS, "table_quest.json")
+    if table is None:
         return 1
-
-    table = result["value"]
-    # /control/eval 会把 JS 的返回值 JSON 编码一次；如果 JS 本身返回的是字符串
-    # （我们这里 return JSON.stringify(...)），拿到手就是「字符串里的 JSON」，
-    # 所以这里一路解到 dict 为止。
-    while isinstance(table, str):
-        table = json.loads(table)
-    if not isinstance(table, dict):
-        print("!! 抽取结果不是对象:", type(table), file=sys.stderr)
-        return 1
-    path = os.path.join(DATA_DIR, "table_quest.json")
-    with open(path, "w", encoding="utf-8") as fh:
-        json.dump(table, fh, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-
     kinds: dict[str, int] = {}
     for row in table.values():
         kinds[row["type"]] = kinds.get(row["type"], 0) + 1
-    print(f"[extract] {path}")
-    print(f"[extract] {len(table)} 条任务，按 type 统计: {kinds}")
+    print(f"[extract] 按 type 统计: {kinds}")
+
+    if _dump(base, NPC_JS, "table_friend_support_npc.json") is None:
+        return 1
     return 0
 
 
