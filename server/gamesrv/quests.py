@@ -151,8 +151,12 @@ def order() -> list[str]:
 
 def _record(player: dict) -> dict:
     """玩家自己的任务进度（存在 players.json 里）。"""
-    rec = player.setdefault("quests", {})
-    rec.setdefault("done", [])
+    rec = player.get("quests")
+    if not isinstance(rec, dict):
+        rec = {}
+        player["quests"] = rec
+    if not isinstance(rec.get("done"), list):
+        rec["done"] = []
     rec.setdefault("updateTime", store.time_str())
     return rec
 
@@ -173,6 +177,110 @@ def active_keys(player: dict) -> list[str]:
     """当前该显示给客户端的主线任务（窗口）。"""
     done = set(_record(player)["done"])
     return [k for k in order() if k not in done][:WINDOW]
+
+
+# ---------------------------------------------------------------------------
+# 任务进度
+#
+# 客户端**不算**任务进度 —— `QuestCenter.checkQuestFinish(key)` 只是
+# `return this._finishQuests[key]`（「这条领过没有」）。状态（ACCEPTED/ACHIEVED）
+# 完全由服务端说了算，客户端只负责把 `schedule[cur]` 显示成进度条。
+#
+# 条件类型是从 `table_quest.desc` 反推出来的（见 tools/extract_client_tables.py）：
+#
+#   12212  队伍中只上阵 cp2 个军士获得胜利 cp1 次
+#   12216  队伍中存在 cp2 兵种的军士获得胜利 cp1 次
+#   13203  进行首次军士升级
+#   13102  1 位 cp2 军阶的军士等级达到 cp1 级
+#   13204  1 位军士进行首次突破（升星）
+#
+# 所以玩家身上只要记几个**计数器**就够了，具体某条任务的 cur 现算。
+# ---------------------------------------------------------------------------
+
+def _stats(player: dict) -> dict:
+    st = player.get("questStats")
+    if not isinstance(st, dict):        # 老存档 / 手改坏了都兜一下
+        st = {}
+        player["questStats"] = st
+    st.setdefault("wins", 0)                 # 总胜利场次
+    st.setdefault("winsByTeamSize", {})      # "上阵人数" -> 胜场
+    st.setdefault("soldierUpgrades", 0)      # 军士升级次数
+    st.setdefault("soldierStars", 0)         # 军士突破（升星）次数
+    st.setdefault("soldierMaxLv", {})        # "军阶" -> 该军阶最高等级
+    return st
+
+
+def _bump(player: dict, field: str, amount: int = 1, sub: str | None = None) -> None:
+    st = _stats(player)
+    if sub is None:
+        st[field] = int(st.get(field) or 0) + amount
+    else:
+        bucket = st.setdefault(field, {})
+        bucket[sub] = int(bucket.get(sub) or 0) + amount
+
+
+def progress_of(player: dict, key: str) -> int:
+    """某条主线任务当前进度（拿来填 `schedule[cur]`）。"""
+    row = table().get(key) or {}
+    ct = str(row.get("ct") or "")
+    cp2 = str(row.get("cp2") or "")
+    st = _stats(player)
+    if ct == "12212":        # 只上阵 cp2 个军士的胜场
+        return int((st.get("winsByTeamSize") or {}).get(cp2) or 0)
+    if ct == "12216":        # 指定兵种 —— 兵种表在客户端 char 表里，这里简化成"任意胜场"
+        return int(st.get("wins") or 0)
+    if ct == "13203":        # 首次军士升级
+        return int(st.get("soldierUpgrades") or 0)
+    if ct == "13204":        # 首次突破
+        return int(st.get("soldierStars") or 0)
+    if ct == "13102":        # 某军阶军士达到 N 级
+        return int((st.get("soldierMaxLv") or {}).get(cp2) or 0)
+    return 0
+
+
+def _targets(key: str) -> list:
+    return (table().get(key) or {}).get("tar") or []
+
+
+def _achieved(player: dict, key: str) -> bool:
+    tars = _targets(key)
+    if not tars:
+        return False
+    cur = progress_of(player, key)
+    for tar in tars:
+        # 少数任务的条件值是字符串（关卡 key 之类），服务端伪造不了，一律算没达成
+        if not isinstance(tar, (int, float)):
+            return False
+        if cur < tar:
+            return False
+    return True
+
+
+def on_level_result(player: dict, victory: bool, team_size: int) -> None:
+    """一次关卡结算。主线里绝大多数条件都是「胜利 M 次」，所以这里是主要入口。"""
+    if not victory:
+        return
+    from . import instance  # 局部 import，避免 instance <-> quests 循环
+
+    mult = max(1, int(instance.PROGRESS_MULT))
+    _bump(player, "wins", mult)
+    _bump(player, "winsByTeamSize", mult, sub=str(team_size))
+    _touch(player)
+
+
+def on_soldier_upgrade(player: dict, level: int, star_quality) -> None:
+    """军士升级 / 突破（由 char.upgradesoldierlv / improvesoldierstar 调）。"""
+    _bump(player, "soldierUpgrades", 1)
+    if level:
+        bucket = _stats(player).setdefault("soldierMaxLv", {})
+        q = str(star_quality or "")
+        bucket[q] = max(int(bucket.get(q) or 0), int(level))
+    _touch(player)
+
+
+def on_soldier_star(player: dict) -> None:
+    _bump(player, "soldierStars", 1)
+    _touch(player)
 
 
 def _quest_entry(key: str, achieved: bool) -> dict:
@@ -199,20 +307,33 @@ def _quest_entry(key: str, achieved: bool) -> dict:
     }
 
 
-def _can_auto_achieve(key: str) -> bool:
-    """条件值是数字的任务才能「直接判定达成」；像 sklwe010103 这种是关卡 key，
-    客户端会拿去做字符串比较，服务端不好伪造，就让它停在进行中。"""
-    return all(isinstance(v, (int, float)) for v in (table()[key].get("tar") or []))
+def _entry_with_progress(player: dict, key: str, achieved: bool) -> dict:
+    """和 `_quest_entry` 一样，但 `schedule[cur]` 用玩家真实进度。"""
+    entry = _quest_entry(key, achieved)
+    if achieved:
+        return entry
+    row = table()[key]
+    tars = row.get("tar") or []
+    skeys = row.get("sk") or []
+    cur = progress_of(player, key)
+    schedule = {}
+    for i, tar in enumerate(tars):
+        k = skeys[i] if i < len(skeys) else str(i + 1)
+        # 进度条上的数字：别超过 tar，否则客户端会显示成 12/10
+        if isinstance(tar, (int, float)) and tar:
+            schedule[k] = min(cur, tar)
+        else:
+            schedule[k] = cur
+    entry["schedule"] = schedule
+    return entry
 
 
 def block(player: dict) -> dict:
-    """拼出 `data.quest`（登录和 quest.getnewquest 是同一个形状）。"""
+    """拼出 `data.quest`（登录、quest.getnewquest、关卡结算都用它）。"""
     keys = active_keys(player)
     quests: dict[str, dict] = {}
-    for idx, key in enumerate(keys):
-        # 窗口第一条直接给「已达成」，领掉之后窗口往后滑，下一条又变成可领
-        achieved = (idx == 0) and _can_auto_achieve(key)
-        quests[key] = _quest_entry(key, achieved)
+    for key in keys:
+        quests[key] = _entry_with_progress(player, key, _achieved(player, key))
 
     # 已经领过的任务要再回一次 state=FINISHED，
     # 否则客户端 QuestCenter.updateByServer() 只覆盖不清理，

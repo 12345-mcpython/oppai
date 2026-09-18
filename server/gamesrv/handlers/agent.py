@@ -9,7 +9,7 @@ route 名字来自客户端 src/manager/datamanager.js：
 from __future__ import annotations
 
 from ..gameproto import CODE_OK
-from .. import config, logx, quests, store
+from .. import config, instance, logx, quests, store
 from . import route
 
 log = logx.get("handler.agent")
@@ -44,7 +44,17 @@ def _module_stubs() -> dict:
             "chapters": [],
             "chapterStars": {},
         },
-        "item": {"items": [], "package": {}, "limitTimeItems": []},
+        # 背包。**这个 key 直接就是「itemKey -> 数量」的平铺映射，不是嵌套结构**：
+        # `dataManager.initUserData` 里是 `this.bag = new Bag(data.item)`，
+        # 而 `Bag.ctor(items)` 直接 `for (key in table_item) _items[key] = _createItem(key, items[key] || 0)`。
+        # 早先按 `{items:{...}, package:{}, limitTimeItems:[]}` 给，items[key] 全是 undefined，
+        # 结果就是所有道具都是 0（表现：进关卡弹「没有甜甜圈了 是否需要补充行动力」）。
+        #   100001 钻石 / 100002 萌钞 / 100003 行动力（"甜甜圈"）
+        "item": {
+            store.ITEM_GEM: 100000,
+            store.ITEM_MONEY: 10000000,
+            store.ITEM_ACTION_POINT: 999,
+        },
         "char": {
             "heros": [store.new_hero()],
             "soldiers": store.new_soldiers(),
@@ -161,6 +171,8 @@ def get_login_data(session: dict, msg: dict, req_id):
         "player": player,
         # 主线任务窗口（quests.py 里算，和 quest.getnewquest 同一个函数）
         "quest": quests.block(player),
+        # 关卡进度（关卡表在客户端自己那儿，服务端只给"哪些关通了、几星、打了几次"）
+        "instance": instance.login_block(player),
     }
     data.update(_module_stubs())
     return {"code": CODE_OK, "msg": "", "data": data}
@@ -183,6 +195,7 @@ def create_player(session: dict, msg: dict, req_id):
         "isNewPlayer": True,
         "newPlayerGuide": 0,   # 0 = 不是新号，跳过新手引导
         "quest": quests.block(player),
+        "instance": instance.login_block(player),
     }
     data.update(_module_stubs())
     return {"code": CODE_OK, "msg": "", "data": data}

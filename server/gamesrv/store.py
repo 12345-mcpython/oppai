@@ -64,6 +64,12 @@ CHAR_TYPE_HERO = "h"
 CHAR_TYPE_MECHA = "m"
 CHAR_TYPE_SOLDIER = "s"
 
+# 背包里的道具 key，取自客户端 ITEM_KEY：
+#   GEM 100001 / MONEY 100002 / ACTION_POINT 100003（行动力，玩家口中的"甜甜圈"）
+ITEM_GEM = "100001"
+ITEM_MONEY = "100002"
+ITEM_ACTION_POINT = "100003"
+
 # 新手引导位掩码全 1 = 所有引导都已完成。见 new_player() 里的说明。
 GUIDE_MARK_DONE = 0x7FFFFFFF
 
@@ -153,6 +159,15 @@ def new_soldier(index: int, key: str, positioning: int = 1, quality: int = 1,
     客户端 Soldier._init 会拿 key 去查 table_soldier 取 char_key / quality /
     各项属性，所以这里只需要给出会变的那几个字段；positioning / quality 也照
     table_soldier 填一份，免得客户端某处直接读服务端这份。
+
+    ⚠️ `skillLv` 不能省。客户端 `Soldier._init` 第一句是
+        this._originData = util.encodeOriginData(args);
+    把**服务端原始数据**存成快照（数字 <<5 之后 JSON），
+    之后 `isNormalData()` 拿它跟本地值逐项比对（key/quality/star/lv/skillLv），
+    其中 lv 是 `this._mainSkill.lv = args.skillLv || 1` —— 默认 1。
+    不给 skillLv 的话快照里根本没有这个字段，比对永远 `undefined != 1`，
+    表现就是编好队一点「战斗」弹「队伍数据异常，请重新登陆」，然后闪退。
+    （空队伍不会触发：`Team.isNormalData()` 是遍历队员逐个查的。）
     """
     return {
         "id": index,
@@ -163,7 +178,10 @@ def new_soldier(index: int, key: str, positioning: int = 1, quality: int = 1,
         "curExp": 0,
         "quality": quality,
         "positioning": positioning,
-        "skillLvList": [],
+        "skillLv": 1,
+        # 技能等级表：客户端 _loadSkill 按 table_soldier.skill_index 逐位取，
+        # 数量对得上才会把技能建出来（table 里 skill_index 形如 "1#2"，两位）
+        "skillLvList": [1, 1],
         "equipments": [],
         "isLock": 0,
         "isDel": 0,

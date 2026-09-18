@@ -552,8 +552,127 @@ activate_quest_key/条件个数/达成值/schedule key）。客户端换版本�
 
 `gamesrv/quests.py` 只维护主线（type=2，共 135 条）：
 按 `activate_quest_key` 前序遍历出推进顺序，一次给客户端一个 12 条的窗口，
-窗口第一条直接是「已达成」（可以立刻领），领掉后窗口往后滑。
+领掉一条之后窗口往后滑。
 
 `sync.syncupclient` 也实现了：客户端上报 `actquest.questUpdateTime`，
 和服务端的 `quests.update_time(player)` 不一致时把整个 quest 块推回去
 （这是 `SyncManager.updateByServer` 唯一认的通道）。
+
+### 9.4 任务进度是**服务端**算的
+
+`QuestCenter.checkQuestFinish(key)` 只有一句 `return this._finishQuests[key]`
+（「这条领过没有」），客户端**不算**条件。所以 ACHIEVED 完全由服务端决定，
+客户端只负责把 `schedule[cur]` 显示成进度条。
+
+条件类型从 `table_quest.desc` 反推（已抽进 `table_quest.json` 的 `ct/cp1/cp2`）：
+
+| type | 含义 | 服务端怎么算 |
+|---|---|---|
+| `12212` | 队伍中只上阵 cp2 个军士获得胜利 cp1 次 | 关卡胜利时按「上阵人数」分桶计数 |
+| `12216` | 队伍中存在 cp2 兵种的军士获得胜利 cp1 次 | 兵种表在客户端 char 表里，简化成「任意胜场」 |
+| `13203` | 进行首次军士升级 | `char.upgradesoldierlv` 计数 |
+| `13102` | 1 位 cp2 军阶的军士等级达到 cp1 级 | 升到时记该军阶的最高等级 |
+| `13204` | 1 位军士进行首次突破 | `char.improvesoldierstar` 计数 |
+
+玩家身上只存几个**计数器**（`player.questStats`），某条任务的 `cur` 现算：
+
+```json
+{"wins": 1, "winsByTeamSize": {"3": 1}, "soldierUpgrades": 0, "soldierMaxLv": {}}
+```
+
+上阵人数来自 `player.teams[curTeamIdx].soldierKeys` —— 也就是必须实现
+`player.updateteams`（见 §10.3），否则服务端永远以为队伍是空的。
+
+私服想少打几场就把环境变量 `GS_QUEST_MULT` 调大（一次胜利按 N 次算）。
+
+## 10. 关卡 / 副本（instance.*）
+
+### 10.1 关卡表在客户端，服务端只给进度
+
+`Instance.ctor(data)`：
+
+```js
+this._initLevel();                  // 用客户端自己的 table_level 建 1142 个关卡
+this._updateLevels(data.levels);    // 服务端只回「进度」
+this._chapters = data.chapters;
+```
+
+`Level.updateLevel(level)` 只读三个字段，所以登录的 `data.instance.levels` 就是
+
+```json
+{"100102": {"starMark": 7, "challengeTimes": 3, "lastUpdateTimeSec": 1789739147}}
+```
+
+关卡结构（章节、每章有哪些关）客户端自己表里有，服务端**不需要**给。
+
+### 10.2 战斗链路
+
+```
+instanceManager.onBattle(levelId, cb, immCb)
+  ├─ 第 1 步：curTeam.isNormalData()  —— 见 10.4，不通过就弹「队伍数据异常，请重新登陆」
+  ├─ 检查上阵人数 / 行动力
+  └─ BattleScene.combat({id, team, rewards, resultCb, showCb, endCb, controlParams})
+       打完 → resultCb(args)
+       → Instance.finishLevel(levelId, starMark, rewards, battleInfo, cb, ...)
+       → POST instance.finishlevel {levelId, starMark, rewards, battleInfo,
+                                    curTeamIdx, curExp, lv, actionPoint}
+       回包 data.level → Instance._updateResult() → level.updateLevel()
+```
+
+`starMark` 是客户端算的（`calLevelStarMark`）：`1` 通关 / `+2` 英雄击杀达标 /
+`+4` 己方阵亡达标，所以 `7` = 三星。服务端只管记下来并取 max。
+
+服务端在 `instance.finishlevel` 里顺手做一件事：**把这次胜利记进任务进度**。
+
+### 10.3 `player.updateteams`
+
+```js
+paramTeams.push({id: team.id, team: team.getReqUpdateParam()});
+// getReqUpdateParam() -> {heroKey, mechaKey, soldierKeys}
+// soldierKeys 实际是 getSoldierIds()（军士的 id）
+server.request('player.updateteams', {teams: paramTeams}, cb);   // code 必须是 200
+```
+
+不实现的话服务端不知道玩家上阵了谁，主线的「只上阵 N 个军士」永远做不完。
+
+### 10.4 客户端那个防篡改快照（踩过的坑）
+
+`Soldier._init` 第一句是
+
+```js
+this._originData = util.encodeOriginData(args);   // ← 存的是**服务端原始数据**
+```
+
+`encodeOriginData` 把对象深拷贝、所有数字 `<< 5`、再 `JSON.stringify`。
+之后 `Soldier.isNormalData()` 拿它跟本地值逐项比对：
+
+```js
+originData.key      != this._key        -> false
+originData.quality  != this._quality    -> false
+originData.star     != this._star       -> false
+originData.lv       != this._lv         -> false
+originData.skillLv  != this._mainSkill.lv -> false      // _mainSkill.lv = args.skillLv || 1
+```
+
+`Team.isNormalData()` 只是遍历队员逐个查；**空队伍必然通过**。
+
+所以我们少发任何一个字段，都会在「编好队第一次点战斗」时炸出来：
+服务端必须发 `skillLv`（不发就是 `undefined != 1`），数字字段必须是数字
+（字符串会绕过 `<<5` 的还原）。表现是弹「队伍数据异常，请重新登陆」然后闪退。
+
+### 10.5 行动力是背包道具，不是 player 字段
+
+进关卡前客户端查的是 `bag.getItemCount(ITEM_KEY.ACTION_POINT)`（`100003`，玩家说的「甜甜圈」），
+不是 `player.actionPoint`。为 0 就弹「没有甜甜圈了 是否需要补充行动力」。
+
+而 `data.item` 是**平铺映射**，不是嵌套结构：
+
+```js
+// dataManager.initUserData
+this.bag = new Bag(data.item);
+// Bag.ctor(items)
+for (var key in table_item) this._items[key] = this._createItem(key, items[key] || 0);
+```
+
+所以 `data.item` 要直接是 `{"100003": 999, "100002": 10000000, "100001": 100000}`
+—— 早先按 `{items:{...}, package:{}, limitTimeItems:[]}` 给，所有道具都是 0。

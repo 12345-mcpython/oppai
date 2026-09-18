@@ -35,6 +35,12 @@ DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__
 #   n               这一条有几个 schedule 条件（服务端要按这个长度回 schedule）
 #   tar             每个条件的达成值 table_quest_condition[key#i].param_1
 #   sk              每个条件在 data.schedule 里的 key —— 见下面的说明
+#   ct/cp1/cp2      第一个条件的 type / param_1 / param_2
+#                   服务端要靠这几个字段判断「玩家做到没有」：(含义从 desc 反推)
+#                     12212  队伍中只上阵 cp2 个军士获得胜利 cp1 次
+#                     12216  队伍中存在 cp2 兵种的军士获得胜利 cp1 次
+#                     13203  进行首次军士升级
+#                     13102  1 位 cp2 军阶的军士等级达到 cp1 级
 #
 # ⚠️ data.schedule 是**对象**不是数组！
 #    QuestCenter._createQuest 里是 data.schedule[ row["schedule_1"].split("#")[0] ]
@@ -48,13 +54,18 @@ QUEST_JS = r"""
     for (var k in table_quest) {
         var row = table_quest[k];
         if (!row) { continue; }
-        var tars = [], keys = [];
+        var tars = [], keys = [], ct = "", cp1 = 0, cp2 = "";
         for (var i = 1; ; i++) {
             var cond = table_quest_condition[k + "#" + i];
             if (!cond) { break; }
             tars.push(cond.param_1 || 0);
             var sch = row["schedule_" + i];
             keys.push(sch ? String(sch).split("#")[0] : "0");
+            if (i === 1) {
+                ct = String(cond.type === undefined ? "" : cond.type);
+                cp1 = cond.param_1 || 0;
+                cp2 = cond.param_2 === undefined ? "" : String(cond.param_2);
+            }
         }
         out[k] = {
             type: row.type,
@@ -63,7 +74,10 @@ QUEST_JS = r"""
             ak: row.activate_quest_key || "",
             n: tars.length,
             tar: tars,
-            sk: keys
+            sk: keys,
+            ct: ct,
+            cp1: cp1,
+            cp2: cp2
         };
     }
     return JSON.stringify(out);
