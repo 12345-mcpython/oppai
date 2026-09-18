@@ -234,18 +234,27 @@ vanilla 不传参 → 游戏代码 `function (eventName) { if (/began\d/.test(ev
    已试过 7~8 种形状都没在 REPL 里复现，怀疑 `initUserData` 传进去的不是 `data.talents`，
    需要在探针里把构造参数打出来再登一次才能确定。
 4. **日常 / 成就任务** —— 只做了 `type=2`（主线）；日常 246 条 / 成就 91 条。
-5. **助战（好友支援）列表渲染不出来** —— 服务端已经能正确回 NPC 名单
+5. **战果报告的「获得物资」还是空的** —— 服务端已经把通关奖励算出来了
+   （`level.dropReward / firstComplete / appraise / levelReward`，日志里能看到
+   `掉落={'100002': 593} 首通={'100001': 20} exp=60`），但客户端面板读的不是这里：
+
+   `LevelWinBase._init(args)` 读的是 **`args.rewards / args.firstComplete /
+   args.appraise / args.rank / args.favorReward`**，而 `args` 是
+   `instanceManager.onBattle/</showCb` 拼的那个对象 —— 那个对象里只有
+   `againCb / backCb / battleInfo / result`（+`starMark` / `id`），**根本没有 rewards**。
+   下一步要么找出原版是从哪儿补进去的，要么在 patch.js 里包一层
+   `showCb` 的入参（把服务端回来的奖励塞进 `args`）。
+
+6. **助战（好友支援）列表渲染不出来** —— 服务端已经能正确回 NPC 名单
    （`friendsupport.getrecommendsoldiers` -> 20 个 `npcId`，客户端
    `FriendSupport._recommendList` 里也确实收到了 20 个），
    但 `SupportChoiceLayer` 那边渲染不出来。已确认的：
    `setSupportList()` 手动调是好的（会往 `_pushAsynList` 里塞 18 个
-   `{item, innSize, index}`），所以卡在「层的 `_recommendList` 是 0」——
-   也就是 `_init` 里那个 `getRecommendList` 回调没把 data 传进层里，
-   需要一个能用的 REPL 会话盯一下 `SupportChoiceLayer._init/<`。
+   `{item, innSize, index}`），所以卡在「层的 `_recommendList` 是 0」。
    **不影响战斗**（这个弹窗是可选的好友助战）。
-6. **其余 stub 路由** —— `rank.*` / `exchange.*` / `boss.*` / `shop.*` / `mail.*` 等，
+7. **其余 stub 路由** —— `rank.*` / `exchange.*` / `boss.*` / `shop.*` / `mail.*` 等，
    照着对应模块的 `updateByServer` 反汇编补 key 即可。
-7. `hashKey` / `hmac64` 还没复刻（登录靠单位元绕过）；自研 DH 的完整算法也没还原。
+8. `hashKey` / `hmac64` 还没复刻（登录靠单位元绕过）；自研 DH 的完整算法也没还原。
 
 ---
 
