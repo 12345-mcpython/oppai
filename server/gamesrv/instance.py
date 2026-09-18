@@ -53,8 +53,10 @@ log = logx.get("instance")
 SUCCESS_CODE = 200
 
 # 私服想快点把主线推完就把这个调大：一次胜利按 N 次算。
-# 1 = 和原版一致（209001 真的要赢 10 场）。
-PROGRESS_MULT = float(os.environ.get("GS_QUEST_MULT", "1") or 1)
+# 原版是 1（209001 真的要赢 10 场、209006 要赢 500 场）。
+# 默认给 10：主线整条链的达成值动辄 50/100/500 场，1 倍的话自己玩根本推不完。
+# 想要原汁原味就设环境变量 GS_QUEST_MULT=1。
+PROGRESS_MULT = float(os.environ.get("GS_QUEST_MULT", "10") or 10)
 
 _DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
 _level_cache: dict | None = None

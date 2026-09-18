@@ -15,7 +15,7 @@ from . import route
 log = logx.get("handler.agent")
 
 
-def _module_stubs() -> dict:
+def _module_stubs(player: dict | None = None) -> dict:
     """各模块的初始数据。
 
     **key 名不是模块名**：从客户端 dataManager 里 `new Xxx(data.<短名>)` 的
@@ -57,7 +57,8 @@ def _module_stubs() -> dict:
         },
         "char": {
             "heros": [store.new_hero()],
-            "soldiers": store.new_soldiers(),
+            # ⚠️ 军士存在玩家存档里（升级过就不能每次登录现生成，否则升级会回退）
+            "soldiers": store.ensure_soldiers(player) if player else store.new_soldiers(),
             "mechas": [store.new_mecha()],
             "daemons": [],
             "maxSoldiersCount": 50,
@@ -174,7 +175,7 @@ def get_login_data(session: dict, msg: dict, req_id):
         # 关卡进度（关卡表在客户端自己那儿，服务端只给"哪些关通了、几星、打了几次"）
         "instance": instance.login_block(player),
     }
-    data.update(_module_stubs())
+    data.update(_module_stubs(player))
     return {"code": CODE_OK, "msg": "", "data": data}
 
 
@@ -197,7 +198,7 @@ def create_player(session: dict, msg: dict, req_id):
         "quest": quests.block(player),
         "instance": instance.login_block(player),
     }
-    data.update(_module_stubs())
+    data.update(_module_stubs(player))
     return {"code": CODE_OK, "msg": "", "data": data}
 
 

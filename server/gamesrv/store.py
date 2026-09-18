@@ -197,6 +197,31 @@ def new_soldiers() -> list:
             for i, (key, pos, quality) in enumerate(SOLDIER_KEYS)]
 
 
+def ensure_soldiers(player: dict) -> list:
+    """玩家的军士列表。
+
+    ⚠️ 军士必须**存在玩家身上**，不能每次登录现生成 ——
+    不然「军士升级」升完一重登就没了（任务 210001「首次升级」也会跟着回退）。
+    第一次登录时按初始名单发一份，之后就一直是玩家的。
+    """
+    soldiers = player.get("soldiers")
+    if not isinstance(soldiers, list) or not soldiers:
+        soldiers = new_soldiers()
+        player["soldiers"] = soldiers
+    return soldiers
+
+
+def find_soldier(player: dict, soldier_id) -> dict | None:
+    try:
+        soldier_id = int(soldier_id)
+    except (TypeError, ValueError):
+        return None
+    for s in ensure_soldiers(player):
+        if int(s.get("id") or 0) == soldier_id:
+            return s
+    return None
+
+
 def new_mecha() -> dict:
     """默认机甲。字段名来自客户端 src/data/mecha.js 的 Mecha。"""
     return {

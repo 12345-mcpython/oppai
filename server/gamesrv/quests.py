@@ -87,8 +87,9 @@ STATE_FINISHED = "4"
 MAIN_TYPE = TYPE_NORMAL
 
 # 主线一次给客户端多少条。客户端 QuestLayer 是一列滚动列表，
-# 12 条刚好一屏多一点，和原版"一口气看到接下来几条主线"的感觉接近。
-WINDOW = 12
+# 给 20 条是为了让 209xxx（战斗类）后面的 210001「首次升级」这类
+# 也早早出现在列表里，不然要打完前 12 条才看得到。
+WINDOW = 20
 
 _lock = threading.RLock()
 _table: dict | None = None
