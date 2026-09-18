@@ -19,6 +19,10 @@ Kuro Game《战场双马尾》v2.2.0 已经停服。这个项目用 **纯 Python
 - [7. 踩过的坑（重点）](#7-踩过的坑重点)
 - [8. 当前状态与 TODO](#8-当前状态与-todo)
 
+> **想先看全貌**：直接读 [`docs/overview.md`](docs/overview.md) ——
+> 成果清单、系统分层、逆向结论、按症状查原因的坑表、待办、工具工作流都在那一份里。
+> README 这份偏「怎么上手 + 细节索引」。
+
 ---
 
 ## 1. 成果总览
@@ -30,11 +34,15 @@ Kuro Game《战场双马尾》v2.2.0 已经停服。这个项目用 **纯 Python
 [客户端] WebSocket 握手（DH + DES + HMAC）→ 登录成功                    ✅
 [客户端] agent.getlogindata → 新号自动 agent.createplayer              ✅
 [客户端] cb4AfterLogin → 31 个数据模块初始化                            ✅
-[客户端] 切主场景 MainScene                                            ✅
-[客户端] 播放新手开场动画                                               ✅
+[客户端] 切主场景 MainScene → 开场动画 → 主界面                          ✅
+[玩法]   编成 / 上阵队伍（18 个初始士兵）                                ✅
+[玩法]   任务 → 主线任务（12 条窗口，可领奖、会推进）                     ✅
+[玩法]   战斗（自己重建的引擎 + 11 个补丁）                              ✅
 ```
 
 整条链路全自动，装上补丁版 APK 启动即可，不需要任何手动操作。
+副本关卡 / 扭蛋 / 培养 / 排行榜这些还没做，详见
+[`docs/overview.md` §1 与 §7](docs/overview.md)。
 
 **技术栈**：cocos2d-js v3.6 + SpiderMonkey 33.1.1（`libcocos2djs.so` 里能看到
 `JavaScript-C33.1.1`），客户端逻辑编译成 `.jsc`（XDR 字节码，不加密但不留源码）。
@@ -54,29 +62,37 @@ game_server/
 │   ├── session.py             WS 登录握手（DH 单位元 + DES）
 │   ├── gameproto.py           业务请求 / 响应打包解包
 │   ├── accounts.py            账号（登录即注册）
-│   ├── store.py               玩家 / 主角 / 队伍数据
+│   ├── store.py               玩家 / 主角 / 队伍 / 士兵 / 模块开启状态（含字段迁移）
+│   ├── quests.py              主线任务（窗口推进 + 领奖状态机）
 │   ├── repl.py                下发给客户端探针的命令队列
 │   ├── crypto/des.py          标准 DES（已用客户端真实密文对拍验证）
-│   ├── handlers/              业务路由（agent.* / player.*）
+│   ├── handlers/              业务路由（agent.* / player.* / quest.*，共 16 条）
+│   ├── data/table_quest.json  从客户端抽出来的任务表
 │   └── apps.py                cdn / gate / login / game 四个端口的实现
 ├── client/                    客户端补丁（全部在这里）
-│   ├── hook.js                明文 JS 探针（REPL / 日志 / 自动登录 / 进主场景）
+│   ├── patch.js               ★ 必须的适配：polyfill / 引导跳过 / 响应派发 / 各种兜底
+│   ├── probe.js               诊断探针（--no-probe 打包时不含）：REPL / 日志 / 调用追踪
 │   ├── modernize.py           现代化：minSdk/targetSdk、明文 HTTP、运行时权限
 │   ├── PermissionHelper.smali 运行时权限申请
 │   ├── ServerLoginRunnable.smali   原生登录回调（绕开 SDK 弹窗）
 │   └── patch_smali.py         打 Java 层登录补丁
-├── tools/
+├── tools/                      ★ 工具索引见 tools/README.md
 │   ├── jsc_disasm.py          ★ jsc 反汇编器（SM33.1.1 XDR 字节码）
 │   ├── disasm_func.py         按函数名反汇编
-│   ├── gen_opcodes.py         从 Opcodes.h 生成操作码表
-│   ├── merge_dex.py           把 smali_classesN 并成单 dex
+│   ├── jsc_strings.py         ★ 只扒 atom（标识符）表，定位函数逻辑最快
+│   ├── extract_client_tables.py  ★ 把客户端 table_* 抽成服务端 JSON
+│   ├── csb_dump.py            解析 cocostudio .csb（动画区间 / 帧事件）
+│   ├── gen_opcodes.py         从 Opcodes.h 生成操作码表（产物是 _opcodes_gen.py）
 │   ├── build_apk.py           改 assets + apktool 打包 + 对齐 + 签名
+│   ├── serve.py               服务端守护（run.py 挂了自动拉起）
+│   ├── merge_dex.py           把 smali_classesN 并成单 dex
 │   ├── repl.py                在游戏进程里执行任意 JS
 │   ├── probe.py               重启客户端 + 批量执行 JS
 │   ├── selftest_game.py       不开游戏也能自测业务协议
 │   ├── bisect_init.py         逐模块二分，找把 JS 主线程卡死的那个
 │   ├── shots.py               连续截图
-│   └── sdk_strip/             删掉没用的第三方 SDK（详见 4.0）
+│   ├── sdk_strip/             删掉没用的第三方 SDK（详见 4.0）
+│   └── archive/               一次性脚本的历史存档（别再跑，但注释里全是当时的证据链）
 │       ├── analyze.py             扫出游戏代码引用了哪些 SDK 类/方法
 │       ├── gen_stubs.py           据此生成桩类
 │       ├── native_stubs.py        .so 硬依赖的类的桩定义
@@ -87,6 +103,7 @@ game_server/
 │       ├── js_class_refs.py       扫 JS 里 jsb.reflection 调的 Java 类名
 │       └── find_orphans.py        找出宿主 SDK 删掉后变成孤儿的包
 └── docs/
+    ├── overview.md            ★ 全景总览（先看这份）
     ├── build.md               打包逻辑（为什么这么做）
     ├── protocol.md            协议逐项细节
     └── reverse-engineering.md 反汇编器原理 + 运行时探测手法
@@ -100,12 +117,17 @@ game_server/
 
 ```powershell
 cd game_server
+python tools\serve.py     # 守护进程，run.py 挂了会自动拉起（推荐）
+# 或者前台跑：
 python run.py -v
 ```
 
+> ⚠️ 别用 `Start-Process python run.py` 直接拉 —— 这样起的子进程会被回收，
+> 表现就是「服务器莫名其妙宕机了」。要么前台跑，要么用 `tools/serve.py`。
+
 | 端口  | 作用 | 原来对应 |
 |-------|------|----------|
-| 18080 | CDN：远程配置、热更新清单、公告 | `cdn.shuangmawei.net` |
+| 18080 | CDN：远程配置、热更新清单、公告、探针控制接口 | `cdn.shuangmawei.net` |
 | 10001 | 网关：服务器在线状态 | `114.55.66.97:16840` 一类 |
 | 8080  | 登录：`/oauth/*` + WebSocket | 客户端里硬编码的 `OAUTH_HOST` |
 | 10003 | 游戏业务：加密 POST | login 返回的 `gameServUrl` |
@@ -131,9 +153,10 @@ python client\patch_smali.py
 cd <apktool 解包目录>
 apktool.bat b . --no-apk --no-crunch        # 产物在 <解包目录>\build\apk\classes*.dex
 
-# 3) 打 URL 补丁 + 注入探针 + 注入 dex + 重新签名
+# 3) 打 URL 补丁 + 注入 patch.js/probe.js + 注入 dex + 重新签名
 cd game_server
-python tools\build_apk.py --host <主机IP>
+python tools\build_apk.py --host <主机IP>          # 带探针（开发和排障用）
+python tools\build_apk.py --host <主机IP> --no-probe   # 正式包：只带 patch.js
 
 # 4) 安装
 adb install -r -d E:\code\apk\work\zcsmw-mod-signed.apk
@@ -152,7 +175,9 @@ python tools\selftest_game.py
 
 ## 4. 客户端补丁
 
-分 **Java(smali) 层**、**JS 探针**、**现代化/精简** 三部分。
+分 **Java(smali) 层**、**注入的明文 JS（patch.js / probe.js）**、**现代化/精简** 三部分。
+哪些补丁是「必须的适配」、哪些只是诊断，见
+[`docs/overview.md` §5](docs/overview.md)。
 
 ### 4.0 现代化 / 精简 / 删 SDK
 
@@ -367,27 +392,42 @@ quicksdk.sdkLoginCallback(1, "emulator", "emulator-token")
 
 这样点「开始游戏」走的还是游戏自己的原始流程，只是原生登录瞬间成功、弹窗不再出现。
 
-### 4.2 JS 探针 `client/hook.js`
+### 4.2 注入的明文 JS：`client/patch.js` + `client/probe.js`
 
 明文 JS，通过改 `project.json` 的 `jsList` 注入（jsc 不存在时会回退到明文，实测可行）。
-它做这些事：
+拆成两个文件：
+
+* **`patch.js` —— 必须的适配**，正式包也要带（`tools/build_apk.py` 默认打包）
+* **`probe.js` —— 诊断探针**，`--no-probe` 时不打包
+
+`patch.js` 做的事：
+
+| 补丁 | 说明 |
+|------|------|
+| `ccui.helper.seekNodeByName/ByTag` | 游戏那版引擎有、v3.6 没有，纯 JS polyfill |
+| `ActionTimeline.setLastFrameCallFunc` 包装 | 同上（引擎层已根治，这层是保险） |
+| `ccui.WebView` polyfill | v3.6 没这个绑定；公告是私服自己的 HTML，抓下来剥标签用 `ccui.Text` 渲染 |
+| 新手引导跳过 | 引导层会吃掉**所有**菜单点击，私服数据下它会永远卡住 |
+| `Gacha.getGachaFullInfo` 兜底 | 缺扭蛋配置时抛异常会把 `initUserData` 后半段全打断 |
+| 数据模块构造容错 | 某个模块数据没对齐时不连累整体 |
+| `initUserData` 兜底 | 无论如何保证 `player._moduleState` 建出来（否则主界面黑屏） |
+| `RESP-DISPATCH` 响应派发 | 客户端 `responseConfig` 在这套引擎上根本没被派发，自己补一层 |
+| LGL-GUARD | 视频层清理 + 最后一帧回调幂等 |
+
+`probe.js` 做的事：
 
 | 功能 | 说明 |
 |------|------|
-| `REQ / PACK / UNPACK / WS / GAMELOG` 日志 | 把网络层调用、加密函数十六进制输入输出、WebSocket 生命周期、游戏自己的 `cc.log` 全部转发到 logcat |
+| `REQ / PACK / UNPACK / WS / GAMELOG` 日志 | 网络层调用、加密函数十六进制输入输出、WebSocket 生命周期、游戏自己的 `cc.log` 全转发到 logcat |
 | `SCHEMA` 探测 | 用 `Proxy` 记录客户端读了响应里的哪些字段 |
-| **REPL** | 轮询 `<cdn>/hook/poll` 执行返回的 JS 表达式，结果 POST 回 `/hook/result` —— 等于在游戏进程里开了个控制台 |
-| 重写 `server.request` | 客户端 `reqPack` 依赖登录时写入的闭包变量 `session`/`key`，模拟环境下拿不到，用客户端自己的 `crypt` 重新实现了一遍 |
-| 模块构造容错 | 某个模块数据没对齐时不让它把整个登录流程打断 |
-| 登录收尾 | `agent.getlogindata` → `agent.createplayer`(新号) → `cb4AfterLogin` → `_enterMain()` |
-| 登录按钮接管 | 原版「登录」走 `userLogin → requestToken`，参数对不齐会弹 JSON 提示框，改成跟「开始游戏」同一条路 |
+| **REPL** | 轮询 `<cdn>/hook/poll` 执行 JS，结果 POST 回 `/hook/result` —— 等于在游戏进程里开了个控制台 |
+| 调用序列追踪 | 登录期把 `Player` / `Gacha` / `guideManager` 的调用逐个打出来，出错直接给 stack |
+| 两个开关 | `AUTO_AFTER_LOGIN` / `AUTO_CLICK_START`（默认都关，手动点） |
 
-两个开关（`hook.js` 顶部）：
-
-```js
-var AUTO_AFTER_LOGIN = true;    // 登录成功后自动跑 cb4AfterLogin + 切主场景
-var AUTO_CLICK_START = false;   // 是否自动代替玩家点「开始游戏」（默认关，手动点）
-```
+> ⚠️ **探针的第一原则：只包一层，不要重写。**
+> 早先的版本把 `server.request` 整个重写了（因为 `reqPack` 依赖登录时写入的闭包变量），
+> 结果把客户端原生的响应派发整条路绕掉了，害得「服务端推数据」全部失效 ——
+> 这类错误非常难查，因为它表现为「服务端怎么改都没用」。
 
 ### 4.3 其它重定向
 
@@ -592,6 +632,8 @@ python tools\disasm_func.py <file.jsc> cb4AfterLogin
 | **URL 原地等长替换** | APK 打包报"长度不一致" | jsc 字符串带长度前缀，`cdn.shuangmawei.net` 必须换 19 字节 |
 | **WebSocket 要回显子协议** | 客户端 `onopen` 不触发 | 请求里带 `Sec-WebSocket-Protocol`，不选一个客户端就会主动断开 |
 | **`onSuccCb` 靠第一条消息触发** | 连上了但什么都不发生 | 服务端先发一条 base64 欢迎包，客户端 `onmessage` 才开始握手 |
+| **请求体前面还有一段 session** | 点开始游戏弹 `温馨提示 {"code":1,"msg":"bad request"}` | 真实请求体是 `base64(" " + sessionId)` + `base64(des(payload))` 两段拼的，不摘掉就解不出密文 |
+| **`get_or_create_player()` 返回的是临时副本** | 任务领奖「累计 1 条」永远不涨，反复刷新顶上还是同两条 | 改完必须 `store.save_player(player)` 写回，否则请求一结束改动就没了 |
 
 ### 7.2 客户端 / 逆向
 
@@ -601,10 +643,15 @@ python tools\disasm_func.py <file.jsc> cb4AfterLogin
 | **GET 的 body 传数字会静默卡住** | 轮询请求根本没发出 | body 必须 `String(...)` |
 | **`jsb.fileUtils.writeStringToFile` 不存在** | 探针写文件失败 | 改用 logcat |
 | **游戏自己的 `cc.log` 不进 logcat** | 看不到客户端内部报错 | 探针包一层 `console.log`/`cc.log` 转发（`GAMELOG`） |
-| **`reqPack` 依赖闭包变量** | `server.request` 静默不发 | 探针用客户端自己的 `crypt` 重新实现 `request` |
+| ⚠️ **探针不要重写 `server.request`** | 「服务端推数据」全部失效（任务领奖成功但不刷新），改服务端怎么改都没用 | 只能**包一层**打日志，行为交给原实现。原生实现里带着 `responseConfig` 派发 |
+| **`responseConfig` 压根没被派发** | 响应里出现 `quest`/`player` 也不会 `updateByServer` | 客户端 `patch.js` 里自己补了一层 `RESP-DISPATCH` |
+| **一个士兵构造失败会丢整份列表** | 编成里一个兵都没有 | `CharCenter` 是整体 try；只能用实测 `new` 得出来的 key（`lfcz01` 会抛 `row is undefined`） |
 | **`window.op` 是共享命名空间** | 猜不出远程配置的 key | 给 `op` 套 `Proxy` 记录属性访问 |
 | **返回值不是简单类型** | `version` 不能直接比 | 用 `Proxy` + `Error().stack` 定位到 `version[appVersion]` |
 | **jsc 立即数是大端序** | 反汇编全乱 | 所有字节码立即数按大端读 |
+| **`initUserData` 中途抛异常会连累一大片** | 黑屏 / 引导乱走 / 某个模块是半成品 | 先把异常和调用序列打出来（探针的 `hookInitUserData` + `hookInterfaceTrace`），别猜 |
+
+> 完整版按症状查原因的表在 [`docs/overview.md` §6](docs/overview.md)。
 
 ---
 
@@ -612,26 +659,41 @@ python tools\disasm_func.py <file.jsc> cb4AfterLogin
 
 ### 已完成
 
-- [x] 服务端：CDN / 网关 / oauth / WebSocket 登录 / 加密业务路由
+- [x] 服务端：CDN / 网关 / oauth / WebSocket 登录 / 加密业务路由（16 条）
 - [x] DES 用标准实现复刻并双向验证；DH 用单位元技巧绕过
-- [x] Java 层去掉百度登录弹窗
-- [x] 全自动登录 → 主场景 → 新手开场动画
-- [x] jsc 反汇编器（含递归解析嵌套函数）
+- [x] Java 层去掉百度登录弹窗；删掉 46.6MB 没用的第三方 SDK
+- [x] 全自动登录 → 主场景 → 新手开场动画 → 主界面
+- [x] **引擎源码重建**（cocos2d-js v3.6 + 11 个补丁），战斗可完整跑完
+- [x] jsc 反汇编器（含递归解析嵌套函数）+ atom 表提取器 + 运行时 REPL 探针
+- [x] **编成 / 上阵队伍**（18 个初始士兵，前锋/中卫/后卫各 6）
+- [x] **主线任务**（12 条窗口 + 领奖 + 窗口推进 + 刷新）
+- [x] 文档：`docs/overview.md`（全景）/ `protocol.md` / `reverse-engineering.md` / `build.md`
 
 ### 待办
 
-- [ ] **业务路由**：目前只有 `agent.*` / `player.updateguidemark`，
-      其余（`exchange.checkorder`、`rank.getrankinglist`、各模块的 `*.getxxx`）
-      只回空 data。有了反汇编器可以直接看对应模块的 `updateByServer`/`*Cb` 读哪些 key：
+按「卡不卡住玩法」排序：
 
-      ```powershell
-      python tools\disasm_func.py <assets>\src\data\rank.jsc updateByServer
-      python tools\disasm_func.py <assets>\src\manager\datamanager.jsc --list
-      ```
+1. [ ] **副本 / 关卡（`instance`）** —— 主线任务的条件全是「通关 N 次」，
+       没有关卡就没法自然完成。关卡表同样可以抽（`table_level` / `table_chapter`），
+       做法见 `tools/extract_client_tables.py`。
+2. [ ] **扭蛋 / 抽卡** —— 缺 `gachaMasterList` 这类运营配置（客户端表里也没有），
+       现在只靠空壳兜底保证不崩。`GUIDE_GACHA_KEY = 1002`（`GACHA_KEYS.GEM`）。
+3. [ ] **培养（天赋）** —— `TalentCenter` 构造抛 `this._talentTypes[v.type] is undefined`。
+       已试过 7~8 种数据形状都没在 REPL 里复现（手动 `new TalentCenter(data.talents)` 是好的），
+       怀疑 `initUserData` 传进去的不是 `data.talents`；下一步是在探针里把构造参数打出来再登一次。
+4. [ ] **日常 / 成就任务** —— 只做了主线（`QUEST_TYPE.NORMAL = "2"`），
+       日常（`1`，246 条）/ 成就（`3`，91 条）还没接。
+5. [ ] **其余 stub 路由** —— `rank.*` / `exchange.*` / `boss.*` / `shop.*` / `mail.*` 等只回空 data。
+   补法：看对应模块的 `updateByServer` / `*Cb` 读哪些 key：
 
-- [ ] `TalentCenter` 构造报 `this._talentTypes[v.type] is undefined`，
-      需要按 `table_talent_type` 补 talent 数据（现在靠探针容错跳过）
-- [ ] `hashKey` / `hmac64` 还没复刻（登录靠单位元绕过；要校验 `etoken` 才需要）
+   ```powershell
+   python tools\disasm_func.py <assets>\src\data\rank.jsc updateByServer
+   python tools\jsc_strings.py <assets>\src\data\rank.jsc | findstr /i update
+   python tools\disasm_func.py <assets>\src\manager\datamanager.jsc --list
+   ```
+
+6. [ ] `hashKey` / `hmac64` 还没复刻（登录靠单位元绕过；要校验 `etoken` 才需要）
+7. [ ] 自研 DH (`dhExchange`/`dhSecret`) 的完整算法也可以直接反汇编还原
 - [ ] 自研 DH (`dhExchange`/`dhSecret`) 的完整算法也可以直接反汇编还原
 - [ ] `player.teams` 目前只给 5 支空队伍 + 主角 `hadf` + 机甲 `madflj`
       （key 取自 `table_hero` / `table_mecha`），战斗相关玩法需要继续补

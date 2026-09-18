@@ -12,8 +12,9 @@
          assets/src/util/server.jsc        登录服务地址
          assets/src/data/share.jsc         分享服务地址
          assets/src/patch/project.manifest 热更地址
-         assets/project.json               jsList 里加 hook.js
-         assets/src/patch/hook.js          写入探针
+         assets/project.json               jsList 里加 patch.js（+ 可选 probe.js）
+         assets/src/patch/patch.js         必须的客户端适配
+         assets/src/patch/probe.js         诊断探针（--no-probe 时不写）
        并删掉用不到的：
          assets/res/adimage, adcolumn      广告图
          assets/bdpwxpayplugin.apk         百度支付插件

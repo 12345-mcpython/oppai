@@ -37,8 +37,12 @@
 | `assets/src/util/server.jsc` | 登录服务地址（客户端里硬编码的 `OAUTH_HOST`） |
 | `assets/src/data/share.jsc` | 分享服务地址 |
 | `assets/src/patch/project.manifest` | 热更地址 |
-| `assets/project.json` | `jsList` 里追加 `src/patch/hook.js` |
-| `assets/src/patch/hook.js` | 写入探针（把 `__CDN_BASE__` 换成真实地址） |
+| `assets/project.json` | `jsList` 里追加 `src/patch/patch.js`（`--no-probe` 时不加 `probe.js`） |
+| `assets/src/patch/patch.js` | **必须的客户端适配**（把 `__CDN_BASE__` 换成真实地址） |
+| `assets/src/patch/probe.js` | 诊断探针（`--no-probe` 时不写、并从 assets 里删掉残留） |
+
+> 早期只有一个 `hook.js`，后来拆成了 `patch.js`（必须的适配）+ `probe.js`（诊断）。
+> `build_apk.py` 会自动清掉解包目录里残留的 `hook.js`。
 
 ### 2. 删掉用不到的资源
 

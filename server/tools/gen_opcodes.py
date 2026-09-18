@@ -1,12 +1,32 @@
-"""从 SpiderMonkey 33.1.1 的 vm/Opcodes.h 生成操作码表。"""
+"""从 SpiderMonkey 33.1.1 的 vm/Opcodes.h 生成操作码表。
+
+    python tools/gen_opcodes.py [Opcodes.h 的路径]
+
+不传路径时按下面的顺序找：
+    1) 环境变量 GS_OPCODES_H
+    2) <仓库同级>/apk/sm/vm_Opcodes.h（当初从 mozilla 源码里摘出来的那份）
+
+输出固定写回 `tools/_opcodes_gen.py`（`jsc_disasm.py` 会 import 它）。
+"""
 
 from __future__ import annotations
 
+import os
 import re
 import sys
 
-SRC = r"E:\code\apk\sm\vm_Opcodes.h"
-OUT = r"E:\code\python\game_server\tools\_opcodes_gen.py"
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+OUT = os.path.join(BASE_DIR, "_opcodes_gen.py")
+
+
+def default_src() -> str:
+    env = os.environ.get("GS_OPCODES_H")
+    if env:
+        return env
+    # tools/ -> game_server/ -> python/ -> code/ 下的 apk/sm/
+    guess = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(BASE_DIR))),
+                         "apk", "sm", "vm_Opcodes.h")
+    return guess if os.path.exists(guess) else "vm_Opcodes.h"
 
 JOF = {
     "JOF_BYTE": 0, "JOF_JUMP": 1, "JOF_ATOM": 2, "JOF_UINT16": 3,
@@ -22,7 +42,12 @@ PAT = re.compile(
 
 
 def main():
-    src = open(SRC, "r", encoding="utf-8", errors="replace").read()
+    src_path = sys.argv[1] if len(sys.argv) > 1 else default_src()
+    if not os.path.exists(src_path):
+        print(f"找不到 Opcodes.h: {src_path}", file=sys.stderr)
+        print("用法: python tools/gen_opcodes.py <vm/Opcodes.h 的路径>", file=sys.stderr)
+        return 1
+    src = open(src_path, "r", encoding="utf-8", errors="replace").read()
     rows = []
     for m in PAT.finditer(src):
         name = m.group(1).lower()
@@ -40,11 +65,8 @@ def main():
     for val, name, length, jof in rows:
         lines.append(f"    ({val}, {name!r}, {length}, {jof}),")
     lines.append("]")
-    open(OUT, "w", encoding="utf-8").write("\n".join(lines) + "\n")
+    open(OUT, "w", encoding="utf-8", newline="\n").write("\n".join(lines) + "\n")
     print(f"解析到 {len(rows)} 个操作码 -> {OUT}")
-    for val, name, length, jof in rows:
-        if val in (81, 24, 25):
-            print(f"  {val} {name} len={length} jof={jof}")
     return 0
 
 
