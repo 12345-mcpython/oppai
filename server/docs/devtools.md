@@ -65,6 +65,11 @@ server.request(route, msg, function (e, d) { console.log('REPLAY ' + route + ' =
 | 队伍里的军士 | `team._soldierKeys` |
 | 关卡进度 | `dataManager.instance._levels`（全 1142 关都在，没打的 `_starMark` 是 -1） |
 
+想打日志的话：**用 `cc.log`（或 `__oppaiHook__.log`），别用 `console.log`** ——
+`console.log` 只有一个参数的容量，多传一个就抛
+`js_console_log : wrong number of arguments`，而且它包不了。
+详见 [§1.4](#14-日志)。
+
 ### 1.3 玩家 / 作弊
 
 | 作弊项 | 具体做什么 |
@@ -85,16 +90,58 @@ server.request(route, msg, function (e, d) { console.log('REPLAY ' + route + ' =
 
 ### 1.4 日志
 
-两个来源，**自动去重**：
+三个来源，会自动去重：
+
+| 来源（面板上的过滤档） | 是什么 | 怎么来的 |
+|---|---|---|
+| **探针** (`client`) | `emit()` 打的行：`GAMELOG cc.log: …` / `GAME REQ` / `GAME RESP` / `CRYPT` / `POPUP` / `REPLAY` … | `probe.js` 的 `console.log("OPPAIHOOK\|" + line)` → logcat |
+| **console.log** (`console`) | 原生 `console.log()` 的输出原文 | logcat 里 `cocos2d-x debug info` 这个 tag、属于游戏 pid 的行 |
+| **上报** (`probe`) | 和 `client` 同一批内容 | `probe.js` 每 2 秒 `POST /hook/log`（**要重打包才生效**） |
+| **服务端** (`server`) | 服务端自己的 logging | `devbus` 里挂的 logging Handler |
+
+#### ⚠️ `console.log` 能不能看到？
+
+**能，但和 `cc.log` 走的不是同一条路。** 这是这次专门查过的一个坑：
+
+```js
+Object.getOwnPropertyDescriptor(console, 'log')
+// => {value: [native code], writable: false, configurable: false}
+
+console.log = function () {}                  // 非严格模式下静默失败，读回来还是原生的
+Object.defineProperty(console, 'log', {...})  // TypeError: can't redefine non-configurable property
+```
+
+也就是说 **`console.log` 在 JSB 里根本没法从 JS 侧包一层**。
+`probe.js` 里那句 `wrap("log", window.console, "console.")` 一直是**空转** ——
+它甚至掩盖了「为什么 console.log 看不到」这个问题的答案（赋值失败是静默的）。
+真正被包上的只有 `cc.log`（它是普通的可写属性）。
+
+所以调试台改成**从 logcat 收原文**：
+`adb logcat -v brief` 里 tag 为 `cocos2d-x debug info`、pid 等于游戏进程的行，
+来源标成 `console`，面板上单独一档。这样 `console.log` 不用改客户端就能看到。
+
+实测对照（同一时刻分别跑三句）：
+
+| 写法 | 面板里的档 | 长什么样 |
+|---|---|---|
+| `console.log('X')` | `console.log` | `X` |
+| `cc.log('X')` | `探针` | `GAMELOG cc.log: X` |
+| `__oppaiHook__.log('X')` | `探针` | `X` |
+
+两个附带的坑：
+
+* **原生 `console.log` 只吃一个参数。** `console.log('a', b)` 会抛
+  `Error: js_console_log : wrong number of arguments`。要多个值就自己 join。
+* `cc.log` 的包装会「先 emit 再调原生」，所以同一条日志在 logcat 里会出现两遍。
+  服务端记下最近的 `GAMELOG …: X`，5 秒内遇到内容完全相同的原生行就丢掉。
+
+#### 日志来源的优先级
 
 1. **`adb logcat` 尾随**（默认，现在就能用）
-   `probe.js` 的 `emit()` 除了写文件还会 `console.log("OPPAIHOOK|" + line)`，
-   服务端开一个后台线程跑 `adb -s 127.0.0.1:21503 logcat -v brief -T 1`，
-   把带 `OPPAIHOOK|` 的行（含多行消息的续行）喂进事件总线。
+   服务端开一个后台线程跑 `adb -s 127.0.0.1:21503 logcat -v brief -T 1`。
    模拟器重启 / adb 掉线会自动退避重连，并顺手 `adb connect` 一次。
-
-2. **probe.js 主动上报**
-   `probe.js` 每 2 秒把攒下的日志 `POST` 到 `<cdn>/hook/log`。
+2. **`probe.js` 主动上报**
+   每 2 秒把攒下的日志 `POST` 到 `<cdn>/hook/log`。
    比 logcat 可靠（不依赖 adb、不会被 logcat 环形缓冲冲掉），
    **但要重新打包 + 安装 APK 才生效**：
 

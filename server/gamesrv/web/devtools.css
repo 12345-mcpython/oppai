@@ -162,6 +162,7 @@ main { flex: 1 1 auto; min-height: 0; display: flex; }
 .cc-out.logs .ln { padding: 1px 14px; white-space: pre-wrap; word-break: break-all; }
 .cc-out.logs .ln .tag { color: var(--muted); margin-right: 6px; }
 .cc-out.logs .ln.client .tag { color: #7fd4c1; }
+.cc-out.logs .ln.console .tag { color: #8fb8ff; }
 .cc-out.logs .ln.probe .tag { color: #b48ce0; }
 .cc-out.logs .ln.server .tag { color: #d0a05a; }
 .cc-out.logs .ln.server.ERROR .body,

@@ -61,6 +61,19 @@
     // 那会儿如果 pushBuf 还是 undefined，`typeof` 判断反而会把它当成"未声明"。
     var pushBuf = [];
 
+    // 原生 console.log 的引用。
+    //
+    // ⚠️ emit 必须走**没被替换过的**那个函数。虽然在 JSB 里 `console.log`
+    // 是 non-configurable + non-writable、根本替换不掉（见下面的 hookLogging），
+    // 但万一哪天底层的 console 换成可写的了，emit -> console.log -> emit
+    // 就是无限递归 —— 这里留一手，成本为零。
+    var RAW_LOG = null;
+    try {
+        RAW_LOG = (typeof console !== "undefined" && typeof console.log === "function")
+            ? console.log : null;
+    } catch (e) {
+    }
+
     function emit(line) {
         lines.push(line);
         // 另存一份给上报用（flush() 会把 lines 清空，不能共用）
@@ -68,7 +81,11 @@
             pushBuf.push(line);
         }
         try {
-            console.log(TAG + "|" + line);
+            if (RAW_LOG) {
+                RAW_LOG.call(console, TAG + "|" + line);
+            } else {
+                console.log(TAG + "|" + line);
+            }
         } catch (e) {
         }
     }
@@ -147,6 +164,10 @@
 
     heartbeat(flush, 1000);
     heartbeat(pushLogs, 2000);
+    // hookLogging 是"什么时候 cc 在了就什么时候装上"，
+    // 一次装不全（cc 还没定义）就靠这个 heartbeat 重试。
+    // 装完之后 hookLogging 第一句就 return，开销可以忽略。
+    heartbeat(hookLogging, 2000);
 
     // ------------------------------------------------------------------
     // 探针日志上报给 devtools
@@ -539,13 +560,15 @@
         if (hooked.logging) {
             return true;
         }
-        hooked.logging = true;
         var wrap = function (name, obj, tag) {
             if (!obj || typeof obj[name] !== "function") {
-                return;
+                return false;
+            }
+            if (obj[name].__oppaiWrapped) {
+                return true;
             }
             var orig = obj[name];
-            obj[name] = function () {
+            var w = function () {
                 try {
                     emit("GAMELOG " + tag + name + ": " +
                         Array.prototype.slice.call(arguments).join(" "));
@@ -553,16 +576,43 @@
                 }
                 return orig.apply(this, arguments);
             };
+            w.__oppaiWrapped = true;
+            try {
+                obj[name] = w;
+            } catch (e) {
+                return false;
+            }
+            // 赋值可能静默失败（见下面 console 的说明），读回来确认一下
+            return obj[name] === w;
         };
-        wrap("log", window.console, "console.");
-        wrap("warn", window.console, "console.");
-        wrap("error", window.console, "console.");
+
+        // ⚠️ **不要试图包 console.log。**
+        //
+        // JSB 里的 console 是原生对象，实测：
+        //     Object.getOwnPropertyDescriptor(console, 'log')
+        //       -> {value: [native], writable: false, configurable: false}
+        //     console.log = fn          // 非严格模式下静默失败，读回来还是原生的
+        //     Object.defineProperty(...) // TypeError: can't redefine non-configurable property
+        // 也就是说客户端**根本没法**从 JS 侧拦 console.log。
+        // （早先这里写过 wrap("log", window.console, "console.")，
+        //   它一直是个空转 —— 而且掩盖了"为什么 console.log 看不到"这个问题的答案。）
+        //
+        // 想看到 console.log 只有一条路：从 logcat 收原文。
+        // 调试台已经这么做了（gamesrv/devtools.py 的 _LogcatTailer 收
+        // `cocos2d-x debug info` 这个 tag 下、属于游戏 pid 的行，
+        // 来源标成 console）。要转发请用 cc.log。
+
+        var ok = true;
         if (window.cc) {
-            wrap("log", cc, "cc.");
+            ok = wrap("log", cc, "cc.") && ok;
             wrap("warn", cc, "cc.");
             wrap("error", cc, "cc.");
+            wrap("info", cc, "cc.");
+        } else {
+            ok = false;
         }
-        return true;
+        hooked.logging = ok;      // 没装全就留给下一次 heartbeat 重试
+        return ok;
     }
 
     // ------------------------------------------------------------------

@@ -539,7 +539,7 @@ async function loadBackups() {
 // ---------------------------------------------------------------- 日志面板
 
 function addLog(source, tag, level, body, kind) {
-  const cls = kind || (source === 'server' ? 'server' : source);
+  const cls = kind || source;
   const entry = { source: cls, tag: tag, level: level, body: body, ts: Date.now() / 1000 };
   state.logs.push(entry);
   if (state.logs.length > state.logsMax) state.logs.shift();
@@ -554,13 +554,20 @@ function matchesLogFilter(entry) {
   return true;
 }
 
+function logLineNode(entry) {
+  const line = el('div', 'ln ' + entry.source + ' ' + (entry.level || ''));
+  const label = entry.source === 'server'
+    ? entry.tag + (entry.level ? '/' + entry.level : '')
+    : entry.source;
+  line.appendChild(el('span', 'tag', label));
+  line.appendChild(el('span', 'body', entry.body));
+  return line;
+}
+
 function appendLogLine(entry) {
   const out = $('lg-out');
   const atBottom = out.scrollTop + out.clientHeight >= out.scrollHeight - 40;
-  const line = el('div', 'ln ' + entry.source + ' ' + (entry.level || ''));
-  line.appendChild(el('span', 'tag', entry.source === 'server' ? entry.tag + (entry.level ? '/' + entry.level : '') : entry.tag));
-  line.appendChild(el('span', 'body', entry.body));
-  out.appendChild(line);
+  out.appendChild(logLineNode(entry));
   while (out.childElementCount > state.logsMax) out.removeChild(out.firstChild);
   if ($('lg-autoscroll').checked && atBottom) out.scrollTop = out.scrollHeight;
 }
@@ -568,12 +575,7 @@ function appendLogLine(entry) {
 function redrawLogs() {
   const out = $('lg-out');
   out.textContent = '';
-  state.logs.filter(matchesLogFilter).forEach((entry) => {
-    const line = el('div', 'ln ' + entry.source + ' ' + (entry.level || ''));
-    line.appendChild(el('span', 'tag', entry.source === 'server' ? entry.tag + (entry.level ? '/' + entry.level : '') : entry.tag));
-    line.appendChild(el('span', 'body', entry.body));
-    out.appendChild(line);
-  });
+  state.logs.filter(matchesLogFilter).forEach((entry) => out.appendChild(logLineNode(entry)));
   out.scrollTop = out.scrollHeight;
 }
 
@@ -778,6 +780,20 @@ function setupLogs() {
   onClick('lg-logcat-start', () => logcat('start'));
   onClick('lg-logcat-stop', () => logcat('stop'));
   onClick('lg-logcat-clear', () => logcat('clear'));
+  onClick('lg-cc-help', async () => {
+    toast(
+      'console.log 会显示，但它在 JSB 里是 non-configurable + non-writable —— ' +
+      '客户端没法从 JS 侧包一层（赋值静默失败、defineProperty 直接抛异常），\n' +
+      '所以 probe.js 的 hookLogging 里 console.* 那几行一直是空转，只有 cc.log 真的被包上了。\n' +
+      '调试台直接从 logcat 收原生输出，来源标成 console（顶部单另有一档过滤）。\n\n' +
+      '几种写法的差别：\n' +
+      '  console.log(x)         -> 进「console.log」档（原文，无前缀）\n' +
+      '  cc.log(x)              -> 进「探针」档，带 GAMELOG cc.log: 前缀\n' +
+      '__oppaiHook__.log(x)   -> 进「探针」档，原文\n\n' +
+      '⚠️ 原生 console.log 只吃一个参数：console.log("a", b) 会抛\n' +
+      '   "js_console_log : wrong number of arguments"，自己 join 一下。',
+      'ok');
+  });
 }
 
 function setupData() {

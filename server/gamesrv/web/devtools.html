@@ -98,11 +98,13 @@
     <div class="bar">
       <input id="lg-filter" placeholder="过滤关键词">
       <label class="chk"><input type="radio" name="lgsrc" value="all" checked> 全部</label>
-      <label class="chk"><input type="radio" name="lgsrc" value="client"> 客户端</label>
-      <label class="chk"><input type="radio" name="lgsrc" value="probe"> 探针上报</label>
+      <label class="chk" title="探针行：GAMELOG / GAME REQ / CRYPT / POPUP 等"><input type="radio" name="lgsrc" value="client"> 探针</label>
+      <label class="chk" title="原生 console.log 的输出（JSB 里没法从 JS 侧包一层，只能从 logcat 收原文）"><input type="radio" name="lgsrc" value="console"> console.log</label>
+      <label class="chk" title="probe.js 通过 POST /hook/log 主动上报"><input type="radio" name="lgsrc" value="probe"> 上报</label>
       <label class="chk"><input type="radio" name="lgsrc" value="server"> 服务端</label>
       <label class="chk"><input type="checkbox" id="lg-autoscroll" checked> 自动滚动</label>
       <span class="spacer"></span>
+      <button id="lg-cc-help" class="ghost" title="console.log 在 JSB 里无法被覆盖，只能走 logcat 收原文">console.log 收得到吗？</button>
       <button id="lg-logcat-start" class="ghost">启动 logcat</button>
       <button id="lg-logcat-stop" class="ghost">停止</button>
       <button id="lg-logcat-clear" class="ghost">清空 logcat</button>

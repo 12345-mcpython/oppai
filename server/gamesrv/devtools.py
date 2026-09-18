@@ -23,6 +23,7 @@
 from __future__ import annotations
 
 import io
+import collections
 import json
 import os
 import re
@@ -109,18 +110,66 @@ def _read_web(name: str) -> str | None:
 # 客户端日志：adb logcat 尾随
 # ---------------------------------------------------------------------------
 
+# cocos2d-x 的 `LOGD` / `log()` / `console.log()` 全部落在这个 tag 下
+COCOS_TAG = "cocos2d-x debug info"
+
+# 游戏包名（用来只收这个进程的 console 输出，别把模拟器里别的 App 也捞进来）
+GAME_PKG = os.environ.get("GS_APK_PKG", "com.cm.zcsmw.baidu")
+
+# 解析过的游戏 pid（`pidof` 每次重启都会变，所以带 TTL）
+_pid_cache: int | None = None
+_pid_at = 0.0
+_pid_lock = threading.Lock()
+
+
+def _game_pid(force: bool = False) -> int | None:
+    global _pid_cache, _pid_at
+    now = time.time()
+    with _pid_lock:
+        if not force and _pid_cache and now - _pid_at < 30:
+            return _pid_cache
+    pid = None
+    try:
+        out = subprocess.run([ADB, "-s", ADB_SERIAL, "shell", "pidof", GAME_PKG],
+                             capture_output=True, text=True, encoding="utf-8",
+                             errors="replace", timeout=8).stdout or ""
+        pid = int(out.split()[0])
+    except Exception:  # noqa: BLE001
+        pid = None
+    with _pid_lock:
+        _pid_cache = pid
+        _pid_at = time.time()
+    return pid
+
+
 class _LogcatTailer:
-    """`adb logcat -v brief` 长跑，把探针行喂进总线。
+    """`adb logcat -v brief` 长跑，把客户端的日志喂进总线。
 
     为什么用 logcat 而不是直接读设备上的 `hook.log`：
-        `probe.js` 的 `emit()` 除了写文件还会 `console.log("OPPAIHOOK|" + line)`，
         logcat 是**流式**的，不用轮询文件、也不依赖 root。
 
+    收两类行：
+
+    **① 探针行**（含 `OPPAIHOOK|`）—— `probe.js` 的 `emit()` 打的，
+    里面有 `GAMELOG cc.log: …`（客户端 `cc.log` 被探针包了一层）、
+    `GAME REQ/RESP`、`CRYPT` 之类。来源标成 `client`。
+
+    **② 原生 console 行** —— 直接是 `console.log()` 的输出。
+    为什么要单独收：**`console.log` 在 JSB 里是 non-configurable + non-writable，
+    客户端根本没法从 JS 侧包一层**（实测 `console.log = fn` 静默失败、
+    `Object.defineProperty` 直接抛 `can't redefine non-configurable property`）。
+    所以 `probe.js` 的 `hookLogging()` 里那几行 `console.*` 一直是空转 ——
+    只有 `cc.log` 真的被包上了。想看到 `console.log` 就只能从 logcat 收原文。
+    来源标成 `console`，前端默认单独一档过滤。
+
     ⚠️ `-v brief` 只给消息的第一行加前缀，多行消息的后续行是"裸"的。
-    所以这里用 `_in_block` 记住「上一行是不是探针行」，裸行跟着上一行一起收，
+    所以这里记住「上一行属于哪个来源」，裸行跟着上一行一起收，
     否则 `safeJson` 展开的多行对象会被吃掉一半。
     """
 
+    # `D/cocos2d-x debug info( 1725): 正文`
+    LINE_RE = re.compile(r"^[VDIWEF]/(?P<tag>[^(]+)\(\s*(?P<pid>\d+)\): (?P<msg>.*)$")
+    # 裸行（多行消息的续行）—— 有 logcat 前缀的才算是新行
     PREFIX_RE = re.compile(r"^[VDIWEF]/")
 
     def __init__(self) -> None:
@@ -131,6 +180,9 @@ class _LogcatTailer:
         self.lines = 0
         self.error = ""
         self.started_at = 0.0
+        # 最近见过的 `GAMELOG cc.log: X` 的 X —— 原生那行马上会跟着来，
+        # 用它去重，免得同一条日志在面板里出现两遍。
+        self._recent_gamelog: collections.deque = collections.deque(maxlen=64)
 
     def start(self) -> bool:
         with self._lock:
@@ -157,6 +209,8 @@ class _LogcatTailer:
             "startedAt": self.started_at,
             "adb": ADB,
             "serial": ADB_SERIAL,
+            "gamePid": _game_pid(),
+            "pkg": GAME_PKG,
         }
 
     def _run(self) -> None:
@@ -177,23 +231,21 @@ class _LogcatTailer:
                 continue
 
             self.error = ""
-            in_block = False
+            _game_pid(force=True)
+            last_source: str | None = None
             try:
                 assert proc.stdout is not None
                 for raw in proc.stdout:
                     if self._stop.is_set():
                         break
                     line = raw.rstrip("\r\n")
-                    marker = line.find(LOGCAT_MARK + "|")
-                    if marker >= 0:
-                        in_block = True
-                        self._emit(line[marker + len(LOGCAT_MARK) + 1:])
-                    elif in_block and not self.PREFIX_RE.match(line):
-                        # 多行消息的续行
-                        if line.strip():
-                            self._emit(line)
-                    else:
-                        in_block = False
+                    source, text = self._classify(line, last_source)
+                    if source is None:
+                        last_source = None
+                        continue
+                    last_source = source
+                    if text:
+                        self._emit(text, source)
             except Exception as exc:  # noqa: BLE001
                 self.error = f"读取 logcat 失败: {exc}"
             finally:
@@ -217,9 +269,54 @@ class _LogcatTailer:
                 break
         self.running = False
 
-    def _emit(self, line: str) -> None:
+    def _classify(self, line: str, last_source: str | None):
+        """一行 logcat -> (来源, 正文)。返回 (None, "") 表示丢弃。"""
+        match = self.LINE_RE.match(line)
+        if match is None:
+            # 没有前缀 = 上一条多行消息的续行
+            if last_source and line.strip():
+                return last_source, line
+            return None, ""
+
+        msg = match.group("msg")
+        marker = msg.find(LOGCAT_MARK + "|")
+        if marker >= 0:
+            text = msg[marker + len(LOGCAT_MARK) + 1:]
+            self._remember_gamelog(text)
+            return "client", text
+
+        # 原生 console 输出
+        if match.group("tag").strip() == COCOS_TAG:
+            pid = _game_pid()
+            try:
+                this_pid = int(match.group("pid"))
+            except (TypeError, ValueError):
+                this_pid = -1
+            if pid is not None and this_pid != pid:
+                return None, ""
+            if self._is_gamelog_echo(msg):
+                return None, ""
+            return "console", msg
+
+        return None, ""
+
+    def _remember_gamelog(self, text: str) -> None:
+        """`GAMELOG cc.log: XXX` -> 记住 XXX（原生那行紧接着就会来）。"""
+        if not text.startswith("GAMELOG "):
+            return
+        sep = text.find(": ")
+        if sep >= 0:
+            self._recent_gamelog.append((time.time(), text[sep + 2:]))
+
+    def _is_gamelog_echo(self, msg: str) -> bool:
+        now = time.time()
+        while self._recent_gamelog and now - self._recent_gamelog[0][0] > 5.0:
+            self._recent_gamelog.popleft()
+        return any(payload == msg for _, payload in self._recent_gamelog)
+
+    def _emit(self, line: str, source: str = "client") -> None:
         self.lines += 1
-        _publish_client_line(line)
+        _publish_client_line(line, source=source)
 
 
 _tailer = _LogcatTailer()
@@ -230,8 +327,16 @@ _tailer = _LogcatTailer()
 _push_seen_at = 0.0
 
 
-def _publish_client_line(line: str, source: str = "logcat") -> None:
-    if source == "logcat" and time.time() - _push_seen_at < 15.0:
+def _publish_client_line(line: str, source: str = "client") -> None:
+    """把一条客户端日志发到总线上。
+
+    `source` 是**前端过滤用的档位**：
+      `client`  —— 探针行（`OPPAIHOOK|…`，含 `GAMELOG cc.log: …` / `GAME REQ` / `CRYPT`）
+      `console` —— 原生 `console.log()` 的输出（JSB 里没法从 JS 侧包，只能从 logcat 收）
+      `probe`   —— `probe.js` 通过 `POST /hook/log` 主动上报的
+    """
+    if source in ("client", "console") and time.time() - _push_seen_at < 15.0:
+        # 探针主动上报那条路活着时，logcat 这边静音，免得重复
         return
     devbus.publish("client", source=source, line=line[:4000])
 
@@ -870,6 +975,11 @@ def build(service) -> None:
         走的是**客户端自己的** `server.request`（而不是服务端直接 dispatch），
         这样探针的 `GAME REQ`/`GAME RESP` 会照常打日志，
         而且真的会经过加密/解密/响应派发那条完整链路 —— 排障时这才是要验的东西。
+
+        ⚠️ 回包用 `__oppaiHook__.log` 打，**不能用 `console.log`**：
+        原生 `console.log` 在 JSB 里是 non-configurable + non-writable，
+        客户端包不了，探针也就不可能把它的输出打上 `OPPAIHOOK|` 前缀，
+        日志面板按前缀过滤时是看不到的（说明见 `_LogcatTailer` 的 docstring）。
         """
         denied = _guard(req)
         if denied:
@@ -881,11 +991,15 @@ def build(service) -> None:
             return _err("route 不能为空")
         if msg is None:
             msg = {}
+        route_js = json.dumps(route)
         code = (
             "(function(){"
-            f"  server.request({json.dumps(route)}, {json.dumps(msg, ensure_ascii=False)},"
-            "    function(e, d){ console.log('REPLAY ' + " + json.dumps(route) +
-            "      + ' => ' + JSON.stringify(e ? {err:String(e)} : d)); });"
+            "  var say = (window.__oppaiHook__ && __oppaiHook__.log) || (window.cc && cc.log);"
+            f"  server.request({route_js}, {json.dumps(msg, ensure_ascii=False)},"
+            "    function(e, d){"
+            "      try { say('REPLAY ' + " + route_js +
+            "        + ' => ' + JSON.stringify(e ? {err: String(e)} : d)); } catch (x) {}"
+            "    });"
             "  return 'sent';"
             "})()"
         )

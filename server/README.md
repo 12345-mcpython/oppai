@@ -450,6 +450,8 @@ quicksdk.sdkLoginCallback(1, "emulator", "emulator-token")
 | `REQ / PACK / UNPACK / WS / GAMELOG` 日志 | 网络层调用、加密函数十六进制输入输出、WebSocket 生命周期、游戏自己的 `cc.log` 全转发到 logcat |
 | `SCHEMA` 探测 | 用 `Proxy` 记录客户端读了响应里的哪些字段 |
 | **REPL** | 轮询 `<cdn>/hook/poll` 执行 JS，结果 POST 回 `/hook/result` —— 等于在游戏进程里开了个控制台 |
+| 日志转发 | 包一层 `cc.log/warn/error`，每条发一条 `GAMELOG cc.log: …`。**`console.log` 包不了**（JSB 里 non-configurable + non-writable，赋值静默失败），要看它得从 logcat 收原文 —— 调试台已经这么做了 |
+| 日志上报 | 每 2 秒把攒下的日志 `POST` 到 `<cdn>/hook/log`，debugtools 收到后自动把 logcat 那条路静音（避免重复） |
 | 调用序列追踪 | 登录期把 `Player` / `Gacha` / `guideManager` 的调用逐个打出来，出错直接给 stack |
 | 两个开关 | `AUTO_AFTER_LOGIN` / `AUTO_CLICK_START`（默认都关，手动点） |
 
@@ -671,7 +673,7 @@ python tools\disasm_func.py <file.jsc> cb4AfterLogin
 | **原生 `new XMLHttpRequest()` 发不出去** | 探针的 XHR 永远不回调 | 用 `cc.loader.getXMLHttpRequest()` |
 | **GET 的 body 传数字会静默卡住** | 轮询请求根本没发出 | body 必须 `String(...)` |
 | **`jsb.fileUtils.writeStringToFile` 不存在** | 探针写文件失败 | 改用 logcat |
-| **游戏自己的 `cc.log` 不进 logcat** | 看不到客户端内部报错 | 探针包一层 `console.log`/`cc.log` 转发（`GAMELOG`） |
+| **游戏自己的 `cc.log` 不进 logcat** | 看不到客户端内部报错 | 探针包一层 `cc.log` 转发（`GAMELOG`）。⚠️ `console.log` **包不了** —— JSB 里它是 `writable:false, configurable:false`，只能从 logcat 收原文，见 [docs/devtools.md §1.4](docs/devtools.md) |
 | ⚠️ **探针不要重写 `server.request`** | 「服务端推数据」全部失效（任务领奖成功但不刷新），改服务端怎么改都没用 | 只能**包一层**打日志，行为交给原实现。原生实现里带着 `responseConfig` 派发 |
 | **`responseConfig` 压根没被派发** | 响应里出现 `quest`/`player` 也不会 `updateByServer` | 客户端 `patch.js` 里自己补了一层 `RESP-DISPATCH` |
 | **一个士兵构造失败会丢整份列表** | 编成里一个兵都没有 | `CharCenter` 是整体 try；只能用实测 `new` 得出来的 key（`lfcz01` 会抛 `row is undefined`） |

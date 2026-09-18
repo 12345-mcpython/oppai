@@ -214,6 +214,8 @@ vanilla 不传参 → 游戏代码 `function (eventName) { if (/began\d/.test(ev
 | 日志刷屏（每帧一条） | 引擎自己的 LOGD | 引擎补丁 ③ + `vlog()` |
 | 调试台打开是**白板** | `devtools.js` 抛异常（最常见的是引用了 HTML 里没有的 id） | 页面顶部红条会写出来；也跑 `python tools\check_devtools.py` |
 | 调试台**流量面板不动** | 事件总线的长轮询断了（服务端刚重启） | 刷新页面；`/devtools/api/overview` 里看 `bus.seq` 有没有在涨 |
+| 客户端 `console.log` 在日志面板里**看不到** | JSB 里 `console.log` 是 `writable:false, configurable:false`，**客户端没法包一层**（赋值静默失败），探针一直没转发到；只有 `cc.log` 被包上了 | 调试台改成从 logcat 收 `cocos2d-x debug info` tag 的原文，单独一档「console.log」；要转发请用 `cc.log` —— 见 §11.4 |
+| `console.log('a', b)` 抛 `js_console_log : wrong number of arguments` | 原生 `console.log` **只接受一个参数** | 自己 `[a, b].join(' ')` |
 
 ---
 
