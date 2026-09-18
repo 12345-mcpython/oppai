@@ -69,7 +69,7 @@ game_server/
 │   ├── jsc_disasm.py          ★ jsc 反汇编器（SM33.1.1 XDR 字节码）
 │   ├── disasm_func.py         按函数名反汇编
 │   ├── gen_opcodes.py         从 Opcodes.h 生成操作码表
-│   ├── patch_apk.py           打 URL 补丁 + 注入探针/dex/资源 + 剔除无用文件 + 重签名
+│   ├── build_apk.py           改 assets + apktool 打包 + 对齐 + 签名
 │   ├── repl.py                在游戏进程里执行任意 JS
 │   ├── probe.py               重启客户端 + 批量执行 JS
 │   ├── selftest_game.py       不开游戏也能自测业务协议
@@ -131,7 +131,7 @@ apktool.bat b . --no-apk --no-crunch        # 产物在 <解包目录>\build\apk
 
 # 3) 打 URL 补丁 + 注入探针 + 注入 dex + 重新签名
 cd game_server
-python tools\patch_apk.py --host <主机IP> --port 18080 --login-port 8080
+python tools\build_apk.py --host <主机IP>
 
 # 4) 安装
 adb install -r -d E:\code\apk\work\zcsmw-mod-signed.apk
@@ -170,9 +170,8 @@ python tools\sdk_strip\analyze.py --json tools\sdk_strip\needed.json
 python tools\sdk_strip\strip.py
 python tools\sdk_strip\gen_native_stubs.py
 
-# 3) 重编译 smali+资源，再打包
-apktool b <解包目录> --no-apk --no-crunch
-python tools\patch_apk.py
+# 3) 改 assets + apktool 打包 + 签名（一步搞定）
+python tools\build_apk.py --host <主机IP>
 ```
 
 #### 删掉了什么
@@ -315,7 +314,7 @@ APK 只小了 6.33 MB —— 因为 540 MB 是游戏资源（png/mp3），SDK �
 >
 > 想再往上提，只能先把 QuickSDK / 百度 SDK 整套删掉。
 
-`tools/patch_apk.py --strip` 默认剔除：
+`tools/build_apk.py` 的 `DROP_ASSETS` 默认剔除：
 
 ```
 assets/res/adimage/        广告图（广告服务早已下线）
@@ -390,7 +389,7 @@ var AUTO_CLICK_START = false;   // 是否自动代替玩家点「开始游戏」
 
 ### 4.3 其它重定向
 
-`tools/patch_apk.py` 会做（全部是**原地等长字节替换**）：
+`tools/build_apk.py` 会做（全部是**原地等长字节替换**）：
 
 | 文件 | 替换 |
 |------|------|

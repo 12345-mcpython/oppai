@@ -2,77 +2,77 @@
 
 ## 一句话
 
-**不重新打包，而是在原版 APK 上做外科手术** —— 只把真正改动过的那几个小文件换掉。
+**所有改动都落在 apktool 的解包目录里，然后让 apktool 打完整包。**
 
-原因：`apktool b` 完整重建会把 **540 MB 的 assets 重新压缩一遍**，
-慢（10 分钟以上）、而且会改变压缩方式和 zip 对齐，风险大收益小。
-游戏资源一个字节都不需要动，没必要陪跑。
+早期版本试过「以原版 APK 为底，手动拼 zip 只换改动的小文件」——确实快，
+但绕过了 aapt2 的资源组装，剔除文件也只能靠字符串前缀匹配，不够可控。
+实测完整 `apktool b` 只要 **1 分钟左右**（增量还更快），产物只大 0.1 MB，
+所以现在统一走标准流程。
+
+```
+① apktool d zcsmw.apk                   解包（一次性，产物 zcsmw/）
+        ↓
+② 改解包目录                              ← 四个脚本，全部幂等，可重复跑
+     client/patch_smali.py               Java 层登录补丁
+     client/modernize.py                 现代化（sdk 版本 / 明文 HTTP / 运行时权限）
+     tools/sdk_strip/strip.py            删 SDK + 装桩 + 清 manifest
+     tools/sdk_strip/gen_native_stubs.py 生成 .so 硬依赖的桩
+        ↓
+③ python tools/build_apk.py              ★ 改 assets + apktool b + 对齐 + 签名
+        ↓
+④ adb install -r -d
+```
+
+**只改服务端时不用打包** —— 那只是 Python 代码，重启 `run.py` 就行。
 
 ---
 
-## 流水线
+## 第 ③ 步 `build_apk.py` 做什么
+
+### 1. 改解包目录里的资源
+
+| 文件 | 改动 |
+|---|---|
+| `assets/srcex/urlconfig.jsc` | CDN 地址**原地等长替换** |
+| `assets/src/util/server.jsc` | 登录服务地址（客户端里硬编码的 `OAUTH_HOST`） |
+| `assets/src/data/share.jsc` | 分享服务地址 |
+| `assets/src/patch/project.manifest` | 热更地址 |
+| `assets/project.json` | `jsList` 里追加 `src/patch/hook.js` |
+| `assets/src/patch/hook.js` | 写入探针（把 `__CDN_BASE__` 换成真实地址） |
+
+### 2. 删掉用不到的资源
 
 ```
-① apktool d zcsmw.apk             解包（一次性，产物 zcsmw/）
-        ↓
-② 改 smali / manifest             ← 三个脚本，都是幂等的，可以重复跑
-     client/patch_smali.py        Java 层登录补丁
-     client/modernize.py          现代化（sdk 版本 / 明文 HTTP / 运行时权限）
-     tools/sdk_strip/strip.py     删 SDK + 装桩 + 清 manifest
-        ↓
-③ apktool b zcsmw --no-apk --no-crunch
-        ↓  产物在 zcsmw/build/apk/：
-        ↓    classes.dex / classes2.dex / AndroidManifest.xml / resources.arsc / res/
-        ↓
-④ python tools/patch_apk.py       ★ 以原版 APK 为底，逐条目替换/剔除/追加
-        ↓
-⑤ zipalign -f -p 4
-        ↓
-⑥ apksigner sign（v1 + v2）
-        ↓
-⑦ adb install -r -d
+assets/res/adimage          广告原图（广告服务早停）
+assets/res/adcolumn
+assets/bdpwxpayplugin.apk   百度支付插件
+assets/quicksdk.xml         QuickSDK 配置
+assets/com.qk.plugin.qkfx.Manager   QuickSDK 插件管理器
+assets/open_sdk_file.dat    QQ 互联 SDK
+unknown/                    apktool 的「未知文件」目录
+                            （里面只剩微博 CA 证书 x2 + 百度渠道号）
 ```
 
-### 第 ② 步：为什么不直接改 dex
+`lib/` 下没用的 `.so` 已经由 `sdk_strip/strip.py` 删过了。
+依据是跑起来之后 `/proc/<pid>/maps` 里**只有 `libcocos2djs.so` 被加载**。
 
-apktool 解包后是 smali 文本，不是 dex。改 smali 很直观（可读、可 diff），
-但**必须重编译**才能生效 —— 这就是第 ③ 步只重编译 smali 和资源的原因。
+### 3. 剪掉 `apktool.yml` 里失效的 `doNotCompress`
 
-### 第 ③ 步：`--no-apk --no-crunch` 两个参数
+apktool 把原版的压缩设置记在 `doNotCompress` 里。文件删了但条目还在时，
+apktool 会照样按「不压缩」处理，有时还会把原版 APK 里的 unknown file 一起带进产物。
+所以打包前会扫一遍，把**指向不存在路径**的条目剪掉
+（只剪含 `/` 的路径条目，`arsc` / `png` / `mp3` 这种扩展名条目不能动）。
 
-| 参数 | 作用 |
-|---|---|
-| `--no-apk` | 不要打成 APK，只要 `build/apk/` 里的中间产物（我们要自己组装） |
-| `--no-crunch` | 不重新编码 PNG。省时间，也避免画质/格式被 aapt2 改动 |
+### 4. `apktool b <目录> -o out.apk --no-crunch`
 
-这一步**不碰 assets**（apktool 的 `build/apk/` 里根本没有 assets 目录），
-所以 540 MB 资源全程原封不动。
+`--no-crunch` = 不重新编码 PNG（省时间，也避免画质/格式被 aapt2 改动）。
 
-### 第 ④ 步：`patch_apk.py` 到底做了什么
+### 5. zipalign + apksigner
 
-打开**原版 APK**，遍历每一条 zip 条目，按规则处理：
-
-| 规则 | 处理 |
-|---|---|
-| `META-INF/*.SF/.RSA/.DSA/.MF` | **跳过**（旧签名，反正要重签） |
-| `--strip` 前缀命中 | **跳过**（广告图 / 百度支付插件 / quicksdk.xml） |
-| `lib/` 下不在 `KEEP_LIBS` 的 `.so` | **跳过**（实测只有 `libcocos2djs.so` 会被加载） |
-| `classes*.dex` | **替换**成 `build/apk/` 里重编译的 |
-| `AndroidManifest.xml` | **替换**成重编译的（现代化补丁改过） |
-| `resources.arsc` | **替换**成重编译的，并强制 **STORED**（不压缩） |
-| `assets/srcex/urlconfig.jsc` | **原地改**：CDN 地址等长替换 |
-| `assets/src/util/server.jsc` | **原地改**：登录服务地址等长替换 |
-| `assets/src/data/share.jsc` | 同上 |
-| `assets/src/patch/project.manifest`、`assets/project.json` | **原地改**：热更地址 |
-| 其余 | **原样拷贝**，连 `compress_type` 都照抄（原来 STORED 的还 STORED） |
-
-最后**追加**一条：`assets/src/patch/hook.js`
-（先把源码里的 `__CDN_BASE__` 占位符替换成真实地址再写进去）。
-
-### 为什么 `resources.arsc` 要 STORED
-
-Android 从某个版本起要求 `resources.arsc` **不能压缩**，且要 4 字节对齐
-（`zipalign -p 4` 负责页对齐）。原来 STORED 的条目我们也不动它。
+* `zipalign -f -p 4`（`-p` 保证 4 字节页对齐）
+* `apksigner` 同时开 **v1 + v2** 签名（老设备靠 v1，Android 7+ 用 v2）
+* keystore 不存在就自动 `keytool -genkeypair` 生成（别名 `oppai`，密码 `android`）
+* **必须重签**：改了内容原签名就失效；签名不同也无法覆盖安装官方版
 
 ---
 
@@ -90,36 +90,38 @@ Android 从某个版本起要求 `resources.arsc` **不能压缩**，且要 4 �
 
 **这就倒推出了端口位数的硬约束**：
 
-* CDN 端口**必须 5 位**（因为 `cdn.shuangmawei.net` 是 19 字节）
-* 登录端口**必须 4 位**（因为旧的 `:16840` 是 5 位数字 + 20 字节前缀 = 25）
+* CDN 端口**必须 5 位**（`cdn.shuangmawei.net` 是 19 字节）
+* 登录端口**必须 4 位**（旧的是 `http://` + IP + 5 位端口 = 25 字节）
 
-代码里会检查长度，不匹配直接 `raise SystemExit`，不会打出一个坏包。
+长度不匹配时脚本直接报错退出，不会产出坏包。
 
 ---
 
-## 签名
+## 幂等性
 
-* keystore 不存在时自动生成：
-  ```
-  keytool -genkeypair -alias oppai -keyalg RSA -keysize 2048 -validity 10000
-          -storepass android -keypass android
-  ```
-  默认落在 `E:\code\apk\work\debug.keystore`（可用 `GS_WORK_DIR` 改）
-* `apksigner` 同时开 **v1 + v2** 签名（老设备靠 v1，Android 7+ 用 v2）
-* **为什么必须重签**：改了内容原签名就失效；而且签名不同会导致
-  无法覆盖安装官方版（得先卸载）
+四个补丁脚本都可以重复跑，不会越跑越坏：
+
+| 脚本 | 幂等做法 |
+|---|---|
+| `patch_smali.py` | 检测「已经打过」的标记 |
+| `modernize.py` | 用正则替换 `<uses-sdk>`；注入前检查调用是否已存在 |
+| `strip.py` | 目录不存在就跳过；桩类直接覆盖 |
+| `build_apk.py` | URL 替换前先看**新地址是否已在**，是就跳过 |
+
+所以 `build_apk.py` 可以随便重跑 —— 换个 IP 再跑一次就行。
 
 ---
 
 ## 路径配置
 
-全都可以用环境变量覆盖，方便换机器：
+全部可用环境变量覆盖，方便换机器：
 
 | 变量 | 默认 | 说明 |
 |---|---|---|
-| `GS_APK_SRC` | `E:\code\apk\zcsmw.apk` | 原版 APK（只读，当底稿） |
+| `GS_APK_SRC` | `E:\code\apk\zcsmw.apk` | 原版 APK（只读，解包用） |
 | `GS_APK_DIR` | `E:\code\apk\zcsmw` | apktool 解包目录 |
 | `GS_WORK_DIR` | `E:\code\apk\work` | 产物目录（也放 keystore） |
+| `GS_APKTOOL` | `E:\code\apk\apktool.bat` | apktool |
 | `GS_BUILD_TOOLS` | `D:\Android\android-sdk\build-tools\36.0.0` | zipalign / apksigner |
 | `GS_JAVA_HOME` | `D:\java\zulu17...` | JDK |
 
@@ -128,32 +130,28 @@ Android 从某个版本起要求 `resources.arsc` **不能压缩**，且要 4 �
 ## 完整重建命令
 
 ```powershell
-$env:GS_APK_DIR = "E:\code\apk\zcsmw"
-
-# 1) 三个补丁（幂等，可重复跑）
+# 1) 四个补丁（幂等）
 python client\patch_smali.py
 python client\modernize.py
-python tools\sdk_strip\analyze.py --json tools\sdk_strip\needed.json   # SDK 删过就不用再跑
+python tools\sdk_strip\analyze.py --json tools\sdk_strip\needed.json   # SDK 没动过可跳过
 python tools\sdk_strip\strip.py
 python tools\sdk_strip\gen_native_stubs.py
 
-# 2) 只重编译 smali + 资源
-cd E:\code\apk
-apktool.bat b zcsmw --no-apk --no-crunch
+# 2) 改 assets + 打包 + 签名（一步）
+python tools\build_apk.py --host 10.110.29.230
 
-# 3) 组装 + 对齐 + 签名
-cd <repo>
-python tools\patch_apk.py --host 10.110.29.230 --port 18080 --login-port 8080
-
-# 4) 装
+# 3) 装
 adb install -r -d E:\code\apk\work\zcsmw-mod-signed.apk
 ```
 
-**只改服务端时不用打包** —— 那只是 Python 代码，重启 `run.py` 就行。
+`build_apk.py` 常用参数：
 
-**只改 `client/hook.js` 时**：hook.js 是明文注入的，改完只需要重跑第 3 步
-（不必再跑 apktool，因为 dex 没变）。如果想省时间可以加 `--no-dex`，
-但注意那会把 dex 退回原版的（登录补丁就没了）—— 所以实际上还是要跑 apktool。
+| 参数 | 说明 |
+|---|---|
+| `--host` / `--port` / `--login-port` | 服务端地址（端口位数有硬约束） |
+| `--skip-prepare` | 跳过改 assets，只重新打包 |
+| `--keep-intermediate` | 保留 `zcsmw-mod.apk` / `-aligned.apk` 中间产物 |
+| `--out` | 输出路径 |
 
 ---
 
@@ -161,20 +159,18 @@ adb install -r -d E:\code\apk\work\zcsmw-mod-signed.apk
 
 ```
 E:\code\apk\work\
-  zcsmw-mod.apk              组装好的、未对齐未签名
-  zcsmw-mod-aligned.apk      zipalign 之后
-  zcsmw-mod-signed.apk   ★   最终可安装
-  zcsmw-mod-signed.apk.idsig apksigner 生成的 v4 签名（可以不装）
+  zcsmw-mod-signed.apk   ★   最终可安装（默认会清掉中间产物）
   debug.keystore             签名密钥
 ```
 
 ---
 
-## 设计取舍小结
+## 实测数据
 
-1. **不重打 540 MB assets** —— 只在原版 APK 上替换真正改动的条目
-2. **原始 APK 只读** —— 所有产物都写到 `work/`，随时可以重来
-3. **补丁幂等** —— `modernize.py` / `patch_smali.py` / `strip.py` 都能重复跑，
-   不会越跑越坏（有「已经打过」的检测）
-4. **不用 apktool 的完整 APK** —— 避免资源重编号、压缩率变化、对齐丢失等副作用
-5. **长度检查前置** —— URL 替换不等长时直接报错退出，不会产出坏包
+| 项 | 值 |
+|---|---|
+| 完整打包耗时 | **约 1 分钟**（增量约 12 秒） |
+| APK 体积 | 545.1 MB（原版 551.6 MB） |
+| 条目数 | 14790 |
+| `lib/` | 只有 `libcocos2djs.so` |
+| `META-INF/` | 只有自己的签名 |
