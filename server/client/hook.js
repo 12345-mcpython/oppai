@@ -1639,6 +1639,67 @@
         emit("LGL-GUARD onPlayerMovieCallBack 已加幂等守卫");
     })();
 
+    // ------------------------------------------------------------------
+    // 引导层视频看门狗
+    //
+    // 视频能满屏正常播放，但播完后引擎的 COMPLETED(3) 事件没送到 JS，
+    // 于是 onPlayerMovieCallBack 永不触发、游戏卡在视频最后一帧。
+    //
+    // 兜底：轮询 _videoPlayer.isPlaying()，停播超过 2 秒就替引擎调一次
+    // onPlayerMovieCallBack(this, 3)。重复调用由幂等守卫挡掉。
+    // ------------------------------------------------------------------
+    (function installMovieWatchdog() {
+        if (typeof LaunchGuideLayer === "undefined" || !LaunchGuideLayer.prototype) {
+            if (!window.__oppaiMovieWdTimer) {
+                window.__oppaiMovieWdTimer = setInterval(function () {
+                    if (typeof LaunchGuideLayer !== "undefined" && LaunchGuideLayer.prototype) {
+                        clearInterval(window.__oppaiMovieWdTimer);
+                        window.__oppaiMovieWdTimer = null;
+                        installMovieWatchdog();
+                    }
+                }, 500);
+            }
+            return;
+        }
+        if (window.__oppaiMovieWdRunning) { return; }
+        window.__oppaiMovieWdRunning = true;
+
+        var stoppedSince = 0;
+        setInterval(function () {
+            try {
+                var g = window.__oppaiGuideRef;
+                if (!g || !g._videoPlayer) { stoppedSince = 0; return; }
+
+                var playing = true;
+                try { playing = g._videoPlayer.isPlaying(); } catch (e) { playing = false; }
+
+                if (playing) { stoppedSince = 0; return; }
+
+                if (!stoppedSince) { stoppedSince = Date.now(); return; }
+                if (Date.now() - stoppedSince < 2000) { return; }
+
+                emit("MOVIE-WD 视频已停播，兜底触发 COMPLETED");
+                stoppedSince = 0;
+                try {
+                    g.onPlayerMovieCallBack(g, 3);
+                } catch (e) {
+                    emit("MOVIE-WD 兜底回调出错 " + e);
+                }
+            } catch (e) { }
+        }, 500);
+
+        // 记录当前引导层实例（ctor 时挂上）
+        var origCtor = LaunchGuideLayer.prototype.ctor;
+        if (typeof origCtor === "function") {
+            LaunchGuideLayer.prototype.ctor = function () {
+                var r = origCtor.apply(this, arguments);
+                window.__oppaiGuideRef = this;
+                return r;
+            };
+        }
+        emit("MOVIE-WD 引导层视频看门狗已装");
+    })();
+
     var tries = 0;
     var timer = setInterval(function () {
         tries++;
