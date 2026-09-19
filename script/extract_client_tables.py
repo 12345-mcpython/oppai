@@ -399,15 +399,22 @@ FAVOR_CONSTANT_JS = r"""
 """
 
 
-# `table_item`（全部 3912 件道具）。
+# `table_item`（全部 481 件道具）。
 #
-# 为什么服务端一直没抽它、现在又要抽：**服务端只有两处真的需要整张道具表** ——
+# 为什么服务端一直没抽它、现在又要抽：**服务端有三处真的需要整张道具表** ——
 #   1. `items._item_limit()`：`Bag._addCount` 会按 `table_item[key].limit_count` 截断，
 #      服务端要按同一个上限发，不然客户端拿到超上限的堆叠会自己夹掉（数量对不上）
 #   2. 换装 / 换背景要判断 `table_item[itemKey].type`
 #      （CLOTHES=40 / BG_IMG=50），否则随便编个 key 就能换上去
+#   3. **找角色的「默认衣服」**（见 favor.default_clothes）。判据是
+#      `icon == "appareldefault"` 或 `replace_key == char_key`（后者等于"不替换立绘"）。
+#      ⚠️ 这个字段不是可选的：`curClothes` 给空串的话，客户端
+#      `favorManager.createExpSpriteEx` 第一句 `bag.getItem("")` 就是 undefined，
+#      直接 `return undefined` —— 抚摸特效拿不到表情立绘就不往下走，
+#      表现是**摸角色完全没反应（不扣次数、不加好感度）**，而 logcat 里只有
+#      一行 `favorManager.createExpSprite error, clothes item not found`。
 #
-# ⚠️ 只留这四个字段。整表 3912 行全字段几十万字，`/control/eval` 的返回值要
+# ⚠️ 只留这几个字段。整表 481 行全字段的话，`/control/eval` 的返回值要
 # base64 + DES 走一遍 HTTP，抽的时候会把模拟器压到卡（已验证过一次）。
 ITEM_JS = r"""
 (function () {
@@ -415,8 +422,8 @@ ITEM_JS = r"""
     for (var k in table_item) {
         var r = table_item[k];
         if (!r) { continue; }
-        out[k] = {n: r.name, t: r.type, q: r.quality,
-                  lc: r.limit_count || 0, ck: r.char_key || ""};
+        out[k] = {n: r.name, t: r.type, q: r.quality, lc: r.limit_count || 0,
+                  ck: r.char_key || "", ic: r.icon || "", rk: r.replace_key || ""};
     }
     return JSON.stringify(out);
 })()

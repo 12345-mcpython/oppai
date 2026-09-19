@@ -422,6 +422,10 @@ def new_favor_row(char_key: str, favor_id: int) -> dict:
         "id": favor_id,
         "lv": 1,
         "curExp": 0,
+        # ⚠️ 这里留空，由 `favor.ensure_default_looks()` 在登录时补成角色的默认衣服
+        #    （要查 table_item，store 这层不能 import items，见 favor.default_clothes）。
+        #    **不能一直留空**：客户端 `createExpSpriteEx` 会 `bag.getItem("")` 拿到
+        #    undefined 然后直接 return，表现是抚摸完全没反应。
         "curClothes": "",
         # 新衣服 / 新背景：客户端 `getHaveNewClothes()` 是 `for (var k in _newClothes) return true`，
         # 所以形状是**集合**（`{itemKey: 1}`），不是数组。

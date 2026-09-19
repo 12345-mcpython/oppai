@@ -194,6 +194,10 @@ def get_login_data(session: dict, msg: dict, req_id):
     # 不然 `get_or_create_player()` 每次重新 load，id 每次都是新的。
     if favor.ensure_favors(player):
         store.save_player(player)
+    # 默认衣服。**不补的话抚摸完全没反应**（客户端拿不到表情立绘直接 return），
+    # 见 gamesrv/favor.py 里 default_clothes 那段。
+    if favor.ensure_default_looks(player):
+        store.save_player(player)
     # 宿舍事件同理：好感度到级就解锁，登录时把还没建的补上。
     new_events = favor.sync_events(player)
     if new_events:
@@ -228,6 +232,8 @@ def create_player(session: dict, msg: dict, req_id):
     log.info("agent.createplayer account=%s activeCode=%s", account, active_code)
     player = store.get_or_create_player(account)
     if favor.ensure_favors(player):
+        store.save_player(player)
+    if favor.ensure_default_looks(player):
         store.save_player(player)
     new_events = favor.sync_events(player)
     if new_events:

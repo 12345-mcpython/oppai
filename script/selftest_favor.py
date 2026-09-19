@@ -222,19 +222,26 @@ def desc_check():
 
 def look_check():
     print("== 换装 / 换背景 ==")
-    clothes = [k for k, v in items.table("table_item").items() if v.get("t") == 40]
-    bgs = [k for k, v in items.table("table_item").items() if v.get("t") == 50]
-    check("table_item 抽到了衣服", len(clothes) > 0, "%d 件" % len(clothes))
-    r = call(hfavor.set_clothes, {"charKey": "hadf", "itemKey": clothes[0]}, 7)
+    reload_()
+    # ⚠️ 别用 key 最小的那件衣服 —— `ensure_default_looks` 现在会给每个角色发
+    # 默认衣服，而默认衣服恰好就是 key 最小的（400001 阿呆芙军装）。
+    # 要测「没拥有就拒绝」得挑一件玩家真没有的。
+    not_owned = [k for k, v in items.table("table_item").items()
+                 if v.get("t") == 40 and items.count_of(player, k) == 0]
+    bgs = [k for k, v in items.table("table_item").items()
+           if v.get("t") == 50 and items.count_of(player, k) == 0]
+    check("有一件没拥有的衣服可测", len(not_owned) > 0, "%d 件" % len(not_owned))
+    check("有一件没拥有的背景可测", len(bgs) > 0, "%d 件" % len(bgs))
+    r = call(hfavor.set_clothes, {"charKey": "hadf", "itemKey": not_owned[0]}, 7)
     check("背包里没有就换 -> 被拒", r["code"] != 200, str(r)[:120])
-    items.add_item(player, clothes[0], 1)
+    items.add_item(player, not_owned[0], 1)
     items.add_item(player, bgs[0], 1)
     save()
-    r = call(hfavor.set_clothes, {"charKey": "hadf", "itemKey": clothes[0]}, 8)
+    r = call(hfavor.set_clothes, {"charKey": "hadf", "itemKey": not_owned[0]}, 8)
     check("拥有后能换", r["code"] == 200, str(r)[:160])
     check("回调要的 favorValue 在", "favorValue" in r["data"])
     reload_()
-    check("curClothes 落盘", store.find_favor(player, "hadf")["curClothes"] == clothes[0])
+    check("curClothes 落盘", store.find_favor(player, "hadf")["curClothes"] == not_owned[0])
     r = call(hfavor.set_clothes, {"charKey": "hadf", "itemKey": bgs[0]}, 9)
     check("拿背景当衣服 -> 被拒", r["code"] != 200, str(r)[:120])
     r = call(hfavor.set_cur_bg, {"charKey": "hadf", "itemKey": bgs[0]}, 10)
@@ -254,6 +261,65 @@ def return_item_check():
     check("preference 3（普通）从不回礼 —— 表里那两行压根没有 return_item_* 字段",
           n_common == 0, str(n_common))
     check("preference 2（喜欢）会回礼", n_love > 0, str(n_love))
+
+
+def default_look_check():
+    print("== 默认衣服（抚摸能不能动的前提）==")
+    check("hadf 的默认衣服 = 400001（军装）", favor.default_clothes("hadf") == "400001",
+          "= %s" % favor.default_clothes("hadf"))
+    check("sasm 也有默认衣服", bool(favor.default_clothes("sasm")),
+          "= %s" % favor.default_clothes("sasm"))
+    check("没衣服的角色回空串", favor.default_clothes("madflj") == "",
+          "= %r" % favor.default_clothes("madflj"))
+    d = favor.default_clothes("hadf")
+    cfg = items.table("table_item").get(d) or {}
+    check("默认衣服是 CLOTHES(40)", cfg.get("t") == 40)
+    check("默认衣服的 replace_key == charKey（= 不替换立绘）", cfg.get("rk") == "hadf",
+          "= %s" % cfg.get("rk"))
+
+    reload_()
+    # 把玩家弄成「旧存档」的样子：没有衣服、curClothes 是空串
+    bag = items.items_of(player)
+    bag.pop("400001", None)
+    bag.pop("500001", None)
+    store.find_favor(player, "hadf")["curClothes"] = ""
+    save()
+    reload_()
+    check("补之前 curClothes 是空的", store.find_favor(player, "hadf")["curClothes"] == "")
+    check("补之前背包里没有默认衣服", items.count_of(player, "400001") == 0)
+
+    changed = favor.ensure_default_looks(player)
+    check("补了（返回 True）", changed)
+    check("curClothes 补成默认衣服", store.find_favor(player, "hadf")["curClothes"] == "400001",
+          "= %s" % store.find_favor(player, "hadf")["curClothes"])
+    check("默认衣服进背包了", items.count_of(player, "400001") == 1)
+    check("默认背景也进背包了", items.count_of(player, "500001") == 1)
+    check("每个有衣服的角色都补了",
+          all(items.count_of(player, favor.default_clothes(k)) >= 1
+              for k in store.player_favors(player) if favor.default_clothes(k)))
+    check("再调一次不动（幂等）", favor.ensure_default_looks(player) is False)
+
+    # 玩家自己换过的不该被覆盖
+    reload_()
+    store.find_favor(player, "hadf")["curClothes"] = "400002"
+    items.add_item(player, "400002", 1)
+    save()
+    reload_()
+    favor.ensure_default_looks(player)
+    check("换过的衣服不会被默认衣服顶掉",
+          store.find_favor(player, "hadf")["curClothes"] == "400002",
+          "= %s" % store.find_favor(player, "hadf")["curClothes"])
+
+    # 登录路径上会自动补
+    reload_()
+    bag = items.items_of(player)
+    bag.pop("400001", None)
+    store.find_favor(player, "hadf")["curClothes"] = ""
+    save()
+    res = call(agent.get_login_data, {}, 30)
+    check("登录包里 hadf.curClothes 有值",
+          res["data"]["favor"]["favors"]["hadf"]["curClothes"] == "400001",
+          "= %s" % res["data"]["favor"]["favors"]["hadf"]["curClothes"])
 
 
 def favor_event_check():
@@ -387,6 +453,7 @@ def main() -> int:
     desc_check()
     look_check()
     return_item_check()
+    default_look_check()
     favor_event_check()
     interact_check()
     print()

@@ -167,6 +167,76 @@ def gift_row(item_key) -> dict:
     return _gifts().get(str(item_key)) or {}
 
 
+# ---------------------------------------------------------------------------
+# 角色的默认衣服
+# ---------------------------------------------------------------------------
+# ⚠️⚠️ **这个不是可选的**。踩过一次：`curClothes` 给空串，于是
+#
+#     favorManager.createExpSpriteEx(expKey, parentNode, favor):
+#         var item = dataManager.bag.getItem(favor.curClothes);   // getItem("") -> undefined
+#         if (!item) { cc.log("favorManager.createExpSprite error, clothes item not found");
+#                      return; }                                  // ← 返回 undefined
+#
+# 抚摸特效拿表情立绘的时候拿到 undefined 就不往下走了 ——
+# **表现是「摸角色完全没反应」：不扣互动次数、不加好感度**，
+# 而 logcat 里只有一行 `createExpSprite error, clothes item not found`（没有 JS 异常）。
+#
+# 判据（实机在 59 个有衣服的角色上验过，58 个唯一命中）：
+#   * `icon == "appareldefault"` —— 图标就叫「默认服装」（如 400001 阿呆芙军装）
+#   * 或 `replace_key == char_key` —— 等于「不替换立绘」，也就是原版默认造型
+# 两个都没命中（实测只有 `slys`）就退到 quality 最低的那件；
+# 一件都没有才回空串（那时客户端本来就无解，只能留着旧行为）。
+
+
+def default_clothes(char_key) -> str:
+    """角色自带的默认衣服 key。取不到回空串。"""
+    ck = str(char_key)
+    cands = [k for k, r in items.table("table_item").items()
+             if str(r.get("t")) == "40" and str(r.get("ck")) == ck]
+    if not cands:
+        return ""
+    for k in cands:
+        if str(items.table("table_item")[k].get("ic")) == "appareldefault":
+            return k
+    for k in cands:
+        if str(items.table("table_item")[k].get("rk")) == ck:
+            return k
+    return sorted(cands, key=lambda k: (int(items.table("table_item")[k].get("q") or 0), k))[0]
+
+
+def ensure_default_looks(player: dict) -> bool:
+    """给每个有衣服的角色发一件**默认衣服**，并把 `curClothes` 补上。返回是否有改动。
+
+    * 只补到 1 件（`limit_count` 就是 1），不会覆盖玩家自己换过的
+    * `curClothes` 只在「空」或「指向的东西不在背包里」时才重置成默认的
+    * 顺带把默认背景（`default_favor_bg_item_key`）也补一件 —— 不然
+      「换背景」那个页签是空的，而 `curBg` 又已经指着它了
+    """
+    changed = False
+    bag = items.items_of(player)
+    for char_key, row in store.player_favors(player).items():
+        key = default_clothes(char_key)
+        if key:
+            if int(bag.get(key) or 0) < 1:
+                bag[key] = 1
+                changed = True
+            cur = str(row.get("curClothes") or "")
+            if not cur or int(bag.get(cur) or 0) < 1:
+                row["curClothes"] = key
+                changed = True
+        elif not row.get("curClothes"):
+            log.warning("角色 %s 在 table_item 里一件衣服都没有，curClothes 只能留空"
+                        "（抚摸特效会拿不到表情立绘）", char_key)
+    bg = default_bg_key()
+    if bg and int(bag.get(bg) or 0) < 1:
+        bag[bg] = 1
+        changed = True
+    if changed:
+        log.info("玩家 %s 补默认造型（%d 个角色的默认衣服 + 默认背景 %s）",
+                 player.get("account"), len(store.player_favors(player)), bg)
+    return changed
+
+
 def _split_types(text) -> set:
     if not text:
         return set()
