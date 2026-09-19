@@ -1,0 +1,13 @@
+jsb_cocos2dx_auto.cpp
+jsb_cocos2dx_experimental_video_auto.cpp
+jsb_cocos2dx_extension_auto.cpp
+jsb_cocos2dx_extension_manual.cpp
+jsb_cocos2dx_studio_auto.cpp
+jsb_cocos2dx_studio_manual.cpp
+jsb_cocos2dx_ui_auto.cpp
+jsb_cocos2dx_ui_manual.cpp
+jsb_oppai_gameshare.cpp
+jsb_oppai_talkingdata.cpp
+jsb_oppai_utilsex.cpp
+jsb_oppai_xg.cpp
+jsb_websocket.cpp

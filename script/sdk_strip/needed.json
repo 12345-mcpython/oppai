@@ -1,0 +1,922 @@
+{
+  "com/quicksdk/apiadapter/baidu/ActivityAdapter": {
+    "methods": [
+      [
+        "getResId",
+        "Ljava/lang/String;Ljava/lang/String;",
+        "I",
+        "static"
+      ]
+    ],
+    "fields": [],
+    "as_super": 0,
+    "as_impl": 0,
+    "new_instance": 0,
+    "cast_or_type": 0
+  },
+  "com/tencent/mm/sdk/openapi/IWXAPIEventHandler": {
+    "methods": [],
+    "fields": [],
+    "as_super": 0,
+    "as_impl": 1,
+    "new_instance": 0,
+    "cast_or_type": 0
+  },
+  "com/tencent/mm/sdk/openapi/IWXAPI": {
+    "methods": [
+      [
+        "getWXAppSupportAPI",
+        "",
+        "I",
+        "interface"
+      ],
+      [
+        "handleIntent",
+        "Landroid/content/Intent;Lcom/tencent/mm/sdk/openapi/IWXAPIEventHandler;",
+        "Z",
+        "interface"
+      ],
+      [
+        "isWXAppInstalled",
+        "",
+        "Z",
+        "interface"
+      ],
+      [
+        "registerApp",
+        "Ljava/lang/String;",
+        "Z",
+        "interface"
+      ],
+      [
+        "sendReq",
+        "Lcom/tencent/mm/sdk/openapi/BaseReq;",
+        "Z",
+        "interface"
+      ]
+    ],
+    "fields": [],
+    "as_super": 0,
+    "as_impl": 0,
+    "new_instance": 0,
+    "cast_or_type": 0
+  },
+  "com/tencent/mm/sdk/openapi/BaseReq": {
+    "methods": [],
+    "fields": [],
+    "as_super": 0,
+    "as_impl": 0,
+    "new_instance": 0,
+    "cast_or_type": 1
+  },
+  "com/tencent/mm/sdk/openapi/BaseResp": {
+    "methods": [],
+    "fields": [],
+    "as_super": 0,
+    "as_impl": 0,
+    "new_instance": 0,
+    "cast_or_type": 1
+  },
+  "com/quicksdk/Sdk": {
+    "methods": [
+      [
+        "exit",
+        "Landroid/app/Activity;",
+        "V",
+        "virtual"
+      ],
+      [
+        "getInstance",
+        "",
+        "Lcom/quicksdk/Sdk;",
+        "static"
+      ],
+      [
+        "init",
+        "Landroid/app/Activity;Ljava/lang/String;Ljava/lang/String;",
+        "V",
+        "virtual"
+      ],
+      [
+        "onActivityResult",
+        "Landroid/app/Activity;IILandroid/content/Intent;",
+        "V",
+        "virtual"
+      ],
+      [
+        "onCreate",
+        "Landroid/app/Activity;",
+        "V",
+        "virtual"
+      ],
+      [
+        "onDestroy",
+        "Landroid/app/Activity;",
+        "V",
+        "virtual"
+      ],
+      [
+        "onNewIntent",
+        "Landroid/content/Intent;",
+        "V",
+        "virtual"
+      ],
+      [
+        "onPause",
+        "Landroid/app/Activity;",
+        "V",
+        "virtual"
+      ],
+      [
+        "onRestart",
+        "Landroid/app/Activity;",
+        "V",
+        "virtual"
+      ],
+      [
+        "onResume",
+        "Landroid/app/Activity;",
+        "V",
+        "virtual"
+      ],
+      [
+        "onStart",
+        "Landroid/app/Activity;",
+        "V",
+        "virtual"
+      ],
+      [
+        "onStop",
+        "Landroid/app/Activity;",
+        "V",
+        "virtual"
+      ]
+    ],
+    "fields": [],
+    "as_super": 0,
+    "as_impl": 0,
+    "new_instance": 0,
+    "cast_or_type": 0
+  },
+  "com/quicksdk/Payment": {
+    "methods": [
+      [
+        "getInstance",
+        "",
+        "Lcom/quicksdk/Payment;",
+        "static"
+      ],
+      [
+        "pay",
+        "Landroid/app/Activity;Lcom/quicksdk/entity/OrderInfo;Lcom/quicksdk/entity/GameRoleInfo;",
+        "V",
+        "virtual"
+      ]
+    ],
+    "fields": [],
+    "as_super": 0,
+    "as_impl": 0,
+    "new_instance": 0,
+    "cast_or_type": 0
+  },
+  "com/quicksdk/entity/OrderInfo": {
+    "methods": [
+      [
+        "<init>",
+        "",
+        "V",
+        "direct"
+      ],
+      [
+        "setAmount",
+        "D",
+        "V",
+        "virtual"
+      ],
+      [
+        "setCount",
+        "I",
+        "V",
+        "virtual"
+      ],
+      [
+        "setCpOrderID",
+        "Ljava/lang/String;",
+        "V",
+        "virtual"
+      ],
+      [
+        "setExtrasParams",
+        "Ljava/lang/String;",
+        "V",
+        "virtual"
+      ],
+      [
+        "setGoodsDesc",
+        "Ljava/lang/String;",
+        "V",
+        "virtual"
+      ],
+      [
+        "setGoodsID",
+        "Ljava/lang/String;",
+        "V",
+        "virtual"
+      ],
+      [
+        "setGoodsName",
+        "Ljava/lang/String;",
+        "V",
+        "virtual"
+      ]
+    ],
+    "fields": [],
+    "as_super": 0,
+    "as_impl": 0,
+    "new_instance": 0,
+    "cast_or_type": 4
+  },
+  "com/quicksdk/entity/GameRoleInfo": {
+    "methods": [
+      [
+        "<init>",
+        "",
+        "V",
+        "direct"
+      ],
+      [
+        "setFriendlist",
+        "Ljava/lang/String;",
+        "V",
+        "virtual"
+      ],
+      [
+        "setGameBalance",
+        "Ljava/lang/String;",
+        "V",
+        "virtual"
+      ],
+      [
+        "setGameRoleGender",
+        "Ljava/lang/String;",
+        "V",
+        "virtual"
+      ],
+      [
+        "setGameRoleID",
+        "Ljava/lang/String;",
+        "V",
+        "virtual"
+      ],
+      [
+        "setGameRoleName",
+        "Ljava/lang/String;",
+        "V",
+        "virtual"
+      ],
+      [
+        "setGameRolePower",
+        "Ljava/lang/String;",
+        "V",
+        "virtual"
+      ],
+      [
+        "setGameUserLevel",
+        "Ljava/lang/String;",
+        "V",
+        "virtual"
+      ],
+      [
+        "setPartyId",
+        "Ljava/lang/String;",
+        "V",
+        "virtual"
+      ],
+      [
+        "setPartyName",
+        "Ljava/lang/String;",
+        "V",
+        "virtual"
+      ],
+      [
+        "setPartyRoleId",
+        "Ljava/lang/String;",
+        "V",
+        "virtual"
+      ],
+      [
+        "setPartyRoleName",
+        "Ljava/lang/String;",
+        "V",
+        "virtual"
+      ],
+      [
+        "setProfession",
+        "Ljava/lang/String;",
+        "V",
+        "virtual"
+      ],
+      [
+        "setProfessionId",
+        "Ljava/lang/String;",
+        "V",
+        "virtual"
+      ],
+      [
+        "setRoleCreateTime",
+        "Ljava/lang/String;",
+        "V",
+        "virtual"
+      ],
+      [
+        "setServerID",
+        "Ljava/lang/String;",
+        "V",
+        "virtual"
+      ],
+      [
+        "setServerName",
+        "Ljava/lang/String;",
+        "V",
+        "virtual"
+      ],
+      [
+        "setVipLevel",
+        "Ljava/lang/String;",
+        "V",
+        "virtual"
+      ]
+    ],
+    "fields": [],
+    "as_super": 0,
+    "as_impl": 0,
+    "new_instance": 0,
+    "cast_or_type": 6
+  },
+  "com/quicksdk/User": {
+    "methods": [
+      [
+        "getInstance",
+        "",
+        "Lcom/quicksdk/User;",
+        "static"
+      ],
+      [
+        "login",
+        "Landroid/app/Activity;",
+        "V",
+        "virtual"
+      ],
+      [
+        "logout",
+        "Landroid/app/Activity;",
+        "V",
+        "virtual"
+      ],
+      [
+        "setGameRoleInfo",
+        "Landroid/app/Activity;Lcom/quicksdk/entity/GameRoleInfo;Z",
+        "V",
+        "virtual"
+      ]
+    ],
+    "fields": [],
+    "as_super": 0,
+    "as_impl": 0,
+    "new_instance": 0,
+    "cast_or_type": 0
+  },
+  "com/quicksdk/QuickSDK": {
+    "methods": [
+      [
+        "getInstance",
+        "",
+        "Lcom/quicksdk/QuickSDK;",
+        "static"
+      ],
+      [
+        "isShowExitDialog",
+        "",
+        "Z",
+        "virtual"
+      ],
+      [
+        "setExitNotifier",
+        "Lcom/quicksdk/notifier/ExitNotifier;",
+        "Lcom/quicksdk/QuickSDK;",
+        "virtual"
+      ],
+      [
+        "setInitNotifier",
+        "Lcom/quicksdk/notifier/InitNotifier;",
+        "Lcom/quicksdk/QuickSDK;",
+        "virtual"
+      ],
+      [
+        "setIsLandScape",
+        "Z",
+        "Lcom/quicksdk/QuickSDK;",
+        "virtual"
+      ],
+      [
+        "setLoginNotifier",
+        "Lcom/quicksdk/notifier/LoginNotifier;",
+        "Lcom/quicksdk/QuickSDK;",
+        "virtual"
+      ],
+      [
+        "setLogoutNotifier",
+        "Lcom/quicksdk/notifier/LogoutNotifier;",
+        "Lcom/quicksdk/QuickSDK;",
+        "virtual"
+      ],
+      [
+        "setPayNotifier",
+        "Lcom/quicksdk/notifier/PayNotifier;",
+        "Lcom/quicksdk/QuickSDK;",
+        "virtual"
+      ],
+      [
+        "setSwitchAccountNotifier",
+        "Lcom/quicksdk/notifier/SwitchAccountNotifier;",
+        "Lcom/quicksdk/QuickSDK;",
+        "virtual"
+      ]
+    ],
+    "fields": [],
+    "as_super": 0,
+    "as_impl": 0,
+    "new_instance": 0,
+    "cast_or_type": 0
+  },
+  "com/quicksdk/notifier/ExitNotifier": {
+    "methods": [],
+    "fields": [],
+    "as_super": 0,
+    "as_impl": 1,
+    "new_instance": 0,
+    "cast_or_type": 0
+  },
+  "com/quicksdk/notifier/PayNotifier": {
+    "methods": [],
+    "fields": [],
+    "as_super": 0,
+    "as_impl": 1,
+    "new_instance": 0,
+    "cast_or_type": 0
+  },
+  "com/quicksdk/notifier/SwitchAccountNotifier": {
+    "methods": [],
+    "fields": [],
+    "as_super": 0,
+    "as_impl": 1,
+    "new_instance": 0,
+    "cast_or_type": 0
+  },
+  "com/quicksdk/entity/UserInfo": {
+    "methods": [
+      [
+        "getToken",
+        "",
+        "Ljava/lang/String;",
+        "virtual"
+      ],
+      [
+        "getUID",
+        "",
+        "Ljava/lang/String;",
+        "virtual"
+      ]
+    ],
+    "fields": [],
+    "as_super": 0,
+    "as_impl": 0,
+    "new_instance": 0,
+    "cast_or_type": 3
+  },
+  "com/quicksdk/notifier/LogoutNotifier": {
+    "methods": [],
+    "fields": [],
+    "as_super": 0,
+    "as_impl": 1,
+    "new_instance": 0,
+    "cast_or_type": 0
+  },
+  "com/quicksdk/notifier/LoginNotifier": {
+    "methods": [],
+    "fields": [],
+    "as_super": 0,
+    "as_impl": 1,
+    "new_instance": 0,
+    "cast_or_type": 0
+  },
+  "com/quicksdk/notifier/InitNotifier": {
+    "methods": [],
+    "fields": [],
+    "as_super": 0,
+    "as_impl": 1,
+    "new_instance": 0,
+    "cast_or_type": 0
+  },
+  "com/tendcloud/tenddata/TalkingDataGA": {
+    "methods": [
+      [
+        "init",
+        "Landroid/content/Context;Ljava/lang/String;Ljava/lang/String;",
+        "V",
+        "static"
+      ],
+      [
+        "onPause",
+        "Landroid/app/Activity;",
+        "V",
+        "static"
+      ],
+      [
+        "onResume",
+        "Landroid/app/Activity;",
+        "V",
+        "static"
+      ]
+    ],
+    "fields": [],
+    "as_super": 0,
+    "as_impl": 0,
+    "new_instance": 0,
+    "cast_or_type": 0
+  },
+  "com/quicksdk/QuickSdkApplication": {
+    "methods": [
+      [
+        "<init>",
+        "",
+        "V",
+        "direct"
+      ],
+      [
+        "onCreate",
+        "",
+        "V",
+        "super"
+      ]
+    ],
+    "fields": [],
+    "as_super": 1,
+    "as_impl": 0,
+    "new_instance": 0,
+    "cast_or_type": 0
+  },
+  "com/sina/weibo/sdk/api/share/WeiboShareSDK": {
+    "methods": [
+      [
+        "createWeiboAPI",
+        "Landroid/content/Context;Ljava/lang/String;",
+        "Lcom/sina/weibo/sdk/api/share/IWeiboShareAPI;",
+        "static"
+      ]
+    ],
+    "fields": [],
+    "as_super": 0,
+    "as_impl": 0,
+    "new_instance": 0,
+    "cast_or_type": 0
+  },
+  "com/sina/weibo/sdk/api/share/IWeiboShareAPI": {
+    "methods": [
+      [
+        "registerApp",
+        "",
+        "Z",
+        "interface"
+      ]
+    ],
+    "fields": [],
+    "as_super": 0,
+    "as_impl": 0,
+    "new_instance": 0,
+    "cast_or_type": 1
+  },
+  "com/tencent/mm/sdk/openapi/WXAPIFactory": {
+    "methods": [
+      [
+        "createWXAPI",
+        "Landroid/content/Context;Ljava/lang/String;",
+        "Lcom/tencent/mm/sdk/openapi/IWXAPI;",
+        "static"
+      ]
+    ],
+    "fields": [],
+    "as_super": 0,
+    "as_impl": 0,
+    "new_instance": 0,
+    "cast_or_type": 0
+  },
+  "com/sina/weibo/sdk/auth/Oauth2AccessToken": {
+    "methods": [
+      [
+        "<init>",
+        "",
+        "V",
+        "direct"
+      ],
+      [
+        "getExpiresTime",
+        "",
+        "J",
+        "virtual"
+      ],
+      [
+        "getRefreshToken",
+        "",
+        "Ljava/lang/String;",
+        "virtual"
+      ],
+      [
+        "getToken",
+        "",
+        "Ljava/lang/String;",
+        "virtual"
+      ],
+      [
+        "getUid",
+        "",
+        "Ljava/lang/String;",
+        "virtual"
+      ],
+      [
+        "setExpiresTime",
+        "J",
+        "V",
+        "virtual"
+      ],
+      [
+        "setRefreshToken",
+        "Ljava/lang/String;",
+        "V",
+        "virtual"
+      ],
+      [
+        "setToken",
+        "Ljava/lang/String;",
+        "V",
+        "virtual"
+      ],
+      [
+        "setUid",
+        "Ljava/lang/String;",
+        "V",
+        "virtual"
+      ]
+    ],
+    "fields": [],
+    "as_super": 0,
+    "as_impl": 0,
+    "new_instance": 0,
+    "cast_or_type": 5
+  },
+  "com/tencent/mm/sdk/openapi/WXImageObject": {
+    "methods": [
+      [
+        "<init>",
+        "",
+        "V",
+        "direct"
+      ],
+      [
+        "setImagePath",
+        "Ljava/lang/String;",
+        "V",
+        "virtual"
+      ]
+    ],
+    "fields": [],
+    "as_super": 0,
+    "as_impl": 0,
+    "new_instance": 0,
+    "cast_or_type": 1
+  },
+  "com/tencent/mm/sdk/openapi/WXMediaMessage": {
+    "methods": [
+      [
+        "<init>",
+        "",
+        "V",
+        "direct"
+      ]
+    ],
+    "fields": [],
+    "as_super": 0,
+    "as_impl": 0,
+    "new_instance": 0,
+    "cast_or_type": 1
+  },
+  "com/tencent/mm/sdk/openapi/SendMessageToWX$Req": {
+    "methods": [
+      [
+        "<init>",
+        "",
+        "V",
+        "direct"
+      ]
+    ],
+    "fields": [],
+    "as_super": 0,
+    "as_impl": 0,
+    "new_instance": 0,
+    "cast_or_type": 1
+  },
+  "com/kurogame/oppai/mt/WBShareActivity": {
+    "methods": [],
+    "fields": [],
+    "as_super": 0,
+    "as_impl": 0,
+    "new_instance": 0,
+    "cast_or_type": 1
+  },
+  "com/quicksdk/Extend": {
+    "methods": [
+      [
+        "getChannelType",
+        "",
+        "I",
+        "virtual"
+      ],
+      [
+        "getInstance",
+        "",
+        "Lcom/quicksdk/Extend;",
+        "static"
+      ]
+    ],
+    "fields": [],
+    "as_super": 0,
+    "as_impl": 0,
+    "new_instance": 0,
+    "cast_or_type": 0
+  },
+  "com/quicksdk/QuickSdkSplashActivity": {
+    "methods": [
+      [
+        "<init>",
+        "",
+        "V",
+        "direct"
+      ]
+    ],
+    "fields": [],
+    "as_super": 1,
+    "as_impl": 0,
+    "new_instance": 0,
+    "cast_or_type": 0
+  },
+  "com/tencent/android/tpush/XGLocalMessage": {
+    "methods": [
+      [
+        "<init>",
+        "",
+        "V",
+        "direct"
+      ],
+      [
+        "setContent",
+        "Ljava/lang/String;",
+        "V",
+        "virtual"
+      ],
+      [
+        "setDate",
+        "Ljava/lang/String;",
+        "V",
+        "virtual"
+      ],
+      [
+        "setHour",
+        "Ljava/lang/String;",
+        "V",
+        "virtual"
+      ],
+      [
+        "setMin",
+        "Ljava/lang/String;",
+        "V",
+        "virtual"
+      ],
+      [
+        "setTitle",
+        "Ljava/lang/String;",
+        "V",
+        "virtual"
+      ],
+      [
+        "setType",
+        "I",
+        "V",
+        "virtual"
+      ]
+    ],
+    "fields": [],
+    "as_super": 0,
+    "as_impl": 0,
+    "new_instance": 0,
+    "cast_or_type": 1
+  },
+  "com/tencent/android/tpush/XGPushManager": {
+    "methods": [
+      [
+        "addLocalNotification",
+        "Landroid/content/Context;Lcom/tencent/android/tpush/XGLocalMessage;",
+        "J",
+        "static"
+      ],
+      [
+        "clearLocalNotifications",
+        "Landroid/content/Context;",
+        "V",
+        "static"
+      ],
+      [
+        "deleteTag",
+        "Landroid/content/Context;Ljava/lang/String;",
+        "V",
+        "static"
+      ],
+      [
+        "registerPush",
+        "Landroid/content/Context;",
+        "V",
+        "static"
+      ],
+      [
+        "setTag",
+        "Landroid/content/Context;Ljava/lang/String;",
+        "V",
+        "static"
+      ]
+    ],
+    "fields": [],
+    "as_super": 0,
+    "as_impl": 0,
+    "new_instance": 0,
+    "cast_or_type": 0
+  },
+  "com/tencent/android/tpush/XGPushConfig": {
+    "methods": [
+      [
+        "getToken",
+        "Landroid/content/Context;",
+        "Ljava/lang/String;",
+        "static"
+      ]
+    ],
+    "fields": [],
+    "as_super": 0,
+    "as_impl": 0,
+    "new_instance": 0,
+    "cast_or_type": 0
+  },
+  "com/chukong/cocosplay/client/CocosPlayClient": {
+    "methods": [
+      [
+        "getGameRoot",
+        "",
+        "Ljava/lang/String;",
+        "static"
+      ],
+      [
+        "init",
+        "Landroid/app/Activity;Z",
+        "Z",
+        "static"
+      ],
+      [
+        "isDemo",
+        "",
+        "Z",
+        "static"
+      ],
+      [
+        "isEnabled",
+        "",
+        "Z",
+        "static"
+      ],
+      [
+        "notifyFileLoaded",
+        "Ljava/lang/String;",
+        "V",
+        "static"
+      ],
+      [
+        "updateAssets",
+        "Ljava/lang/String;",
+        "V",
+        "static"
+      ]
+    ],
+    "fields": [],
+    "as_super": 0,
+    "as_impl": 0,
+    "new_instance": 0,
+    "cast_or_type": 0
+  }
+}

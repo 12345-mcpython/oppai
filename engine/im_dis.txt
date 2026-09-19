@@ -1,0 +1,1447 @@
+﻿// ===== instanceManager<  (124B) =====
+// params/vars: onLevelStartGuide#3, onLevelSaveGuide#3, onResetLevelGuide#3, canClickExit#3, calLevelStarMark#3, getBattleInfo#3
+// atoms: ['onBattle', 'onStory', 'popInstanceFinish', 'showBossLevel', 'onSelectLevel']
+     0  lambda obj#0
+     5  setaliasedvar hops=0 slot=2
+    10  pop
+    11  lambda obj#1
+    16  setaliasedvar hops=0 slot=3
+    21  pop
+    22  lambda obj#2
+    27  setaliasedvar hops=0 slot=4
+    32  pop
+    33  lambda obj#3
+    38  setaliasedvar hops=0 slot=5
+    43  pop
+    44  lambda obj#4
+    49  setaliasedvar hops=0 slot=6
+    54  pop
+    55  lambda obj#5
+    60  setaliasedvar hops=0 slot=7
+    65  pop
+    66  newinit 1
+    71  lambda obj#6
+    76  initprop "onBattle"
+    81  lambda obj#7
+    86  initprop "onStory"
+    91  lambda obj#8
+    96  initprop "popInstanceFinish"
+   101  lambda obj#9
+   106  initprop "showBossLevel"
+   111  lambda obj#10
+   116  initprop "onSelectLevel"
+   121  endinit
+   122  return
+   123  retrval
+
+// ===== onLevelStartGuide  (36B) =====
+// params/vars: levelId#0
+// atoms: ['GuideCondition', 'onLevelStartGuide']
+     0  name "GuideCondition"
+     5  getprop "onLevelStartGuide"
+    10  and -> 34
+    15  pop
+    16  name "GuideCondition"
+    21  dup
+    22  callprop "onLevelStartGuide"
+    27  swap
+    28  getarg 0
+    31  call 1
+    34  return
+    35  retrval
+
+// ===== onLevelSaveGuide  (36B) =====
+// params/vars: levelId#0
+// atoms: ['GuideCondition', 'onLevelSaveGuide']
+     0  name "GuideCondition"
+     5  getprop "onLevelSaveGuide"
+    10  and -> 34
+    15  pop
+    16  name "GuideCondition"
+    21  dup
+    22  callprop "onLevelSaveGuide"
+    27  swap
+    28  getarg 0
+    31  call 1
+    34  return
+    35  retrval
+
+// ===== onResetLevelGuide  (36B) =====
+// params/vars: levelId#0
+// atoms: ['GuideCondition', 'onResetLevelGuide']
+     0  name "GuideCondition"
+     5  getprop "onResetLevelGuide"
+    10  and -> 34
+    15  pop
+    16  name "GuideCondition"
+    21  dup
+    22  callprop "onResetLevelGuide"
+    27  swap
+    28  getarg 0
+    31  call 1
+    34  return
+    35  retrval
+
+// ===== canClickExit  (17B) =====
+// params/vars: 
+// atoms: ['guideManager', 'isGuideEnded']
+     0  name "guideManager"
+     5  dup
+     6  callprop "isGuideEnded"
+    11  swap
+    12  call 0
+    15  return
+    16  retrval
+
+// ===== calLevelStarMark  (190B) =====
+// params/vars: levelId#0, conditions#0, level#2, starMark#2, battleInfo#2, heroKillPre#2
+// atoms: ['SKIP_BATTLE', 'table_level', 'victory', 'battleInfo', 'enemyUnitDiedCount', 'heroKillCount', 'hero_kill_probability', 'ownSoldierDiedCount', 'soldier_die_count']
+     0  name "SKIP_BATTLE"
+     5  ifeq -> 13
+    10  int8 7
+    12  return
+    13  name "table_level"
+    18  getarg 0
+    21  getelem
+    22  setlocal 0
+    26  pop
+    27  zero
+    28  setlocal 0
+    32  pop
+    33  getarg 1
+    36  getprop "victory"
+    41  ifeq -> 184
+    46  one
+    47  setlocal 0
+    51  pop
+    52  getarg 1
+    55  getprop "battleInfo"
+    60  setlocal 0
+    64  pop
+    65  getlocal 0
+    69  getprop "enemyUnitDiedCount"
+    74  ifeq -> 139
+    79  getlocal 0
+    83  getprop "heroKillCount"
+    88  getlocal 0
+    92  getprop "enemyUnitDiedCount"
+    97  div
+    98  uint16 1000
+   101  mul
+   102  setlocal 0
+   106  pop
+   107  getlocal 0
+   111  getlocal 0
+   115  getprop "hero_kill_probability"
+   120  ge
+   121  ifeq -> 139
+   126  getlocal 0
+   130  one
+   131  one
+   132  lsh
+   133  bitor
+   134  setlocal 0
+   138  pop
+   139  getlocal 0
+   143  getprop "ownSoldierDiedCount"
+   148  or -> 155
+   153  pop
+   154  zero
+   155  getlocal 0
+   159  getprop "soldier_die_count"
+   164  le
+   165  ifeq -> 184
+   170  getlocal 0
+   174  one
+   175  int8 2
+   177  lsh
+   178  bitor
+   179  setlocal 0
+   183  pop
+   184  getlocal 0
+   188  return
+   189  retrval
+
+// ===== getBattleInfo  (96B) =====
+// params/vars: conditions#0, battleInfo#2
+// atoms: ['battleInfo', 'ownSoldierDiedCount', 'enemyUnitDiedCount', 'unitDiedCount', 'heroSuperSkillCount']
+     0  getarg 0
+     3  getprop "battleInfo"
+     8  or -> 20
+    13  pop
+    14  newinit 1
+    19  endinit
+    20  setlocal 0
+    24  pop
+    25  newinit 1
+    30  getlocal 0
+    34  getprop "ownSoldierDiedCount"
+    39  or -> 46
+    44  pop
+    45  zero
+    46  initprop "ownSoldierDiedCount"
+    51  getlocal 0
+    55  getprop "enemyUnitDiedCount"
+    60  or -> 67
+    65  pop
+    66  zero
+    67  initprop "unitDiedCount"
+    72  getlocal 0
+    76  getprop "heroSuperSkillCount"
+    81  or -> 88
+    86  pop
+    87  zero
+    88  initprop "heroSuperSkillCount"
+    93  endinit
+    94  return
+    95  retrval
+
+// ===== instanceManager.onBattle  (271B) =====
+// params/vars: levelId#1, callback#1, immCallback#1, curTeam#3, subareaTeam#3, instance#3, level#3, stars#3, mainScene#3, isAgain#3, isComplete#3, storyLayer#3, endBattleCb#3, assistanceSoldier#3, supportFriend#3
+// atoms: ['dataManager', 'player', 'getCurTeam', 'instance', 'getLevel', 'getStarsCount', 'cc', 'director', 'getRunningScene', 'async', 'waterfall']
+     0  name "dataManager"
+     5  getprop "player"
+    10  dup
+    11  callprop "getCurTeam"
+    16  swap
+    17  call 0
+    20  setaliasedvar hops=0 slot=5
+    25  pop
+    26  null
+    27  setaliasedvar hops=0 slot=6
+    32  pop
+    33  name "dataManager"
+    38  getprop "instance"
+    43  setaliasedvar hops=0 slot=7
+    48  pop
+    49  getaliasedvar hops=0 slot=7
+    54  dup
+    55  callprop "getLevel"
+    60  swap
+    61  getaliasedvar hops=0 slot=2
+    66  call 1
+    69  setaliasedvar hops=0 slot=8
+    74  pop
+    75  getaliasedvar hops=0 slot=8
+    80  dup
+    81  callprop "getStarsCount"
+    86  swap
+    87  call 0
+    90  setaliasedvar hops=0 slot=9
+    95  pop
+    96  name "cc"
+   101  getprop "director"
+   106  dup
+   107  callprop "getRunningScene"
+   112  swap
+   113  call 0
+   116  setaliasedvar hops=0 slot=10
+   121  pop
+   122  false
+   123  setaliasedvar hops=0 slot=11
+   128  pop
+   129  false
+   130  setaliasedvar hops=0 slot=12
+   135  pop
+   136  getaliasedvar hops=0 slot=13
+   141  pop
+   142  null
+   143  setaliasedvar hops=0 slot=14
+   148  pop
+   149  null
+   150  setaliasedvar hops=0 slot=15
+   155  pop
+   156  null
+   157  setaliasedvar hops=0 slot=16
+   162  pop
+   163  name "async"
+   168  dup
+   169  callprop "waterfall"
+   174  swap
+   175  newarray 9
+   179  lambda obj#0
+   184  initelem_array 0
+   188  lambda obj#1
+   193  initelem_array 1
+   197  lambda obj#2
+   202  initelem_array 2
+   206  lambda obj#3
+   211  initelem_array 3
+   215  lambda obj#4
+   220  initelem_array 4
+   224  lambda obj#5
+   229  initelem_array 5
+   233  lambda obj#6
+   238  initelem_array 6
+   242  lambda obj#7
+   247  initelem_array 7
+   251  lambda obj#8
+   256  initelem_array 8
+   260  endinit
+   261  lambda obj#9
+   266  call 2
+   269  pop
+   270  retrval
+
+// ===== instanceManager.onBattle/<  (94B) =====
+// params/vars: next#0, cb#2
+// atoms: ['isNormalData', 'ccuiManager', 'popupTop', 'table_dictionary', 'POPUP_TYPE', 'RED']
+     0  getaliasedvar hops=0 slot=5
+     5  dup
+     6  callprop "isNormalData"
+    11  swap
+    12  call 0
+    15  ifeq -> 33
+    20  getarg 0
+    23  undefined
+    24  call 0
+    27  pop
+    28  goto -> 93
+    33  lambda obj#0
+    38  setlocal 0
+    42  pop
+    43  name "ccuiManager"
+    48  dup
+    49  callprop "popupTop"
+    54  swap
+    55  name "table_dictionary"
+    60  uint16 10006
+    63  getelem
+    64  getlocal 0
+    68  null
+    69  null
+    70  name "POPUP_TYPE"
+    75  getprop "RED"
+    80  call 5
+    83  pop
+    84  getarg 0
+    87  undefined
+    88  true
+    89  call 1
+    92  pop
+    93  retrval
+
+// ===== instanceManager.onBattle/</cb  (17B) =====
+// params/vars: 
+// atoms: ['op', 'restart']
+     0  name "op"
+     5  dup
+     6  callprop "restart"
+    11  swap
+    12  call 0
+    15  pop
+    16  retrval
+
+// ===== instanceManager.onBattle/<  (99B) =====
+// params/vars: next#0, cb#2
+// atoms: ['checkRobots', 'ccuiManager', 'popupTop', 'table_dictionary', 'POPUP_TYPE', 'RED']
+     0  getaliasedvar hops=0 slot=7
+     5  dup
+     6  callprop "checkRobots"
+    11  swap
+    12  getaliasedvar hops=0 slot=2
+    17  call 1
+    20  ifeq -> 90
+    25  lambda obj#0
+    30  setlocal 0
+    34  pop
+    35  name "ccuiManager"
+    40  dup
+    41  callprop "popupTop"
+    46  swap
+    47  name "table_dictionary"
+    52  uint16 1529
+    55  getelem
+    56  getlocal 0
+    60  null
+    61  null
+    62  name "POPUP_TYPE"
+    67  getprop "RED"
+    72  call 5
+    75  pop
+    76  getarg 0
+    79  undefined
+    80  true
+    81  call 1
+    84  pop
+    85  goto -> 98
+    90  getarg 0
+    93  undefined
+    94  call 0
+    97  pop
+    98  retrval
+
+// ===== instanceManager.onBattle/</cb  (17B) =====
+// params/vars: 
+// atoms: ['op', 'restart']
+     0  name "op"
+     5  dup
+     6  callprop "restart"
+    11  swap
+    12  call 0
+    15  pop
+    16  retrval
+
+// ===== instanceManager.onBattle/<  (298B) =====
+// params/vars: next#1, tLevel#2, isOk#2, instanceTypeList#2, key#2, instanceType#2
+// atoms: ['judgeStarLevel', 'table_level', 'moduleManager', 'isModuleUnlock', 'table_constant', 'friend_support_instance_type', 'split', '#', 'instance_type', 'SupportChoiceLayer', 'pop', 'bind']
+     0  getaliasedvar hops=1 slot=7
+     5  dup
+     6  callprop "judgeStarLevel"
+    11  swap
+    12  getaliasedvar hops=1 slot=2
+    17  call 1
+    20  not
+    21  ifeq -> 39
+    26  getaliasedvar hops=0 slot=2
+    31  undefined
+    32  true
+    33  call 1
+    36  pop
+    37  undefined
+    38  return
+    39  name "table_level"
+    44  getaliasedvar hops=1 slot=2
+    49  getelem
+    50  setlocal 0
+    54  pop
+    55  getlocal 0
+    59  not
+    60  ifeq -> 78
+    65  getaliasedvar hops=0 slot=2
+    70  undefined
+    71  true
+    72  call 1
+    75  pop
+    76  undefined
+    77  return
+    78  false
+    79  setlocal 0
+    83  pop
+    84  name "moduleManager"
+    89  dup
+    90  callprop "isModuleUnlock"
+    95  swap
+    96  uint24 100031
+   100  call 1
+   103  ifeq -> 277
+   108  name "table_constant"
+   113  getprop "friend_support_instance_type"
+   118  dup
+   119  callprop "split"
+   124  swap
+   125  string "#"
+   130  call 1
+   133  setlocal 0
+   137  pop
+   138  getlocal 0
+   142  iter 1
+   144  goto -> 268
+   149  loophead
+   150  iternext
+   151  setlocal 0
+   155  pop
+   156  getlocal 0
+   160  getlocal 0
+   164  getelem
+   165  setlocal 0
+   169  pop
+   170  getlocal 0
+   174  not
+   175  ifeq -> 185
+   180  goto -> 268
+   185  getlocal 0
+   189  getlocal 0
+   193  getprop "instance_type"
+   198  stricteq
+   199  ifeq -> 268
+   204  true
+   205  setlocal 0
+   209  pop
+   210  name "SupportChoiceLayer"
+   215  dup
+   216  callprop "pop"
+   221  swap
+   222  getaliasedvar hops=1 slot=2
+   227  lambda obj#0
+   232  dup
+   233  callprop "bind"
+   238  swap
+   239  this
+   240  call 1
+   243  lambda obj#1
+   248  dup
+   249  callprop "bind"
+   254  swap
+   255  this
+   256  call 1
+   259  call 3
+   262  pop
+   263  goto -> 276
+   268  loopentry 129
+   270  moreiter
+   271  ifne -> 149
+   276  enditer
+   277  getlocal 0
+   281  not
+   282  ifeq -> 297
+   287  getaliasedvar hops=0 slot=2
+   292  undefined
+   293  call 0
+   296  pop
+   297  retrval
+
+// ===== instanceManager.onBattle/</<  (29B) =====
+// params/vars: supportSoldier#0, supportFriendOut#0
+// atoms: []
+     0  getarg 0
+     3  setaliasedvar hops=1 slot=15
+     8  pop
+     9  getarg 1
+    12  setaliasedvar hops=1 slot=16
+    17  pop
+    18  getaliasedvar hops=0 slot=2
+    23  undefined
+    24  call 0
+    27  pop
+    28  retrval
+
+// ===== instanceManager.onBattle/</<  (12B) =====
+// params/vars: 
+// atoms: []
+     0  getaliasedvar hops=0 slot=2
+     5  undefined
+     6  true
+     7  call 1
+    10  pop
+    11  retrval
+
+// ===== instanceManager.onBattle/<  (239B) =====
+// params/vars: next#1, soldierKey#2, title#2, name#2, str#2
+// atoms: ['instanceType', 'INSTANCE_TYPE', 'FAVOR', 'soldierKey', 'checkSoldierKey', 'name', 'table_soldier_master', 'table_hero', 'op', 'getDictTipsString', 'ccuiManager', 'popupTop', 'POPUP_TYPE', 'GREEN_YELLOW']
+     0  getaliasedvar hops=1 slot=8
+     5  getprop "instanceType"
+    10  name "INSTANCE_TYPE"
+    15  getprop "FAVOR"
+    20  eq
+    21  ifeq -> 228
+    26  getaliasedvar hops=1 slot=8
+    31  getprop "soldierKey"
+    36  setlocal 0
+    40  pop
+    41  getaliasedvar hops=1 slot=7
+    46  dup
+    47  callprop "checkSoldierKey"
+    52  swap
+    53  getaliasedvar hops=1 slot=2
+    58  call 1
+    61  not
+    62  ifeq -> 213
+    67  getaliasedvar hops=1 slot=8
+    72  getprop "name"
+    77  setlocal 0
+    81  pop
+    82  name "table_soldier_master"
+    87  getlocal 0
+    91  getelem
+    92  ifeq -> 117
+    97  name "table_soldier_master"
+   102  getlocal 0
+   106  getelem
+   107  getprop "name"
+   112  goto -> 132
+   117  name "table_hero"
+   122  getlocal 0
+   126  getelem
+   127  getprop "name"
+   132  setlocal 0
+   136  pop
+   137  name "op"
+   142  dup
+   143  callprop "getDictTipsString"
+   148  swap
+   149  uint16 1532
+   152  getlocal 0
+   156  call 2
+   159  setlocal 0
+   163  pop
+   164  name "ccuiManager"
+   169  dup
+   170  callprop "popupTop"
+   175  swap
+   176  getlocal 0
+   180  lambda obj#0
+   185  lambda obj#1
+   190  getlocal 0
+   194  name "POPUP_TYPE"
+   199  getprop "GREEN_YELLOW"
+   204  call 5
+   207  pop
+   208  goto -> 223
+   213  getaliasedvar hops=0 slot=2
+   218  undefined
+   219  call 0
+   222  pop
+   223  goto -> 238
+   228  getaliasedvar hops=0 slot=2
+   233  undefined
+   234  call 0
+   237  pop
+   238  retrval
+
+// ===== instanceManager.onBattle/</<  (28B) =====
+// params/vars: 
+// atoms: ['push', 'TeamDetailLayer']
+     0  getaliasedvar hops=1 slot=10
+     5  dup
+     6  callprop "push"
+    11  swap
+    12  name "TeamDetailLayer"
+    17  undefined
+    18  new 0
+    21  false
+    22  true
+    23  call 3
+    26  pop
+    27  retrval
+
+// ===== instanceManager.onBattle/</<  (12B) =====
+// params/vars: 
+// atoms: []
+     0  getaliasedvar hops=0 slot=2
+     5  undefined
+     6  true
+     7  call 1
+    10  pop
+    11  retrval
+
+// ===== instanceManager.onBattle/<  (117B) =====
+// params/vars: next#1
+// atoms: ['storyId', 'StoryLayer', 'pop', 'id', 'cb', 'removeLayer']
+     0  getaliasedvar hops=1 slot=9
+     5  int8 -1
+     7  stricteq
+     8  ifeq -> 106
+    13  getaliasedvar hops=1 slot=8
+    18  getprop "storyId"
+    23  ifeq -> 91
+    28  name "StoryLayer"
+    33  dup
+    34  callprop "pop"
+    39  swap
+    40  newinit 1
+    45  getaliasedvar hops=1 slot=8
+    50  getprop "storyId"
+    55  initprop "id"
+    60  lambda obj#0
+    65  initprop "cb"
+    70  false
+    71  initprop "removeLayer"
+    76  endinit
+    77  call 1
+    80  setaliasedvar hops=1 slot=13
+    85  pop
+    86  goto -> 101
+    91  getaliasedvar hops=0 slot=2
+    96  undefined
+    97  call 0
+   100  pop
+   101  goto -> 116
+   106  getaliasedvar hops=0 slot=2
+   111  undefined
+   112  call 0
+   115  pop
+   116  retrval
+
+// ===== instanceManager.onBattle/</storyLayer<.cb  (11B) =====
+// params/vars: optionMark#0
+// atoms: []
+     0  getaliasedvar hops=0 slot=2
+     5  undefined
+     6  call 0
+     9  pop
+    10  retrval
+
+// ===== instanceManager.onBattle/<  (24B) =====
+// params/vars: next#0
+// atoms: []
+     0  getaliasedvar hops=1 slot=2
+     5  undefined
+     6  getaliasedvar hops=0 slot=2
+    11  call 1
+    14  pop
+    15  getarg 0
+    18  undefined
+    19  call 0
+    22  pop
+    23  retrval
+
+// ===== instanceManager.onBattle/<  (27B) =====
+// params/vars: next#1
+// atoms: ['startLevel']
+     0  getaliasedvar hops=1 slot=7
+     5  dup
+     6  callprop "startLevel"
+    11  swap
+    12  getaliasedvar hops=1 slot=2
+    17  lambda obj#0
+    22  call 2
+    25  pop
+    26  retrval
+
+// ===== instanceManager.onBattle/</<  (41B) =====
+// params/vars: err#0, rewards#0
+// atoms: []
+     0  getarg 0
+     3  ifeq -> 26
+     8  getaliasedvar hops=0 slot=2
+    13  undefined
+    14  getarg 0
+    17  call 1
+    20  pop
+    21  goto -> 40
+    26  getaliasedvar hops=0 slot=2
+    31  undefined
+    32  null
+    33  getarg 1
+    36  call 2
+    39  pop
+    40  retrval
+
+// ===== instanceManager.onBattle/<  (319B) =====
+// params/vars: rewards#0, next#1, resultRewards#3, starMark#3, battleInfo#3, resultCb#2, showCb#2, closeCb#2, args#2
+// atoms: ['op', 'touchEnabled', 'SKIP_BATTLE', 'rewards', 'Team', 'getInstanceBattleTeam', 'id', 'team', 'assistanceSoldier', 'resultCb', 'showCb', 'endCb', 'cb', 'doorParams', 'CONTROL_MARK_CONFIG', 'ALL', 'STOP', 'mark', 'controlParams', 'BattleScene', 'combat']
+     0  name "op"
+     5  false
+     6  setprop "touchEnabled"
+    11  pop
+    12  newinit 1
+    17  endinit
+    18  setaliasedvar hops=0 slot=3
+    23  pop
+    24  zero
+    25  setaliasedvar hops=0 slot=4
+    30  pop
+    31  null
+    32  setaliasedvar hops=0 slot=5
+    37  pop
+    38  lambda obj#0
+    43  setlocal 0
+    47  pop
+    48  lambda obj#1
+    53  setlocal 0
+    57  pop
+    58  lambda obj#2
+    63  setlocal 0
+    67  pop
+    68  name "SKIP_BATTLE"
+    73  ifeq -> 118
+    78  name "op"
+    83  true
+    84  setprop "touchEnabled"
+    89  pop
+    90  getlocal 0
+    94  undefined
+    95  newinit 1
+   100  getarg 0
+   103  initprop "rewards"
+   108  endinit
+   109  call 1
+   112  pop
+   113  goto -> 318
+   118  name "Team"
+   123  dup
+   124  callprop "getInstanceBattleTeam"
+   129  swap
+   130  getaliasedvar hops=1 slot=2
+   135  call 1
+   138  setaliasedvar hops=1 slot=6
+   143  pop
+   144  newinit 1
+   149  getaliasedvar hops=1 slot=2
+   154  initprop "id"
+   159  getaliasedvar hops=1 slot=6
+   164  initprop "team"
+   169  getarg 0
+   172  initprop "rewards"
+   177  getaliasedvar hops=1 slot=15
+   182  initprop "assistanceSoldier"
+   187  getlocal 0
+   191  initprop "resultCb"
+   196  getlocal 0
+   200  initprop "showCb"
+   205  lambda obj#3
+   210  initprop "endCb"
+   215  newinit 1
+   220  getlocal 0
+   224  initprop "cb"
+   229  endinit
+   230  initprop "doorParams"
+   235  newinit 1
+   240  name "CONTROL_MARK_CONFIG"
+   245  getprop "ALL"
+   250  getaliasedvar hops=2 slot=5
+   255  undefined
+   256  call 0
+   259  ifeq -> 270
+   264  zero
+   265  goto -> 280
+   270  name "CONTROL_MARK_CONFIG"
+   275  getprop "STOP"
+   280  sub
+   281  initprop "mark"
+   286  endinit
+   287  initprop "controlParams"
+   292  endinit
+   293  setlocal 0
+   297  pop
+   298  name "BattleScene"
+   303  dup
+   304  callprop "combat"
+   309  swap
+   310  getlocal 0
+   314  call 1
+   317  pop
+   318  retrval
+
+// ===== instanceManager.onBattle/</resultCb  (223B) =====
+// params/vars: args#0, supportInfo#2, subareaInfo#2
+// atoms: ['playerId', 'npcId', 'numberId', 'id', 'soldierId', 'subareaAchievementManager', 'formatBattleInfo', 'finishLevel', 'rewards']
+     0  getaliasedvar hops=2 slot=6
+     5  undefined
+     6  getaliasedvar hops=1 slot=2
+    11  getarg 0
+    14  call 2
+    17  setaliasedvar hops=0 slot=4
+    22  pop
+    23  getarg 0
+    26  setaliasedvar hops=0 slot=5
+    31  pop
+    32  null
+    33  setlocal 0
+    37  pop
+    38  getaliasedvar hops=1 slot=15
+    43  and -> 54
+    48  pop
+    49  getaliasedvar hops=1 slot=16
+    54  ifeq -> 130
+    59  newinit 1
+    64  getaliasedvar hops=1 slot=16
+    69  getprop "playerId"
+    74  initprop "playerId"
+    79  getaliasedvar hops=1 slot=16
+    84  getprop "npcId"
+    89  initprop "npcId"
+    94  getaliasedvar hops=1 slot=16
+    99  getprop "numberId"
+   104  initprop "numberId"
+   109  getaliasedvar hops=1 slot=15
+   114  getprop "id"
+   119  initprop "soldierId"
+   124  endinit
+   125  setlocal 0
+   129  pop
+   130  name "subareaAchievementManager"
+   135  dup
+   136  callprop "formatBattleInfo"
+   141  swap
+   142  getarg 0
+   145  getaliasedvar hops=1 slot=2
+   150  getaliasedvar hops=1 slot=6
+   155  call 3
+   158  setlocal 0
+   162  pop
+   163  getaliasedvar hops=1 slot=7
+   168  dup
+   169  callprop "finishLevel"
+   174  swap
+   175  getaliasedvar hops=1 slot=2
+   180  getaliasedvar hops=0 slot=4
+   185  getarg 0
+   188  getprop "rewards"
+   193  getaliasedvar hops=2 slot=7
+   198  undefined
+   199  getarg 0
+   202  call 1
+   205  lambda obj#0
+   210  getlocal 0
+   214  getlocal 0
+   218  call 7
+   221  pop
+   222  retrval
+
+// ===== instanceManager.onBattle/</resultCb/<  (134B) =====
+// params/vars: data#0
+// atoms: ['SKIP_BATTLE', 'pop', 'LEVEL_GUIDE_RESET', 'guideManager', 'saveGuide']
+     0  getarg 0
+     3  or -> 15
+     8  pop
+     9  newinit 1
+    14  endinit
+    15  setaliasedvar hops=0 slot=3
+    20  pop
+    21  name "SKIP_BATTLE"
+    26  ifeq -> 77
+    31  true
+    32  setaliasedvar hops=1 slot=12
+    37  pop
+    38  getaliasedvar hops=1 slot=13
+    43  and -> 64
+    48  pop
+    49  getaliasedvar hops=1 slot=10
+    54  dup
+    55  callprop "pop"
+    60  swap
+    61  call 0
+    64  pop
+    65  getaliasedvar hops=0 slot=2
+    70  undefined
+    71  null
+    72  null
+    73  call 2
+    76  pop
+    77  getaliasedvar hops=0 slot=4
+    82  zero
+    83  gt
+    84  and -> 101
+    89  pop
+    90  name "LEVEL_GUIDE_RESET"
+    95  getaliasedvar hops=1 slot=2
+   100  getelem
+   101  ifeq -> 133
+   106  name "guideManager"
+   111  dup
+   112  callprop "saveGuide"
+   117  swap
+   118  name "LEVEL_GUIDE_RESET"
+   123  getaliasedvar hops=1 slot=2
+   128  getelem
+   129  call 1
+   132  pop
+   133  retrval
+
+// ===== instanceManager.onBattle/</showCb  (379B) =====
+// params/vars: cb#1, args#2, winStoryId#2
+// atoms: ['againCb', 'backCb', 'battleInfo', 'isFailCanComplete', 'LevelLossLayer', 'pop', 'result', 'LevelCompleteLayer', 'type', 'LEVEL_TYPE', 'DISPOSABLE', 'LevelDisposableWinLayer', 'starMark', 'id', 'LevelRepeatableWinLayer', 'analyticsManager', 'analyticsLevelTeam', 'winStoryId']
+     0  getaliasedvar hops=0 slot=2
+     5  setaliasedvar hops=2 slot=14
+    10  pop
+    11  newinit 1
+    16  lambda obj#0
+    21  initprop "againCb"
+    26  lambda obj#1
+    31  initprop "backCb"
+    36  getaliasedvar hops=1 slot=5
+    41  initprop "battleInfo"
+    46  endinit
+    47  setlocal 0
+    51  pop
+    52  getaliasedvar hops=1 slot=4
+    57  zero
+    58  eq
+    59  ifeq -> 152
+    64  getaliasedvar hops=2 slot=8
+    69  getprop "isFailCanComplete"
+    74  not
+    75  ifeq -> 105
+    80  name "LevelLossLayer"
+    85  dup
+    86  callprop "pop"
+    91  swap
+    92  getlocal 0
+    96  call 1
+    99  pop
+   100  goto -> 147
+   105  getlocal 0
+   109  getaliasedvar hops=1 slot=3
+   114  setprop "result"
+   119  pop
+   120  true
+   121  setaliasedvar hops=2 slot=12
+   126  pop
+   127  name "LevelCompleteLayer"
+   132  dup
+   133  callprop "pop"
+   138  swap
+   139  getlocal 0
+   143  call 1
+   146  pop
+   147  goto -> 301
+   152  getlocal 0
+   156  getaliasedvar hops=1 slot=3
+   161  setprop "result"
+   166  pop
+   167  true
+   168  setaliasedvar hops=2 slot=12
+   173  pop
+   174  getaliasedvar hops=2 slot=8
+   179  getprop "type"
+   184  name "LEVEL_TYPE"
+   189  getprop "DISPOSABLE"
+   194  stricteq
+   195  ifeq -> 225
+   200  name "LevelDisposableWinLayer"
+   205  dup
+   206  callprop "pop"
+   211  swap
+   212  getlocal 0
+   216  call 1
+   219  pop
+   220  goto -> 275
+   225  getlocal 0
+   229  getaliasedvar hops=1 slot=4
+   234  setprop "starMark"
+   239  pop
+   240  getlocal 0
+   244  getaliasedvar hops=2 slot=2
+   249  setprop "id"
+   254  pop
+   255  name "LevelRepeatableWinLayer"
+   260  dup
+   261  callprop "pop"
+   266  swap
+   267  getlocal 0
+   271  call 1
+   274  pop
+   275  name "analyticsManager"
+   280  dup
+   281  callprop "analyticsLevelTeam"
+   286  swap
+   287  getaliasedvar hops=2 slot=2
+   292  getaliasedvar hops=2 slot=5
+   297  call 2
+   300  pop
+   301  getaliasedvar hops=2 slot=8
+   306  getprop "winStoryId"
+   311  ifeq -> 378
+   316  getaliasedvar hops=2 slot=9
+   321  one
+   322  lt
+   323  and -> 336
+   328  pop
+   329  getaliasedvar hops=1 slot=4
+   334  zero
+   335  gt
+   336  ifeq -> 378
+   341  getaliasedvar hops=2 slot=8
+   346  getprop "winStoryId"
+   351  setlocal 0
+   355  pop
+   356  getaliasedvar hops=1 slot=2
+   361  undefined
+   362  null
+   363  getlocal 0
+   367  call 2
+   370  pop
+   371  null
+   372  setaliasedvar hops=1 slot=2
+   377  pop
+   378  retrval
+
+// ===== instanceManager.onBattle/</showCb/args.againCb  (18B) =====
+// params/vars: 
+// atoms: []
+     0  true
+     1  setaliasedvar hops=2 slot=11
+     6  pop
+     7  getaliasedvar hops=0 slot=2
+    12  undefined
+    13  call 0
+    16  pop
+    17  retrval
+
+// ===== instanceManager.onBattle/</showCb/args.backCb  (18B) =====
+// params/vars: 
+// atoms: []
+     0  false
+     1  setaliasedvar hops=2 slot=11
+     6  pop
+     7  getaliasedvar hops=0 slot=2
+    12  undefined
+    13  call 0
+    16  pop
+    17  retrval
+
+// ===== instanceManager.onBattle/</closeCb  (40B) =====
+// params/vars: 
+// atoms: ['op', 'touchEnabled', 'pop']
+     0  name "op"
+     5  true
+     6  setprop "touchEnabled"
+    11  pop
+    12  getaliasedvar hops=1 slot=13
+    17  and -> 38
+    22  pop
+    23  getaliasedvar hops=1 slot=10
+    28  dup
+    29  callprop "pop"
+    34  swap
+    35  call 0
+    38  pop
+    39  retrval
+
+// ===== instanceManager.onBattle/</args.endCb  (54B) =====
+// params/vars: 
+// atoms: []
+     0  getaliasedvar hops=1 slot=4
+     5  ifeq -> 30
+    10  getaliasedvar hops=1 slot=4
+    15  undefined
+    16  getaliasedvar hops=1 slot=11
+    21  getaliasedvar hops=1 slot=12
+    26  call 2
+    29  pop
+    30  getaliasedvar hops=0 slot=2
+    35  and -> 52
+    40  pop
+    41  getaliasedvar hops=0 slot=2
+    46  undefined
+    47  null
+    48  null
+    49  call 2
+    52  pop
+    53  retrval
+
+// ===== instanceManager.onBattle/<  (99B) =====
+// params/vars: winStoryId#0, next#1
+// atoms: ['StoryLayer', 'pop2Scene', 'id', 'cb']
+     0  getaliasedvar hops=2 slot=4
+     5  undefined
+     6  getaliasedvar hops=1 slot=2
+    11  call 1
+    14  pop
+    15  getaliasedvar hops=2 slot=3
+    20  undefined
+    21  getaliasedvar hops=1 slot=2
+    26  call 1
+    29  pop
+    30  getarg 0
+    33  ifeq -> 88
+    38  name "StoryLayer"
+    43  dup
+    44  callprop "pop2Scene"
+    49  swap
+    50  newinit 1
+    55  getarg 0
+    58  initprop "id"
+    63  lambda obj#0
+    68  initprop "cb"
+    73  endinit
+    74  getaliasedvar hops=1 slot=10
+    79  call 2
+    82  pop
+    83  goto -> 98
+    88  getaliasedvar hops=0 slot=2
+    93  undefined
+    94  call 0
+    97  pop
+    98  retrval
+
+// ===== instanceManager.onBattle/</<.cb  (11B) =====
+// params/vars: 
+// atoms: []
+     0  getaliasedvar hops=0 slot=2
+     5  undefined
+     6  call 0
+     9  pop
+    10  retrval
+
+// ===== instanceManager.onBattle/<  (29B) =====
+// params/vars: err#0
+// atoms: []
+     0  getaliasedvar hops=0 slot=3
+     5  undefined
+     6  getarg 0
+     9  getaliasedvar hops=0 slot=11
+    14  getaliasedvar hops=0 slot=12
+    19  getaliasedvar hops=0 slot=16
+    24  call 4
+    27  pop
+    28  retrval
+
+// ===== instanceManager.onStory  (127B) =====
+// params/vars: levelId#1, cb#1, failedCb#1, isStoryNotComplete#1, instance#3, level#3, storyLayer#3, curOptionMark#3
+// atoms: ['dataManager', 'instance', 'getLevel', 'async', 'waterfall']
+     0  name "dataManager"
+     5  getprop "instance"
+    10  setaliasedvar hops=0 slot=6
+    15  pop
+    16  getaliasedvar hops=0 slot=6
+    21  dup
+    22  callprop "getLevel"
+    27  swap
+    28  getaliasedvar hops=0 slot=2
+    33  call 1
+    36  setaliasedvar hops=0 slot=7
+    41  pop
+    42  getaliasedvar hops=0 slot=8
+    47  pop
+    48  null
+    49  setaliasedvar hops=0 slot=9
+    54  pop
+    55  name "async"
+    60  dup
+    61  callprop "waterfall"
+    66  swap
+    67  newarray 5
+    71  lambda obj#0
+    76  initelem_array 0
+    80  lambda obj#1
+    85  initelem_array 1
+    89  lambda obj#2
+    94  initelem_array 2
+    98  lambda obj#3
+   103  initelem_array 3
+   107  lambda obj#4
+   112  initelem_array 4
+   116  endinit
+   117  lambda obj#5
+   122  call 2
+   125  pop
+   126  retrval
+
+// ===== instanceManager.onStory/<  (24B) =====
+// params/vars: next#0
+// atoms: []
+     0  getaliasedvar hops=1 slot=2
+     5  undefined
+     6  getaliasedvar hops=0 slot=2
+    11  call 1
+    14  pop
+    15  getarg 0
+    18  undefined
+    19  call 0
+    22  pop
+    23  retrval
+
+// ===== instanceManager.onStory/<  (30B) =====
+// params/vars: next#0
+// atoms: ['startLevel']
+     0  getaliasedvar hops=0 slot=6
+     5  dup
+     6  callprop "startLevel"
+    11  swap
+    12  getaliasedvar hops=0 slot=2
+    17  getarg 0
+    20  getaliasedvar hops=0 slot=4
+    25  call 3
+    28  pop
+    29  retrval
+
+// ===== instanceManager.onStory/<  (59B) =====
+// params/vars: result#0, next#1
+// atoms: ['StoryLayer', 'pop', 'storyId', 'id', 'removeLayer', 'cb']
+     0  name "StoryLayer"
+     5  dup
+     6  callprop "pop"
+    11  swap
+    12  newinit 1
+    17  getaliasedvar hops=1 slot=7
+    22  getprop "storyId"
+    27  initprop "id"
+    32  false
+    33  initprop "removeLayer"
+    38  lambda obj#0
+    43  initprop "cb"
+    48  endinit
+    49  call 1
+    52  setaliasedvar hops=1 slot=8
+    57  pop
+    58  retrval
+
+// ===== instanceManager.onStory/</storyLayer<.cb  (24B) =====
+// params/vars: optionMark#0
+// atoms: []
+     0  getarg 0
+     3  setaliasedvar hops=1 slot=9
+     8  pop
+     9  getaliasedvar hops=0 slot=2
+    14  undefined
+    15  null
+    16  getarg 0
+    19  call 2
+    22  pop
+    23  retrval
+
+// ===== instanceManager.onStory/<  (35B) =====
+// params/vars: optionMark#0, next#1
+// atoms: ['finishLevel']
+     0  getaliasedvar hops=1 slot=6
+     5  dup
+     6  callprop "finishLevel"
+    11  swap
+    12  getaliasedvar hops=1 slot=2
+    17  getarg 0
+    20  getaliasedvar hops=1 slot=5
+    25  lambda obj#0
+    30  call 4
+    33  pop
+    34  retrval
+
+// ===== instanceManager.onStory/</<  (82B) =====
+// params/vars: rewards#0
+// atoms: ['LEVEL_GUIDE_RESET', 'guideManager', 'saveGuide']
+     0  getarg 0
+     3  ifeq -> 27
+     8  getaliasedvar hops=0 slot=2
+    13  undefined
+    14  null
+    15  getarg 0
+    18  call 2
+    21  pop
+    22  goto -> 38
+    27  getaliasedvar hops=0 slot=2
+    32  undefined
+    33  true
+    34  call 1
+    37  pop
+    38  name "LEVEL_GUIDE_RESET"
+    43  getaliasedvar hops=1 slot=2
+    48  getelem
+    49  ifeq -> 81
+    54  name "guideManager"
+    59  dup
+    60  callprop "saveGuide"
+    65  swap
+    66  name "LEVEL_GUIDE_RESET"
+    71  getaliasedvar hops=1 slot=2
+    76  getelem
+    77  call 1
+    80  pop
+    81  retrval
+
+// ===== instanceManager.onStory/<  (23B) =====
+// params/vars: rewards#0, next#0
+// atoms: ['LevelStoryWinLayer', 'pop']
+     0  name "LevelStoryWinLayer"
+     5  dup
+     6  callprop "pop"
+    11  swap
+    12  getarg 0
+    15  getarg 1
+    18  call 2
+    21  pop
+    22  retrval
+
+// ===== instanceManager.onStory/<  (57B) =====
+// params/vars: err#0
+// atoms: ['destroy']
+     0  getaliasedvar hops=0 slot=3
+     5  and -> 28
+    10  pop
+    11  getaliasedvar hops=0 slot=3
+    16  undefined
+    17  getarg 0
+    20  getaliasedvar hops=0 slot=9
+    25  call 2
+    28  pop
+    29  getaliasedvar hops=0 slot=8
+    34  and -> 55
+    39  pop
+    40  getaliasedvar hops=0 slot=8
+    45  dup
+    46  callprop "destroy"
+    51  swap
+    52  call 0
+    55  pop
+    56  retrval
+
+// ===== instanceManager.popInstanceFinish  (33B) =====
+// params/vars: cb#1
+// atoms: ['moduleManager', 'popModuleOpen', 'bind']
+     0  name "moduleManager"
+     5  dup
+     6  callprop "popModuleOpen"
+    11  swap
+    12  lambda obj#0
+    17  dup
+    18  callprop "bind"
+    23  swap
+    24  this
+    25  call 1
+    28  call 1
+    31  pop
+    32  retrval
+
+// ===== instanceManager.popInstanceFinish/<  (33B) =====
+// params/vars: 
+// atoms: ['showBossLevel']
+     0  getaliasedvar hops=0 slot=2
+     5  ifeq -> 20
+    10  getaliasedvar hops=0 slot=2
+    15  undefined
+    16  call 0
+    19  pop
+    20  this
+    21  dup
+    22  callprop "showBossLevel"
+    27  swap
+    28  call 0
+    31  pop
+    32  retrval
+
+// ===== instanceManager.showBossLevel  (64B) =====
+// params/vars: instance#2, bossKey#2
+// atoms: ['dataManager', 'instance', 'getAppearBossKey', 'BossAppearTipsLayer', 'show']
+     0  name "dataManager"
+     5  getprop "instance"
+    10  setlocal 0
+    14  pop
+    15  getlocal 0
+    19  dup
+    20  callprop "getAppearBossKey"
+    25  swap
+    26  call 0
+    29  setlocal 0
+    33  pop
+    34  getlocal 0
+    38  ifeq -> 63
+    43  name "BossAppearTipsLayer"
+    48  dup
+    49  callprop "show"
+    54  swap
+    55  getlocal 0
+    59  call 1
+    62  pop
+    63  retrval
+
+// ===== instanceManager.onSelectLevel  (104B) =====
+// params/vars: levelId#0, cb#0, instance#2, level#2
+// atoms: ['dataManager', 'instance', 'getLevel', 'type', 'LEVEL_TYPE', 'STORY', 'onStory', 'onBattle']
+     0  name "dataManager"
+     5  getprop "instance"
+    10  setlocal 0
+    14  pop
+    15  getlocal 0
+    19  dup
+    20  callprop "getLevel"
+    25  swap
+    26  getarg 0
+    29  call 1
+    32  setlocal 0
+    36  pop
+    37  getlocal 0
+    41  getprop "type"
+    46  name "LEVEL_TYPE"
+    51  getprop "STORY"
+    56  eq
+    57  ifeq -> 85
+    62  this
+    63  dup
+    64  callprop "onStory"
+    69  swap
+    70  getarg 0
+    73  getarg 1
+    76  call 2
+    79  pop
+    80  goto -> 103
+    85  this
+    86  dup
+    87  callprop "onBattle"
+    92  swap
+    93  getarg 0
+    96  getarg 1
+    99  call 2
+   102  pop
+   103  retrval
+

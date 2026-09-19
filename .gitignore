@@ -1,0 +1,78 @@
+# 《战场双马尾》私服 —— 只放**我们自己写的代码**，不放游戏资产和第三方源码。
+#
+# 为什么这么严：
+#   * game/ 是解包出来的游戏本体（1.16 GB，含原版 APK）——
+#     版权不属于我们，而且远超 GitHub 的仓库建议体积（单文件硬上限 100 MB）。
+#   * engine/src 和 engine/ndk 是 cocos2d-js 源码和 Android NDK（5.4 GB），
+#     第三方，随时能重新下载，没必要入库。
+#   * out/ 是构建产物（551 MB 的 APK）。
+# 需要它们才能构建 —— 获取方式见 README。
+
+# ---------------------------------------------------------------------------
+# 游戏本体 / 第三方 / 构建产物
+# ---------------------------------------------------------------------------
+game/
+out/
+engine/src/
+engine/ndk/
+engine/out/
+
+# 引擎编译中间产物（obj/ 1.3 GB、libs/ 24 MB 的 .so）
+engine/build/oppai-engine/obj/
+engine/build/oppai-engine/libs/
+engine/build/oppai-engine/res/
+
+# 引擎 Android 工程里**逐字抄来的第三方部分**：
+#   Classes/protobuf-lite/  Google protobuf（BSD，28 个文件 404 KB）
+#   Classes/runtime/        cocos2d-js 的 runtime 模板（15 个文件 1.8 MB，
+#                           大半是 Landscape_png.cpp 这种内嵌 PNG 字节数组）
+# 我们自己写的在 Classes/{utilsex,gameshare,xg,talkingdata}/、AppDelegate、
+# ConfigParser、VisibleRect 和 jni/ 里 —— 那些留着。
+# 要编译的话从 cocos2d-js 3.6 的 js-template-runtime 抄回来即可。
+engine/build/oppai-engine/Classes/protobuf-lite/
+engine/build/oppai-engine/Classes/runtime/
+
+# 从原版 .so 里挖出来的参考数据：.so 本身是游戏二进制，不入库；
+# 同目录的 *.txt 是分析结果，留着。
+engine/ref/libcocos2djs-original.so
+engine/ref/**/*.so
+# 参考用的 SpiderMonkey 源码（Mozilla，MPL），按需自己拉
+engine/ref/spidermonkey/
+
+# 第三方二进制（apktool，Apache-2.0）。想要自包含的仓库就把这行删掉。
+script/apktool_3.0.3.jar
+
+# ---------------------------------------------------------------------------
+# 运行时数据
+# ---------------------------------------------------------------------------
+server/var/
+server/accounts.json
+server/players.json
+server/players.json.bak
+server/var/logs/
+server/var/capture/
+server/var/backups/
+
+# ---------------------------------------------------------------------------
+# Python / 编辑器 / 系统
+# ---------------------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+*.keystore
+*.jks
+
+.vscode/
+.idea/
+*.swp
+*~
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# 构建日志
+engine-build*.log
+*.log

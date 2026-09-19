@@ -1,0 +1,356 @@
+﻿// ===== server<  (850B) =====
+// params/vars: OAUTH_HOST#3, servers#3, curServer#3, lastSever#3, globalReqId#3, isServStSyncDone#3, isCallDoSyncSt#3, isDoSyncServStSchedule#3, SYNC_SERV_ST_PATH#3, syncServStatus#3, startSyncServStSchedule#2, stopSyncServStSchedule#2, DO_SYNC_SERV_ST_SCHE_INTERVAL#5, doSyncServStSchedule#3, getIsServStUpdated#2, getServers#2, getServersMap#2, getCurServer#2, setCurServer#2, getLastServer#2, syncLastServer#3, session#3, gameServUrl#3, GAME_SERV_URL_REGEX#2, secret#3, reqPack#3, resUnpack#3, jsonToUrlStr#3, sockSend#3, oauth#2, login#2, toStringReqPackFailedMsg#3, request#3, responseConfig#3, responseFilter#3
+// atoms: ['http://10.110.29.230:8080', 'cc', 'ex', 'addStartFunc', '/get_login', 'addShowFunc', 'favor', 'newFavor', 'favorAsstRefreshed', 'newFavorEvent', 'favorEvent', 'removedFeEventKeys', 'useGiftStatus', 'player', 'quest', 'mail', 'gacha', 'friend', 'items', 'char', 'sign', 'arena', 'score', 'society', 'detect', 'updateDetectSpeedCount', 'boss', 'actquest', 'updatemedals', 'societyclg', 'equipment', 'exchange', 'updateSubareaAchievements', 'updatediarys', 'updatediarysbuyinfo', 'deletelevels', 'updateFriendSupportSoldiers', 'deleteFriendSupportSoldiers', 'receiveSoldierReward', 'updateUseRecord', 'getServers', 'getServersMap', 'getCurServer', 'setCurServer', 'getLastServer', 'syncLastServer', 'getIsServStUpdated', 'startSyncServStSchedule', 'stopSyncServStSchedule', 'oauth', 'login', 'request']
+     0  string "http://10.110.29.230:8080"
+     5  setaliasedvar hops=0 slot=2
+    10  pop
+    11  null
+    12  setaliasedvar hops=0 slot=3
+    17  pop
+    18  null
+    19  setaliasedvar hops=0 slot=4
+    24  pop
+    25  null
+    26  setaliasedvar hops=0 slot=5
+    31  pop
+    32  zero
+    33  setaliasedvar hops=0 slot=6
+    38  pop
+    39  name "cc"
+    44  getprop "ex"
+    49  dup
+    50  callprop "addStartFunc"
+    55  swap
+    56  lambda obj#0
+    61  call 1
+    64  pop
+    65  false
+    66  setaliasedvar hops=0 slot=7
+    71  pop
+    72  false
+    73  setaliasedvar hops=0 slot=8
+    78  pop
+    79  false
+    80  setaliasedvar hops=0 slot=9
+    85  pop
+    86  string "/get_login"
+    91  setaliasedvar hops=0 slot=10
+    96  pop
+    97  lambda obj#1
+   102  setaliasedvar hops=0 slot=11
+   107  pop
+   108  lambda obj#2
+   113  setlocal 0
+   117  pop
+   118  lambda obj#3
+   123  setlocal 0
+   127  pop
+   128  int8 32
+   130  uint16 1000
+   133  mul
+   134  setaliasedvar hops=0 slot=12
+   139  pop
+   140  lambda obj#4
+   145  setaliasedvar hops=0 slot=13
+   150  pop
+   151  lambda obj#5
+   156  setlocal 0
+   160  pop
+   161  name "cc"
+   166  getprop "ex"
+   171  dup
+   172  callprop "addShowFunc"
+   177  swap
+   178  lambda obj#6
+   183  undefined
+   184  call 0
+   187  call 1
+   190  pop
+   191  lambda obj#7
+   196  setlocal 0
+   200  pop
+   201  lambda obj#8
+   206  setlocal 0
+   210  pop
+   211  lambda obj#9
+   216  setlocal 0
+   220  pop
+   221  lambda obj#10
+   226  setlocal 0
+   230  pop
+   231  lambda obj#11
+   236  setlocal 0
+   240  pop
+   241  lambda obj#12
+   246  setaliasedvar hops=0 slot=14
+   251  pop
+   252  null
+   253  setaliasedvar hops=0 slot=15
+   258  pop
+   259  null
+   260  setaliasedvar hops=0 slot=16
+   265  pop
+   266  regexp regexp#0
+   271  setlocal 0
+   275  pop
+   276  null
+   277  setaliasedvar hops=0 slot=17
+   282  pop
+   283  lambda obj#13
+   288  setaliasedvar hops=0 slot=18
+   293  pop
+   294  lambda obj#14
+   299  setaliasedvar hops=0 slot=19
+   304  pop
+   305  lambda obj#15
+   310  setaliasedvar hops=0 slot=20
+   315  pop
+   316  lambda obj#16
+   321  setaliasedvar hops=0 slot=21
+   326  pop
+   327  lambda obj#17
+   332  setlocal 0
+   336  pop
+   337  lambda obj#18
+   342  setlocal 0
+   346  pop
+   347  lambda obj#19
+   352  setaliasedvar hops=0 slot=22
+   357  pop
+   358  lambda obj#20
+   363  setaliasedvar hops=0 slot=23
+   368  pop
+   369  newinit 1
+   374  lambda obj#21
+   379  initprop "favor"
+   384  lambda obj#22
+   389  initprop "newFavor"
+   394  lambda obj#23
+   399  initprop "favorAsstRefreshed"
+   404  lambda obj#24
+   409  initprop "newFavorEvent"
+   414  lambda obj#25
+   419  initprop "favorEvent"
+   424  lambda obj#26
+   429  initprop "removedFeEventKeys"
+   434  lambda obj#27
+   439  initprop "useGiftStatus"
+   444  lambda obj#28
+   449  initprop "player"
+   454  lambda obj#29
+   459  initprop "quest"
+   464  lambda obj#30
+   469  initprop "mail"
+   474  lambda obj#31
+   479  initprop "gacha"
+   484  lambda obj#32
+   489  initprop "friend"
+   494  lambda obj#33
+   499  initprop "items"
+   504  lambda obj#34
+   509  initprop "char"
+   514  lambda obj#35
+   519  initprop "sign"
+   524  lambda obj#36
+   529  initprop "arena"
+   534  lambda obj#37
+   539  initprop "score"
+   544  lambda obj#38
+   549  initprop "society"
+   554  lambda obj#39
+   559  initprop "detect"
+   564  lambda obj#40
+   569  initprop "updateDetectSpeedCount"
+   574  lambda obj#41
+   579  initprop "boss"
+   584  lambda obj#42
+   589  initprop "actquest"
+   594  lambda obj#43
+   599  initprop "updatemedals"
+   604  lambda obj#44
+   609  initprop "societyclg"
+   614  lambda obj#45
+   619  initprop "equipment"
+   624  lambda obj#46
+   629  initprop "exchange"
+   634  lambda obj#47
+   639  initprop "updateSubareaAchievements"
+   644  lambda obj#48
+   649  initprop "updatediarys"
+   654  lambda obj#49
+   659  initprop "updatediarysbuyinfo"
+   664  lambda obj#50
+   669  initprop "deletelevels"
+   674  lambda obj#51
+   679  initprop "updateFriendSupportSoldiers"
+   684  lambda obj#52
+   689  initprop "deleteFriendSupportSoldiers"
+   694  lambda obj#53
+   699  initprop "receiveSoldierReward"
+   704  lambda obj#54
+   709  initprop "updateUseRecord"
+   714  endinit
+   715  setaliasedvar hops=0 slot=24
+   720  pop
+   721  lambda obj#55
+   726  setaliasedvar hops=0 slot=25
+   731  pop
+   732  newinit 1
+   737  getlocal 0
+   741  initprop "getServers"
+   746  getlocal 0
+   750  initprop "getServersMap"
+   755  getlocal 0
+   759  initprop "getCurServer"
+   764  getlocal 0
+   768  initprop "setCurServer"
+   773  getlocal 0
+   777  initprop "getLastServer"
+   782  getaliasedvar hops=0 slot=14
+   787  initprop "syncLastServer"
+   792  getlocal 0
+   796  initprop "getIsServStUpdated"
+   801  getlocal 0
+   805  initprop "startSyncServStSchedule"
+   810  getlocal 0
+   814  initprop "stopSyncServStSchedule"
+   819  getlocal 0
+   823  initprop "oauth"
+   828  getlocal 0
+   832  initprop "login"
+   837  getaliasedvar hops=0 slot=23
+   842  initprop "request"
+   847  endinit
+   848  return
+   849  retrval
+
+// ===== syncServStatus  (41B) =====
+// params/vars: cb#1
+// atoms: ['async', 'eachLimit']
+     0  false
+     1  setaliasedvar hops=1 slot=7
+     6  pop
+     7  name "async"
+    12  dup
+    13  callprop "eachLimit"
+    18  swap
+    19  getaliasedvar hops=1 slot=3
+    24  int8 8
+    26  lambda obj#0
+    31  lambda obj#1
+    36  call 4
+    39  pop
+    40  retrval
+
+// ===== syncServStatus/<  (89B) =====
+// params/vars: serv#1, next#1
+// atoms: ['httpc', 'sendWebGetRequest', 'http://', 'ip', ':', 'gatePort', 'key=', 'logindKey']
+     0  getaliasedvar hops=2 slot=9
+     5  and -> 87
+    10  pop
+    11  name "httpc"
+    16  dup
+    17  callprop "sendWebGetRequest"
+    22  swap
+    23  string "http://"
+    28  getaliasedvar hops=0 slot=2
+    33  getprop "ip"
+    38  add
+    39  string ":"
+    44  add
+    45  getaliasedvar hops=0 slot=2
+    50  getprop "gatePort"
+    55  add
+    56  getaliasedvar hops=2 slot=10
+    61  add
+    62  string "key="
+    67  getaliasedvar hops=0 slot=2
+    72  getprop "logindKey"
+    77  add
+    78  lambda obj#0
+    83  true
+    84  call 4
+    87  pop
+    88  retrval
+
+// ===== syncServStatus/</<  (223B) =====
+// params/vars: err#0, res#0
+// atoms: ['gamedStatus', 'JSON', 'parse', 'cc', 'log', '[sync serv status] failed, msg: failed to decode res', 'code', '[sync serv status] failed, msg: ', 'msg', 'loginPort', 'port']
+     0  getarg 0
+     3  ifeq -> 30
+     8  getaliasedvar hops=0 slot=2
+    13  false
+    14  setprop "gamedStatus"
+    19  pop
+    20  getaliasedvar hops=0 slot=3
+    25  undefined
+    26  call 0
+    29  return
+    30  try
+    31  name "JSON"
+    36  dup
+    37  callprop "parse"
+    42  swap
+    43  getarg 1
+    46  call 1
+    49  setarg 1
+    52  pop
+    53  goto -> 122
+    58  undefined
+    59  setlocal 0
+    63  pop
+    64  exception
+    65  setlocal 0
+    69  pop
+    70  name "cc"
+    75  dup
+    76  callprop "log"
+    81  swap
+    82  string "[sync serv status] failed, msg: failed to decode res"
+    87  call 1
+    90  pop
+    91  getaliasedvar hops=0 slot=2
+    96  false
+    97  setprop "gamedStatus"
+   102  pop
+   103  getaliasedvar hops=0 slot=3
+   108  undefined
+   109  call 0
+   112  setrval
+   113  debugleaveblock
+   114  retrval
+   115  debugleaveblock
+   116  goto -> 122
+   121  nop
+   122  getarg 1
+   125  getprop "code"
+   130  uint16 200
+   133  strictne
+   134  ifeq -> 174
+   139  name "cc"
+   144  dup
+   145  callprop "log"
+   150  swap
+   151  string "[sync serv status] failed, msg: "
+   156  getarg 1
+   159  getprop "msg"
+   164  add
+   165  call 1
+   168  pop
+   169  goto -> 212
+   174  getaliasedvar hops=0 slot=2
+   179  getarg 1
+   182  getprop "gamedStatus"
+   187  setprop "gamedStatus"
+   192  pop
+   193  getaliasedvar hops=0 slot=2
+   198  getarg 1
+   201  getprop "port"
+   206  setprop "loginPort"
+   211  pop
+   212  getaliasedvar hops=0 slot=3
+   217  undefined
+   218  call 0
+   221  pop
+   222  retrval
+

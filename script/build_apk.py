@@ -1,0 +1,780 @@
+"""打包 APK —— 走完整的 apktool 流程。
+
+设计原则：**所有改动都落在解包目录里，然后让 apktool 打完整包**。
+不再手动拼 zip —— 那样虽然快一点，但绕过了 aapt2 的资源组装，
+`--strip` 也只能靠字符串前缀匹配，不够可控。
+
+    python tools/build_apk.py --host 10.110.29.230
+
+流程：
+    1. 改解包目录里的资源
+         assets/srcex/urlconfig.jsc        CDN 地址（原地等长替换）
+         assets/src/util/server.jsc        登录服务地址
+         assets/src/data/share.jsc         分享服务地址
+         assets/src/patch/project.manifest 热更地址
+         assets/project.json               jsList 里加 patch.js（+ 可选 probe.js）
+         assets/src/patch/patch.js         必须的客户端适配
+         assets/src/patch/probe.js         诊断探针（--no-probe 时不写）
+       并删掉用不到的：
+         assets/res/adimage, adcolumn      广告图
+         assets/bdpwxpayplugin.apk         百度支付插件
+         assets/quicksdk.xml / lib/*.so    已由 strip.py 删过
+         smali/android/support, android/net  死代码，dex 里白占地方（见 DROP_SMALI）
+    2. apktool b <解包目录> -o <work>/zcsmw-mod.apk --no-crunch
+    3. zipalign -f -p 4
+    4. apksigner sign（v1 + v2）
+
+所有步骤都是**幂等**的：已经替换过的地址会被识别出来直接跳过。
+
+路径可用环境变量覆盖：GS_APK_DIR / GS_WORK_DIR / GS_JAVA_HOME / GS_BUILD_TOOLS
+"""
+
+from __future__ import annotations
+
+import argparse
+import glob
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+# --- 路径自举（项目已重排：脚本在 script/、服务端在 server/）---
+# 从自己往上找带 _paths.py 的那一层，把它和 server/ 都塞进 sys.path。
+_d = os.path.dirname(os.path.abspath(__file__))
+while _d != os.path.dirname(_d) and not os.path.isfile(os.path.join(_d, "_paths.py")):
+    _d = os.path.dirname(_d)
+sys.path.insert(0, _d)
+import _paths  # noqa: F401,E402
+
+
+
+
+BASE_DIR = _paths.SERVER          # client/patch.js 在服务端那边
+
+APK_DIR = os.environ.get("GS_APK_DIR", r"E:\code\zcsmw\game")
+WORK = os.environ.get("GS_WORK_DIR", r"E:\code\zcsmw\out")
+DEFAULT_PATCH = os.path.join(BASE_DIR, "client", "patch.js")
+DEFAULT_PROBE = os.path.join(BASE_DIR, "client", "probe.js")
+APKTOOL = os.environ.get("GS_APKTOOL", r"E:\code\zcsmw\script\apktool.bat")
+
+BUILD_TOOLS = os.environ.get("GS_BUILD_TOOLS", r"D:\Android\android-sdk\build-tools\36.0.0")
+JAVA_HOME = os.environ.get("GS_JAVA_HOME", r"D:\java\zulu17.68.203-ca-jdk17.0.20.1-win_x64")
+KEYSTORE = os.path.join(WORK, "debug.keystore")
+
+OLD_HOST = b"cdn.shuangmawei.net"          # 19 字节
+OLD_WWW = b"www.shuangmawei.net"           # 19 字节
+OLD_OAUTH = b"http://114.55.66.97:16840"   # 25 字节
+OLD_SHARE = b"http://114.55.66.97:14589"   # 25 字节
+
+# 直接删掉的资源（已经停服/用不到）
+DROP_ASSETS = (
+    "assets/res/adimage",                     # 广告原图（广告服务早停）
+    "assets/res/adcolumn",
+    "assets/bdpwxpayplugin.apk",              # 百度支付插件
+    "assets/quicksdk.xml",                    # QuickSDK 配置
+    "assets/com.qk.plugin.qkfx.Manager",      # QuickSDK 插件管理器
+    "assets/open_sdk_file.dat",               # QQ 互联 SDK
+    # apktool 把「不认识的散装文件」放在 unknown/ 下，打包时会原样导回去。
+    # 这里只剩 SDK 残留：微博的 CA 证书 x2 + 百度渠道号，整目录删掉。
+    "unknown",
+    # --- 2026-09 复核过的一批：把能加载它们的地方全扫了，一个名字都没出现 ---
+    # 扫描范围：assets/src、assets/script、assets/srcex、main.jsc、config.json、
+    # project.json、smali/**、lib/*/libcocos2djs.so、res/**（共 1085 个文件），
+    # ASCII 和 UTF-16LE/BE 三种编码都试过。一个都没命中 = 没有任何代码能加载它们。
+    "assets/drawable",                        # 微博 SDK 的图（weibosdk_* /
+    "assets/drawable-hdpi",                   #   ic_com_sina_weibo_sdk_* /
+    "assets/drawable-ldpi",                   #   login_country_background …）
+    "assets/drawable-mdpi",                   # 注意是 assets/ 下，不是 res/drawable-*；
+    "assets/drawable-xhdpi",                  # 微博 SDK 类早就被 strip.py 删了
+    "assets/drawable-xxhdpi",
+    "assets/service.cfg",                     # 百度钱包 SDK 配置（baifubao.com，日期还停在 2014）
+    "assets/countryCode.txt",                 # 手机号登录的国家码表（mcc 规则）
+    "assets/countryCodeEn.txt",
+    "assets/countryCodeTw.txt",
+    "assets/pinyinindex",                     # 全工程连 "pinyin" 这个子串都没有
+    "assets/data.bin",                        # 同上，没有任何地方引用
+)
+
+# `res/` 下 SDK 资源的文件名前缀 —— 命中就整文件删（见 drop_sdk_res()）。
+#
+#     bdp_     百度支付（Baidu Pay）
+#     dk_      多酷（Duoku），百度系渠道
+#     wallet_  百度钱包
+#     ebpay_   易宝支付
+#     bd_      百度 SDK 的杂项
+#     qk_      QuickSDK
+#
+# 这 6 个前缀覆盖了 res/ 下 942 个文件里的 906 个（1613 KB），剩下的 26 个是
+# 游戏自己的：各密度 icon.png、splash_img_0.png、slidingmenumain.xml、
+# nfc_tech_filter.xml、values-*/dimens.xml。
+# 每条都对着实际文件核过，没有游戏资源被误伤。
+DROP_RES_PREFIXES = ("bdp_", "dk_", "wallet_", "ebpay_", "bd_", "qk_")
+
+# XML 里的资源引用：`@anim/foo`、`@+id/foo`、`@android:color/foo`
+RE_RES_REF = re.compile(r"@(?:\+)?(?:android:)?([a-z]+)/([A-Za-z0-9_.]+)")
+
+# 直接删掉的 smali —— 死代码，dex 里白占地方。
+#
+# android/support/**  1124 个文件 / 7.5 MB smali。整个工程（smali/com、smali/org、
+#   AndroidManifest.xml、assets 里的 js/jsc）**一处引用都没有**。唯一的引用方是
+#   res/layout 下百度钱包 / 多酷的三个布局（bd_wallet_sign_channel_list.xml、
+#   dk_dialog_back.xml、dk_downloadmanager_activity.xml），而那几个 SDK 的类
+#   早就被 script/sdk_strip/strip.py 删干净了，这些布局永远 inflate 不到。
+#   MultiDex 也没人用：Application 链是
+#     org.cocos2dx.javascript.GameApplication
+#       -> com.quicksdk.QuickSdkApplication -> android.app.Application
+#   没有 MultiDexApplication，而且只有一个 classes.dex，本来就不需要 multidex。
+#
+# android/net/**  android.net.http.* + android.net.compatibility.WebAddress，
+#   都是 **framework 类**。app dex 里的同名类永远被 boot classpath 挡住，
+#   放进来纯属白占地方（工程真正用到的是框架里的 android.net.Uri /
+#   android.net.wifi.WifiManager，那些在 /system/framework 里）。
+#
+# 删错了也不要紧：原版包在 game/original/zcsmw-original.apk，重新 apktool d
+# 就能拿回来；out/removed-smali/ 里也留了一份现成的。
+#
+# 每条是 (要删的目录, 判定「还有人引用吗」用的类名前缀)。
+# ⚠️ 前缀不能随便拿目录名去拼：`smali/android/net` 如果拿 "android/net" 当前缀，
+# 会把满地的 `Landroid/net/Uri;`、`Landroid/net/wifi/WifiManager;`（框架类，
+# 在 /system/framework 里）全算成命中，于是永远不敢删。只能查它实际带的子包。
+DROP_SMALI = (
+    ("smali/android/support", ("android/support",)),
+    ("smali/android/net", ("android/net/http", "android/net/compatibility")),
+)
+
+# 单类级别的死代码，一组一组删。每组是 ((glob…), 说明)。
+#
+# 判定「还有人引用吗」用的是**组里所有类的名字**，扫描时把整组文件排除掉 ——
+# 必须按组而不是按文件，因为 R$anim 的注解里就写着 `value = Lcom/cm/zcsmw/baidu/R;`，
+# 按文件判会自己把自己当成引用方，于是永远不敢删。
+# 只要组外还有一处引用，整组保留。
+#
+# 每一组都是 script/smali_reach.py 从「清单组件 ∪ .so 里的类名 ∪ js/jsc 里的类名」
+# 做闭包算出来的不可达类，另外单独确认过没被反射：
+# 两个 .so 和 13861 个 asset 里 `zcsmw` 只出现在编译器塞进去的源码路径
+# （`E:/code/zcsmw/engine/src/...`），拼不出 `com.cm.zcsmw.baidu.R$*` 这种名字。
+DROP_SMALI_GROUPS = (
+    (
+        ("com/cm/zcsmw/baidu/R.smali", "com/cm/zcsmw/baidu/R$*.smali"),
+        "R 资源表：14 个类 / 1.27 MB smali，占了当时剩余 smali 的 60%",
+    ),
+    (
+        ("org/json/alipay/*.smali",),
+        "支付宝 SDK 自己带的一份 org.json（和框架的 org.json 不是一回事）",
+    ),
+    (
+        ("org/cocos2dx/lib/GameController*.smali",),
+        "手柄支持：Cocos2dxActivity 并没 implements GameControllerDelegate，8 个文件只自引用",
+    ),
+    (
+        ("org/cocos2dx/lib/Cocos2dxLuaJavaBridge.smali",),
+        "Lua 桥 —— 这游戏是 cocos2d-js，根本不走 Lua",
+    ),
+    (
+        ("com/tendcloud/tenddata/TDGA*.smali",),
+        "TalkingData 的数据类（主类留着，这几个没人调）",
+    ),
+    (
+        ("com/cm/zcsmw/baidu/wxapi/WXEntryActivity.smali",
+         "com/tencent/mm/sdk/openapi/BaseResp.smali"),
+        "微信回调 Activity + 它的父类：清单里压根没声明这个 Activity",
+    ),
+)
+
+# R 为什么会变成「死代码」——顺手记一下，免得以后有人以为是误删：
+#
+#   R$*.smali 不是普通的常量表。它的字段全是**只声明不给值**
+#   （`.field public static final dk_float_big_bubble_in:I`），真正的值在 <clinit>
+#   里调 `Lcom/quicksdk/apiadapter/baidu/ActivityAdapter;->getResId(名字,类型)I`
+#   现查现填 —— 百度/多酷那套加固手法。
+#   而 ActivityAdapter 是**我们自己写的桩**（用 Resources.getIdentifier 顶替），
+#   它存在的唯一理由就是让这套 R 能用。
+#
+#   所以：R 是「给已经被 strip.py 删掉的百度渠道 SDK 用的资源表」。SDK 没了，
+#   就没人读 R 的字段了（三个清单组件、所有 quicksdk 桩、两个 .so、全部 asset
+#   都搜过，零引用），整组可删。
+#   **但 ActivityAdapter 故意留着**：就 1.2 KB，而且是那个渠道适配的说明性代码；
+#   哪天把 R 从原版包解回来，它还得接着用。
+
+
+
+def log(*a):
+    print("[build]", *a, flush=True)
+
+
+def Warn(*a):
+    print("[build][warn]", *a, flush=True)
+
+
+def smali_users_of(rel: str, prefixes) -> list:
+    """在 smali 里找谁还引用着 `rel` 这个包。
+
+    `prefixes` 是类名前缀（斜杠写法，如 "android/support"）——smali 引用一个类
+    永远是 `Landroid/support/v4/view/ViewPager;` 这种描述符，斜杠写法是准的。
+    点号写法（反射用的 `Class.forName("android.support...")`）单独审过：全工程 0 处。
+    """
+    root = os.path.join(APK_DIR, "smali")
+    skip = os.path.abspath(os.path.join(APK_DIR, rel))
+    needles = [p.encode() for p in prefixes]
+    hits = []
+    for r, _, fs in os.walk(root):
+        if os.path.abspath(r) == skip or os.path.abspath(r).startswith(skip + os.sep):
+            continue
+        for f in fs:
+            if not f.endswith(".smali"):
+                continue
+            p = os.path.join(r, f)
+            try:
+                with open(p, "rb") as fh:
+                    b = fh.read()
+            except OSError:
+                continue
+            if any(n in b for n in needles):
+                hits.append(os.path.relpath(p, APK_DIR))
+    return hits
+
+
+def expand_smali_globs(patterns) -> list:
+    """把 `game/smali` 下的相对 glob 展开成 [绝对路径]。"""
+    root = os.path.join(APK_DIR, "smali")
+    out = []
+    for pat in patterns:
+        out.extend(glob.glob(os.path.join(root, pat.replace("/", os.sep))))
+    return sorted(set(os.path.abspath(p) for p in out if os.path.isfile(p)))
+
+
+def smali_users_of_classes(members) -> list:
+    """整组一起看：组外还有谁引用组里的类？
+
+    `members` 是绝对路径列表。判定用的「类名」直接从文件路径推出来，
+    所以调用方不用手写前缀，也不会写错。
+    """
+    root = os.path.join(APK_DIR, "smali")
+    members = {os.path.abspath(m) for m in members}
+    needles = []
+    for m in members:
+        cls = os.path.relpath(m, root)[: -len(".smali")].replace(os.sep, "/")
+        needles.append(cls.encode())
+    hits = []
+    for r, _, fs in os.walk(root):
+        for f in fs:
+            if not f.endswith(".smali"):
+                continue
+            p = os.path.join(r, f)
+            if os.path.abspath(p) in members:
+                continue
+            try:
+                with open(p, "rb") as fh:
+                    b = fh.read()
+            except OSError:
+                continue
+            if any(n in b for n in needles):
+                hits.append(os.path.relpath(p, APK_DIR))
+    return hits
+
+
+# ---------------------------------------------------------------------------
+# 地址替换（必须等长：jsc 里字符串是长度前缀存的）
+# ---------------------------------------------------------------------------
+def make_host_token(host: str, port: int) -> bytes:
+    token = f"{host}:{port}".encode()
+    if len(token) != len(OLD_HOST):
+        raise SystemExit(
+            f"host:port 必须是 {len(OLD_HOST)} 字节，'{token.decode()}' 是 {len(token)} 字节"
+        )
+    return token
+
+
+def make_login_base(host: str, port: int) -> bytes:
+    token = f"http://{host}:{port}".encode()
+    if len(token) != len(OLD_OAUTH):
+        raise SystemExit(
+            f"登录服务地址必须是 {len(OLD_OAUTH)} 字节，'{token.decode()}' 是 {len(token)} 字节 "
+            f"—— 端口请用 4 位数"
+        )
+    return token
+
+
+def _replace_in_file(path: str, pairs, what: str) -> int:
+    """把 (旧, 新) 逐个做原地等长替换；已经换过的直接跳过（幂等）。"""
+    with open(path, "rb") as fh:
+        data = fh.read()
+    orig = data
+    done = 0
+    for old, new in pairs:
+        if new in data:
+            continue                      # 已经替换过
+        if old not in data:
+            log(f"  ! {os.path.relpath(path, APK_DIR)}: 找不到 {old.decode()}，跳过")
+            continue
+        data = data.replace(old, new)
+        done += 1
+    if data != orig:
+        with open(path, "wb") as fh:
+            fh.write(data)
+    log(f"  {what}: 替换 {done} 处")
+    return done
+
+
+# res/<dir> -> 资源类型。只列「能按文件删」的；values*/ 是定义处，不参与。
+RES_DIR_TYPE = {
+    "drawable": "drawable", "layout": "layout", "anim": "anim", "color": "color",
+    "xml": "xml", "raw": "raw", "menu": "menu", "mipmap": "mipmap",
+}
+
+
+def _res_type(dirname: str):
+    """`drawable-hdpi-v4` -> `drawable`；`values*` -> None（不参与删除）。"""
+    if dirname.startswith("values"):
+        return None
+    return RES_DIR_TYPE.get(dirname.split("-")[0])
+
+
+def _res_name(fname: str) -> str:
+    """文件名 -> 资源名。
+
+    ⚠️ 九图（nine-patch）要多剥一层：`bd_wallet_single_item_bg.9.png` 的资源名是
+    `bd_wallet_single_item_bg`，而 `os.path.splitext()` 只会给出
+    `bd_wallet_single_item_bg.9` —— 拿它去比 public.xml / XML 引用永远对不上，
+    于是「文件删了、public.xml 条目留着」，aapt 报
+    `no definition for declared symbol 'drawable/bd_wallet_single_item_bg'`。
+    第一版就是栽在这上面。
+    """
+    n = fname
+    for ext in (".png", ".jpg", ".jpeg", ".gif", ".webp", ".xml"):
+        if n.lower().endswith(ext):
+            n = n[: -len(ext)]
+            break
+    if n.endswith(".9"):
+        n = n[:-2]
+    return n
+
+
+def drop_sdk_res() -> None:
+    """删掉 `res/` 下**没人引用**的 SDK 资源（百度钱包 / 多酷支付 / ebpay / QuickSDK）。
+
+    这些渠道的服务器早没了，Java 类也被 `sdk_strip/strip.py` 删光了，
+    `res/` 里剩下的就是一堆永远 inflate 不到的布局和图。
+
+    判据不是「文件名带 SDK 前缀就删」—— 那样会翻车：`res/values/styles.xml`
+    里有 46 处引用着 `@anim/wallet_base_slide_from_right` 这类 SDK 资源，
+    删了 aapt 直接报 `resource anim/... not found`。（第一版就是这么挂的。）
+
+    所以走引用闭包：
+        根   = 非 SDK 前缀的文件 + `res/values*/**` + AndroidManifest.xml
+        边   = XML 里的 `@type/name`
+        保留 = 闭包里的全部；删除 = 带 SDK 前缀且不在闭包里的
+    这样「values 里还被 style 引用的 anim」会连同它的依赖一起留下。
+
+    **绝不动 `res/values/*.xml` 文件本身** —— 那里面游戏和 SDK 的条目是混在一起
+    的，整文件删会把 `app_name`、`xg_service_enabled` 一起带走。
+
+    最后仍有 aapt 兜底：只要还有保留文件引用被删资源，打包会直接报错，
+    不会出静默失效的包。报错就从 `out/removed-res/` 把那个文件拿回来。
+    """
+    res_root = os.path.join(APK_DIR, "res")
+    if not os.path.isdir(res_root):
+        return
+
+    # 1) 建索引：(类型, 名字) -> [文件]，以及全部可删候选
+    index = {}
+    files = []
+    for r, _, fs in os.walk(res_root):
+        typ = _res_type(os.path.basename(r))
+        if typ is None:
+            continue
+        for f in fs:
+            p = os.path.join(r, f)
+            files.append(p)
+            index.setdefault((typ, _res_name(f)), []).append(p)
+    if not files:
+        return
+
+    def is_sdk(p):
+        return os.path.basename(p).startswith(DROP_RES_PREFIXES)
+
+    # 2) 从「根」出发做闭包
+    roots = [p for p in files if not is_sdk(p)]
+    keep = set(roots)
+    queue = list(roots)
+    # values*/ 只是定义处，但它们引用谁谁就得留
+    for r, _, fs in os.walk(res_root):
+        if os.path.basename(r).startswith("values"):
+            queue.extend(os.path.join(r, f) for f in fs if f.endswith(".xml"))
+    man = os.path.join(APK_DIR, "AndroidManifest.xml")
+    if os.path.isfile(man):
+        queue.append(man)
+
+    while queue:
+        cur = queue.pop()
+        try:
+            with open(cur, encoding="utf-8", errors="replace") as fh:
+                text = fh.read()
+        except OSError:
+            continue
+        for typ, name in RE_RES_REF.findall(text):
+            for p in index.get((typ, name), ()):
+                if p not in keep:
+                    keep.add(p)
+                    queue.append(p)
+
+    # 3) 删
+    doomed = [p for p in files if is_sdk(p) and p not in keep]
+    if not doomed:
+        return
+    kb = sum(os.path.getsize(p) for p in doomed) / 1024
+    for p in doomed:
+        os.remove(p)
+    log(f"  删除 {len(doomed)} 个没人引用的 SDK 资源 ({kb:.0f} KB)")
+    # values 里还被引用的那些 SDK 资源（连同依赖）留在原地
+    kept_sdk = [p for p in files if is_sdk(p) and p in keep]
+    if kept_sdk:
+        log(f"    （另有 {len(kept_sdk)} 个 SDK 资源被 values/ 引用，保留）")
+    prune_public_xml({(os.path.relpath(p, res_root).split(os.sep)[0], _res_name(os.path.basename(p)))
+                      for p in doomed})
+
+
+def prune_public_xml(doomed) -> None:
+    """把 `public.xml` 里指向已删资源的条目剪掉。
+
+    public.xml 的作用是把每个资源的 ID 钉死；删了文件却留着条目，apktool 会报
+    「public.xml 指向不存在的资源」。只剪 `doomed` 里那些 (类型, 名字) ——
+    其余一律保留，这样**还在的资源 ID 不会变**（smali 里有按数字取资源的，
+    例如 `XGAdapter` 取 `0x7f060000` = `xg_service_enabled`）。
+    """
+    path = os.path.join(APK_DIR, "res", "values", "public.xml")
+    if not os.path.isfile(path) or not doomed:
+        return
+    names = {n for _, n in doomed}
+    with open(path, "r", encoding="utf-8") as fh:
+        lines = fh.read().split("\n")
+    out, removed = [], 0
+    for ln in lines:
+        m = re.search(r'<public\s+type="([^"]+)"\s+name="([^"]+)"', ln)
+        if m and m.group(2) in names:
+            removed += 1
+            continue
+        out.append(ln)
+    if not removed:
+        return
+    with open(path, "w", encoding="utf-8", newline="\n") as fh:
+        fh.write("\n".join(out))
+    log(f"  public.xml: 剪掉 {removed} 条已删资源的 ID")
+
+
+def prune_stale_build_res() -> None:
+    """清掉 apktool 缓存 `build/apk/res/` 里源文件已经不存在的条目。
+
+    `build/apk/` 是 apktool 的增量缓存，**打包时会原样塞进 APK**。删掉 `game/res`
+    下某个资源后，缓存里那份编译好的还在，于是照样进包 —— 删了等于没删。
+
+    这个坑很隐蔽：`resources.arsc` 和 `classes.dex` 都会重新生成（看着一切正常），
+    只有 `res/` 是增量的。实测删了 873 个资源（1594 KB），APK 只小了 90 KB，
+    一查包内还有 906 个 SDK 资源原封不动。
+
+    dex 那边早有 `prune_stale_dex()`，res 一直没人管 —— 这里补上。
+
+    做法是最稳的那种：**整个删掉 `build/apk/res/`**，让 apktool 下次从 `game/res`
+    全量重编。现在 source 只剩几十个文件，重编的开销可以忽略；
+    按文件比对「源里还在不在」也可以，但只要有 21 个源文件还没进过缓存
+    （apktool 本来就是懒编译），逐文件比对就得赌它会不会补编译。
+    """
+    build_res = os.path.join(APK_DIR, "build", "apk", "res")
+    if not os.path.isdir(build_res):
+        return
+    n = sum(len(fs) for _, _, fs in os.walk(build_res))
+    shutil.rmtree(build_res, ignore_errors=True)
+    log(f"  清掉 apktool 的 res 增量缓存（{n} 个，防止已删资源照进包）")
+
+
+def prune_do_not_compress() -> None:
+    """剪掉 apktool.yml 里 doNotCompress 指向已删文件的条目。
+
+    这些残留条目会让 apktool 把已经不存在的路径也当成「不压缩」，
+    有时还会把原始 APK 里的 unknown file 一起带进产物。
+    注意不要动 `arsc` / `png` / `mp3` 这种**扩展名**条目（它们不是路径）。
+    """
+    path = os.path.join(APK_DIR, "apktool.yml")
+    if not os.path.isfile(path):
+        return
+    with open(path, "r", encoding="utf-8") as fh:
+        lines = fh.read().split("\n")
+
+    out, removed = [], []
+    in_dnc = False
+    for line in lines:
+        if line.startswith("doNotCompress:"):
+            in_dnc = True
+            out.append(line)
+            continue
+        if in_dnc:
+            if line.startswith("- "):
+                rel = line[2:].strip()
+                if "/" in rel and not os.path.exists(os.path.join(APK_DIR, rel)):
+                    removed.append(rel)
+                    continue
+            elif line.strip():
+                in_dnc = False
+        out.append(line)
+
+    if removed:
+        with open(path, "w", encoding="utf-8", newline="\n") as fh:
+            fh.write("\n".join(out))
+        log(f"  apktool.yml: 剪掉 {len(removed)} 条已失效的 doNotCompress")
+        for r in removed[:8]:
+            log(f"      - {r}")
+
+
+def prune_stale_dex() -> None:
+    """清理 apktool 增量缓存里已经不存在的 dex。
+
+    `build/apk/` 是 apktool 的缓存，打包时会把它里面的东西原样塞进 APK。
+    合并/删掉 smali 目录之后（比如 smali_classes2 并进 smali、smali_sdkstub 删掉），
+    缓存里的 classes2.dex / sdkstub.dex 还在，会被一起打进包。
+
+    这里按「当前存在哪些 smali 目录」算出期望的 dex 名，多余的删掉。
+    """
+    build = os.path.join(APK_DIR, "build", "apk")
+    if not os.path.isdir(build):
+        return
+
+    expected = set()
+    for d in os.listdir(APK_DIR):
+        if not os.path.isdir(os.path.join(APK_DIR, d)) or not d.startswith("smali"):
+            continue
+        if d == "smali":
+            expected.add("classes.dex")
+        else:
+            # smali_classes2 -> classes2.dex； smali_sdkstub -> sdkstub.dex
+            expected.add(d[len("smali_"):] + ".dex" if d.startswith("smali_") else "classes.dex")
+
+    for f in sorted(os.listdir(build)):
+        if f.endswith(".dex") and f not in expected:
+            os.remove(os.path.join(build, f))
+            log(f"  清理陈旧 dex: build/apk/{f}")
+
+
+def prepare_assets(host: str, port: int, login_port: int, patch_path: str,
+                   probe_path: str, with_probe: bool) -> None:
+    token = make_host_token(host, port)
+    login_base = make_login_base(host, login_port)
+    log(f"CDN      -> {token.decode()}")
+    log(f"登录服务 -> {login_base.decode()}")
+
+    _replace_in_file(os.path.join(APK_DIR, "assets/srcex/urlconfig.jsc"),
+                     [(OLD_HOST, token)], "urlconfig.jsc")
+    _replace_in_file(os.path.join(APK_DIR, "assets/src/util/server.jsc"),
+                     [(OLD_OAUTH, login_base)], "server.jsc")
+    _replace_in_file(os.path.join(APK_DIR, "assets/src/data/share.jsc"),
+                     [(OLD_SHARE, login_base)], "share.jsc")
+    _replace_in_file(os.path.join(APK_DIR, "assets/src/patch/project.manifest"),
+                     [(OLD_HOST, token), (OLD_WWW, token)], "project.manifest")
+
+    # project.json：jsList 里加入 patch.js（必需）和 probe.js（可选）
+    #
+    # 拆分说明：patch.js 是「少了游戏就跑不对」的适配层，必须打包；
+    #           probe.js 是研究用探针（加密/协议挂钩、REPL、字段探测），
+    #           release 可以用 GS_WITH_PROBE=0 排除掉。
+    pj = os.path.join(APK_DIR, "assets/project.json")
+    cfg = json.loads(open(pj, "r", encoding="utf-8").read())
+    js_list = cfg.setdefault("jsList", [])
+    # 老版本注入过 hook.js，清掉
+    if "src/patch/hook.js" in js_list:
+        js_list.remove("src/patch/hook.js")
+    wanted = ["src/patch/patch.js"]
+    if with_probe:
+        wanted.append("src/patch/probe.js")
+    # 先清掉这次不打包的（让 --no-probe 的增量构建也正确）
+    changed = False
+    for name in ("src/patch/patch.js", "src/patch/probe.js"):
+        if name not in wanted and name in js_list:
+            js_list.remove(name)
+            changed = True
+    for name in wanted:
+        if name not in js_list:
+            js_list.append(name)
+            changed = True
+    if changed:
+        with open(pj, "w", encoding="utf-8", newline="\n") as fh:
+            fh.write(json.dumps(cfg, indent=4, ensure_ascii=False))
+        log(f"  project.json: jsList = {js_list}")
+    else:
+        log(f"  project.json: jsList 已是最新 {js_list}")
+
+    # 不打包的文件要从 assets 里删掉，否则会残留在 APK 里
+    keep = {w.rsplit("/", 1)[-1] for w in wanted}
+    for name in ("patch.js", "probe.js"):
+        if name not in keep:
+            stale = os.path.join(APK_DIR, "assets/src/patch", name)
+            if os.path.exists(stale):
+                os.remove(stale)
+                log(f"  已删除 assets/src/patch/{name}")
+
+    # 写 patch.js / probe.js（__CDN_BASE__ 换成真实地址）
+    sources = [("patch.js", patch_path)]
+    if with_probe:
+        sources.append(("probe.js", probe_path))
+    for name, src in sources:
+        with open(src, "rb") as fh:
+            body = fh.read()
+        if b"__CDN_BASE__" in body:
+            body = body.replace(b"__CDN_BASE__", f"http://{host}:{port}".encode())
+        dst = os.path.join(APK_DIR, "assets/src/patch", name)
+        os.makedirs(os.path.dirname(dst), exist_ok=True)
+        with open(dst, "wb") as fh:
+            fh.write(body)
+        log(f"  已写入 assets/src/patch/{name} ({len(body)} B)")
+
+    # 老文件清理
+    old = os.path.join(APK_DIR, "assets/src/patch/hook.js")
+    if os.path.exists(old):
+        os.remove(old)
+        log("  已删除旧的 assets/src/patch/hook.js")
+
+    # 删无用资源
+    for rel in DROP_ASSETS:
+        p = os.path.join(APK_DIR, rel)
+        if os.path.exists(p):
+            if os.path.isdir(p):
+                shutil.rmtree(p, ignore_errors=True)
+            else:
+                os.remove(p)
+            log(f"  删除 {rel}")
+
+    # 删死掉的 smali（见 DROP_SMALI）—— 打出来的 classes.dex 会小一圈
+    for rel, prefixes in DROP_SMALI:
+        p = os.path.join(APK_DIR, rel)
+        if not os.path.exists(p):
+            continue
+        users = smali_users_of(rel, prefixes)
+        if users:
+            # 宁可留着一个大的包，也不要出一个跑起来才崩的包。
+            Warn(f"{rel} 现在还有 {len(users)} 处引用，**保留不删**：")
+            for u in users[:5]:
+                Warn(f"    {u}")
+            Warn("    这是新加回来的 SDK 依赖？那就把 DROP_SMALI 里对应那条去掉。")
+            continue
+        shutil.rmtree(p, ignore_errors=True)
+        log(f"  删除 {rel}")
+
+    # 删死掉的单类 / 小组（见 DROP_SMALI_GROUPS）
+    for pats, why in DROP_SMALI_GROUPS:
+        members = expand_smali_globs(pats)
+        if not members:
+            continue
+        users = smali_users_of_classes(members)
+        if users:
+            Warn(f"{pats[0]} 等 {len(members)} 个类还有 {len(users)} 处引用，**保留不删**：")
+            for u in users[:5]:
+                Warn(f"    {u}")
+            Warn("    这些类变成「可达」了？那就把 DROP_SMALI_GROUPS 里对应那组去掉。")
+            continue
+        kb = sum(os.path.getsize(m) for m in members) / 1024
+        for m in members:
+            os.remove(m)
+        log(f"  删除 {len(members)} 个类 ({kb:.0f} KB)  {why}")
+
+    # 删 res/ 下的 SDK 资源（百度钱包 / 多酷 / ebpay / QuickSDK）
+    drop_sdk_res()
+
+    # apktool 的 res 增量缓存里会留着已删资源的编译产物，必须一起清掉
+    prune_stale_build_res()
+
+    # 剪掉 apktool.yml 里指向已删文件的 doNotCompress 条目
+    prune_do_not_compress()
+
+
+# ---------------------------------------------------------------------------
+# apktool / zipalign / apksigner
+# ---------------------------------------------------------------------------
+def run(cmd, **kw):
+    env = dict(os.environ)
+    env["JAVA_HOME"] = JAVA_HOME
+    env["PATH"] = os.path.join(JAVA_HOME, "bin") + os.pathsep + env.get("PATH", "")
+    subprocess.run(cmd, check=True, env=env, **kw)
+
+
+def apktool_build(out_apk: str) -> None:
+    log("apktool b（完整打包，可能需要 1 分钟左右）...")
+    env = dict(os.environ)
+    env["JAVA_HOME"] = JAVA_HOME
+    env["PATH"] = os.path.join(JAVA_HOME, "bin") + os.pathsep + env.get("PATH", "")
+    subprocess.run(
+        [APKTOOL, "b", APK_DIR, "-o", out_apk, "--no-crunch"],
+        check=True, env=env, input=b"\n",
+    )
+
+
+def align(path: str) -> str:
+    out = path.replace(".apk", "-aligned.apk")
+    if os.path.exists(out):
+        os.remove(out)
+    run([os.path.join(BUILD_TOOLS, "zipalign.exe"), "-f", "-p", "4", path, out])
+    log("zipalign 完成")
+    return out
+
+
+def ensure_keystore() -> None:
+    if os.path.exists(KEYSTORE):
+        return
+    log("生成调试签名证书 ...")
+    keytool = os.path.join(JAVA_HOME, "bin", "keytool.exe")
+    run([
+        keytool, "-genkeypair", "-v", "-keystore", KEYSTORE, "-alias", "oppai",
+        "-keyalg", "RSA", "-keysize", "2048", "-validity", "10000",
+        "-storepass", "android", "-keypass", "android",
+        "-dname", "CN=Oppai Emulator, OU=Dev, O=Emu, L=CN, S=CN, C=CN",
+    ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
+def sign(path: str) -> str:
+    ensure_keystore()
+    out = path.replace("-aligned.apk", "-signed.apk")
+    if os.path.exists(out):
+        os.remove(out)
+    run([
+        os.path.join(BUILD_TOOLS, "apksigner.bat"), "sign",
+        "--ks", KEYSTORE, "--ks-pass", "pass:android", "--key-pass", "pass:android",
+        "--ks-key-alias", "oppai",
+        "--v1-signing-enabled", "true", "--v2-signing-enabled", "true",
+        "--out", out, path,
+    ])
+    log("签名完成")
+    return out
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--host", default="10.110.29.230")
+    ap.add_argument("--port", type=int, default=18080, help="CDN 端口（必须 5 位）")
+    ap.add_argument("--login-port", type=int, default=8080, help="登录端口（必须 4 位）")
+    ap.add_argument("--patch", default=DEFAULT_PATCH)
+    ap.add_argument("--probe", default=DEFAULT_PROBE)
+    ap.add_argument("--no-probe", action="store_true",
+                    help="不打包 probe.js（release 构建）")
+    ap.add_argument("--out", default=os.path.join(WORK, "zcsmw-mod.apk"))
+    ap.add_argument("--skip-prepare", action="store_true", help="只打包，不重新改资源")
+    ap.add_argument("--keep-intermediate", action="store_true", help="保留 aligned 中间产物")
+    args = ap.parse_args()
+
+    os.makedirs(WORK, exist_ok=True)
+
+    if not args.skip_prepare:
+        prepare_assets(args.host, args.port, args.login_port, args.patch,
+                   args.probe, not args.no_probe)
+        prune_stale_dex()
+
+    apktool_build(args.out)
+    aligned = align(args.out)
+    signed = sign(aligned)
+    if not args.keep_intermediate:
+        os.remove(args.out)
+        os.remove(aligned)
+        log("已清理中间产物（--keep-intermediate 可保留）")
+    log("最终产物:", signed)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

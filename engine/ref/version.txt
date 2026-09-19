@@ -1,0 +1,5 @@
+engine   : cocos2d-x 3.6  (COCOS2D_VERSION 0x00030600)
+js       : SpiderMonkey 33.1.1 (JavaScript-C33.1.1)
+jsc magic: 0xb973c02c = SM33.1.1 的 XDR_BYTECODE_VERSION
+abi      : armeabi (ARMv5TE)
+so size  : 17.87 MB

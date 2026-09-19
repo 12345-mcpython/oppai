@@ -1,0 +1,43 @@
+# 换行符策略
+#
+# 这个项目在 Windows 上开发，但脚本要在 Git Bash / WSL / CI 里也能跑，
+# 所以默认入库统一 LF，只在需要的地方保留 CRLF。
+#
+# ⚠️ build.ps1 **必须保持 UTF-8 带 BOM**（git 不会动 BOM，放心）。
+#    Windows PowerShell 5.1 会把无 BOM 的 UTF-8 当 ANSI 读，
+#    中文注释直接把脚本读崩，报一大片 `Unexpected token`。
+
+* text=auto eol=lf
+
+# cmd.exe 对 LF 结尾的 .bat 不友好
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# sh 必须 LF，否则 Git Bash 报 `\r: command not found`
+*.sh text eol=lf
+
+# 二进制，别做任何转换
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.mp3 binary
+*.mp4 binary
+*.ttf binary
+*.jar binary
+*.apk binary
+*.so binary
+*.jsc binary
+*.csb binary
+*.plist binary
+*.keystore binary
+*.jks binary
+
+# 这些文件别在 diff 里露出来
+*.jsc -diff
+*.csb -diff
+*.so -diff
+*.jar -diff
+
+# GitHub 语言统计：别把仓库识别成别的东西
+*.jsc linguist-language=JavaScript
