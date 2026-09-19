@@ -35,15 +35,21 @@ def _module_stubs(player: dict | None = None) -> dict:
     """
     t = store.time_str()
     return {
-        "instance": {
-            "levels": [],
-            "activityChapters": [],
-            "subareaLevels": [],
-            "appearBossKey": {},
-            "newActChapterFlag": {},
-            "chapters": [],
-            "chapterStars": {},
-        },
+        # ⚠️⚠️ 这里**不能**放 "instance"。
+        #
+        # `get_login_data` / `create_player` 都是：
+        #     data = {..., "instance": instance.login_block(player)}   # 真实关卡进度
+        #     data.update(_module_stubs(player))                       # 把桩并进去
+        # 早期这里放了一份桩 `{"instance": {"levels": []}}`，update 时**把真进度整个盖掉**。
+        # 后果不是"少个字段"而是整条关卡线索断掉：
+        #   * 客户端 `Instance._updateLevels` 收不到任何关卡 →
+        #     1142 个 Level 全部停在 `_starMark = -1`
+        #   * 关卡列表不显示已通关、章节星级恒为 0
+        #   * 按通关解锁的功能永远锁着 —— 比如「萌源增幅」（天赋），
+        #     `table_function_open[100014].unlock_level_key = "100316"`（3-6 日不落的方向），
+        #     `layerjumpmanager.checkLevel` 要求 `getStarsCount() > 0`，
+        #     而 `_starMark = -1` 时 `getStarsCount()` 返回 -1。
+        # 所以关卡相关的键一律只由 `instance.login_block()` 提供，这里别碰。
         # 背包。**这个 key 直接就是「itemKey -> 数量」的平铺映射，不是嵌套结构**：
         # `dataManager.initUserData` 里是 `this.bag = new Bag(data.item)`，
         # 而 `Bag.ctor(items)` 直接 `for (key in table_item) _items[key] = _createItem(key, items[key] || 0)`。
@@ -79,14 +85,16 @@ def _module_stubs(player: dict | None = None) -> dict:
         "favorevent": {"favorEvents": [], "events": [], "removedFeEventKeys": []},
         "friend": {"friendMapList": [], "recommendationList": [], "isNeedShowTip": 0},
         "exchange": {},
-        # TalentCenter 的构造参数**不是** {talentTypes, talents, updateByPlayer} 那种
-        # 嵌套结构，而是「天赋类型 -> 当前选中的天赋 key」的平铺映射：
-        #     TalentCenter.ctor(args) -> _initTalentTypes(args)
-        # 它会拿每个 key 去查 table_talent_type 取 unlock_lv / default_talent_key。
-        # key 取自 table_talent_type：101 军士课题 / 102 机甲课题 / 103 克制课题。
-        # 之前给的是空数组，_initTalents 里 this._talentTypes[v.type] 直接 undefined
-        # 抛 TypeError，把整个 initUserData 挡断。
-        "talents": {"101": "1001", "102": "2001", "103": "3001"},
+        # 天赋（培养）。**形状由客户端字节码定死**，反汇编摘录见 store.new_talents()：
+        # `{type: {curTalentKey, lv}}` —— 每个 value 必须是对象。
+        #
+        # 早先这里给的是 `{"101": "1001"}` 这种「type -> 天赋key」的平铺字符串映射，
+        # 是猜的，猜错了：`_initTalentTypes` 读 `args[k].curTalentKey` / `args[k].lv`
+        # 全是 undefined → `cc.assert` 失败 → `_initTalents()` 接着用
+        # `k + "#" + lv` 拼出 `"1001#undefined"` 去查 table_talent（那表的 key 是
+        # `"1001#0"`~`"1001#10"`）→ 整条链断掉，天赋面板空白，异常被构造容错吞掉。
+        # key 是 101/102/103（table_talent_type），**不是** 1001/2001/3001（那是 master 的 key）。
+        "talents": store.player_talents(player),
         "sign": {
             "signs": [],
             "normalSigns": [],

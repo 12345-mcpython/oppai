@@ -7,11 +7,16 @@
 
 from __future__ import annotations
 
-from .. import config, logx, store
+from .. import config, items, logx, store
 from ..gameproto import CODE_OK
 from . import route
 
 log = logx.get("handler.player")
+
+# 失败码。客户端 `TalentCenter.requestXxxCb` 只在 `code == 200` 时才改本地状态，
+# 其余情况只打一条 `[error] ...` 日志 —— 所以「材料不够」必须回非 200，
+# 否则客户端自己把 lv +1 了、服务端没扣，两边就分叉。
+FAIL = 1
 
 
 def _account(session: dict) -> str:
@@ -135,3 +140,127 @@ def update_teams(session: dict, msg: dict, req_id):
     log.info("player.updateteams account=%s 更新 %d 支队伍 %s", account, changed,
              [(t.get("id"), len(t.get("soldierKeys") or [])) for t in teams])
     return {"code": CODE_OK, "msg": "", "data": {"teams": teams}}
+
+
+# ---------------------------------------------------------------------------
+# 天赋（培养）
+#
+# 两条路由的**请求体形状都是反汇编出来的**（`src/data/talentcenter.jsc`）：
+#
+#   requestSelectTalent(data):
+#       var sendData = {}; sendData[data.type] = data.talentKey;
+#       server.request('player.selecttalent', sendData, cb)
+#       -> 收到的是 {"101": "1002"}（**key 是 type，不是固定字段名**）
+#
+#   requestUpgradeTalent(data):
+#       server.request('player.upgradetalent', {type: data.type}, cb)
+#       -> 收到的是 {"type": "101"}
+#
+# 两个回调都只看 `code == 200`，成功后就**纯本地改状态**：
+#       selectTalent:  this._talentTypes[type].curTalentKey = talentKey; this._initTalents();
+#       upgradeTalent: this._talentTypes[type].lv += 1;                   this._initTalents();
+# 响应体不带数据（`talents` 也不在客户端的 responseConfig 里），回 `{}` 就够。
+# 所以服务端的职责是**校验 + 落盘 + 扣材料**。
+# ---------------------------------------------------------------------------
+def _talent_max_lv(talent_type: str) -> int:
+    """`table_talent_type[type].max_lv`（客户端那边是个全局常量 TALENT_MAX_LV）。"""
+    row = items.table("table_talent_type").get(str(talent_type)) or {}
+    try:
+        return int(row.get("max_lv") or 0) or 10
+    except (TypeError, ValueError):
+        return 10
+
+
+@route("player.selecttalent")
+def select_talent(session: dict, msg: dict, req_id):
+    """选天赋。请求体是**动态 key** 的对象：`{"101": "1002"}`。
+
+    校验规则照客户端的 `_checkSelectTalentData`：
+    `table_talent_master[talentKey].type === type`（这个天赋必须属于这个类型）。
+
+    服务端必须落盘。客户端只改了内存里的 `_talentTypes`，不存的话重登就回到
+    默认天赋 —— 和「军士升完重登又变回去」是同一类坑。
+    """
+    account = _account(session)
+    player = store.get_or_create_player(account)
+    talents = store.player_talents(player)
+
+    picked = []
+    for key, value in (msg or {}).items():
+        talent_type, talent_key = str(key), str(value)
+        if talent_type not in store.TALENT_TYPES:
+            log.warning("player.selecttalent 未知 type=%r（请求体 %r）", key, msg)
+            continue
+        row = items.table("table_talent_master").get(talent_key) or {}
+        # 和客户端 _checkSelectTalentData 同一条规则：不满足它自己就不会发请求
+        if str(row.get("type") or "") != talent_type:
+            log.warning("player.selecttalent 天赋 %s 不属于 type %s", talent_key, talent_type)
+            continue
+        talents[talent_type]["curTalentKey"] = talent_key
+        picked.append((talent_type, talent_key))
+
+    if not picked:
+        return {"code": FAIL, "msg": "bad talent", "data": {}}
+
+    store.save_player(player)
+    log.info("player.selecttalent account=%s %s", account, picked)
+    return {"code": CODE_OK, "msg": "", "data": {}}
+
+
+@route("player.upgradetalent")
+def upgrade_talent(session: dict, msg: dict, req_id):
+    """升级天赋。请求体 `{"type": "101"}`。
+
+    消耗取自 `table_talent_upgrade["<type>#<lv>"]` 的 `{money, item, count}`
+    （服务端抽成 `data/table_talent_upgrade.json`）。实测 `money` 全是 0，
+    材料就是 200040~200048 那九种。
+
+    ⚠️ 材料不够时**必须回非 200**：客户端 `upgradeTalent()` 是「code==200 才
+    `lv += 1`」。要是这里回 200 却没扣材料，客户端会自己 +1，两边就分叉了
+    （下次登录 lv 又掉回去）。
+    """
+    account = _account(session)
+    player = store.get_or_create_player(account)
+    talents = store.player_talents(player)
+    talent_type = str((msg or {}).get("type") or "")
+
+    row = talents.get(talent_type)
+    if not isinstance(row, dict):
+        log.warning("player.upgradetalent 未知 type=%r", talent_type)
+        return {"code": FAIL, "msg": "bad type", "data": {}}
+
+    lv = int(row.get("lv") or 0)
+    max_lv = _talent_max_lv(talent_type)
+    if lv >= max_lv:
+        log.info("player.upgradetalent type=%s 已经满级（%s）", talent_type, max_lv)
+        return {"code": FAIL, "msg": "max lv", "data": {}}
+
+    cost = items.table("table_talent_upgrade").get(f"{talent_type}#{lv}")
+    if not isinstance(cost, dict):
+        log.warning("player.upgradetalent 表里没有 %s#%s 这一行（表没抽？）", talent_type, lv)
+        return {"code": FAIL, "msg": "no cost row", "data": {}}
+
+    money = int(cost.get("money") or 0)
+    material_key = str(cost.get("item") or "")
+    material_count = int(cost.get("count") or 0)
+    need = []
+    if money:
+        need.append((store.ITEM_MONEY, money))
+    if material_key and material_count:
+        need.append((material_key, material_count))
+
+    # 先整体判断够不够再扣 —— 否则扣了一半才发现不够，前面的材料就白没了
+    if need and not items.can_afford(player, need):
+        log.info("player.upgradetalent 材料不够 type=%s lv=%s 需要=%s 现有=%s",
+                 talent_type, lv, need,
+                 {k: items.count_of(player, k) for k, _ in need})
+        return {"code": FAIL, "msg": "not enough", "data": {}}
+
+    for key, count in need:
+        items.sub_item(player, key, count)
+
+    row["lv"] = lv + 1
+    store.save_player(player)
+    log.info("player.upgradetalent account=%s type=%s lv %s -> %s（扣 %s）",
+             account, talent_type, lv, row["lv"], need or "无")
+    return {"code": CODE_OK, "msg": "", "data": {}}

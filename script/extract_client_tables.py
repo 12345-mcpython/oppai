@@ -227,6 +227,31 @@ SOLDIER_JS = r"""
 """
 
 
+# 天赋（培养）三张表。客户端 `TalentCenter` 的构造和升级消耗全靠它们：
+#
+#   table_talent_type[type]              unlock_lv / default_talent_key / max_lv / upgrade_material_key
+#   table_talent_master[masterKey]       type / index / unlock_lv / icon / desc（12 个天赋）
+#   table_talent_upgrade["<type>#<lv>"]  {money, item, count} —— 升到 lv+1 要扣的东西
+#
+# ⚠️ key 的形状是反汇编 `TalentCenter._initTalentTypes` / `_initTalents` 定的，
+#    别把两套 key 混了：
+#      * `_initTalentTypes(args)` 是 `for (k in args)`，k 就是 **type**（"101"/"102"/"103"）
+#      * `_initTalents()` 拿 `table_talent_master[k].type` 去索引 `_talentTypes`，
+#        再用 `k + "#" + lv` 去索引 `table_talent`（那张表的 key 是 "1001#0" 这种）
+#    也就是说 type 的 key（101）和 master 的 key（1001）**不是一回事**。
+TALENT_TYPE_JS = r"""
+(function () { return JSON.stringify(table_talent_type); })()
+"""
+
+TALENT_MASTER_JS = r"""
+(function () { return JSON.stringify(table_talent_master); })()
+"""
+
+TALENT_UPGRADE_JS = r"""
+(function () { return JSON.stringify(table_talent_upgrade); })()
+"""
+
+
 def _dump(base: str, js: str, name: str):
     result = eval_remote(base, js, timeout=30.0)
     if not result.get("ok"):
@@ -271,6 +296,12 @@ def main() -> int:
     if _dump(base, SHELF_JS, "table_shelf.json") is None:
         return 1
     if _dump(base, SHOP_JS, "table_shop.json") is None:
+        return 1
+    if _dump(base, TALENT_TYPE_JS, "table_talent_type.json") is None:
+        return 1
+    if _dump(base, TALENT_MASTER_JS, "table_talent_master.json") is None:
+        return 1
+    if _dump(base, TALENT_UPGRADE_JS, "table_talent_upgrade.json") is None:
         return 1
     return 0
 

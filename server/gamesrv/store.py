@@ -93,6 +93,92 @@ def player_items(player: dict) -> dict:
     return items
 
 
+# ---------------------------------------------------------------------------
+# 天赋 / 培养
+# ---------------------------------------------------------------------------
+# 三条天赋线。key 取自客户端 `table_talent_type`，服务端抄了一份在
+# `gamesrv/data/table_talent_type.json`（101 军士课题 / 102 机甲课题 / 103 克制课题）。
+TALENT_TYPES = ("101", "102", "103")
+
+# 天赋升级材料：200040~200048 = 废弃子弹 / 机械齿轮 / 战略指南，每条线三档。
+# 原版只能从已经停服的运营活动里拿，私服直接发一份 —— 否则「培养」里点升级
+# 永远提示材料不足，这个系统等于没做。想还原原版手感就把存量改成 0 并
+# 把 TALENT_STOCK_VERSION +1。客户端 `table_item.limit_count` 上限是 999。
+TALENT_MATERIAL_KEYS = (
+    "200040", "200041", "200042",   # 军士增幅（type 101）
+    "200043", "200044", "200045",   # 统帅增幅（type 102）
+    "200046", "200047", "200048",   # 战略增幅（type 103）
+)
+TALENT_MATERIAL_STOCK = 99
+
+# 材料补货的版本号。改了存量/加了材料就把这个 +1，所有存档（含玩过的）会再补一次。
+#
+# ⚠️ 不能写成「少于 STOCK 就补」：`_migrate` 每次取存档都会跑
+# （get_or_create_player / update_player 都调），那样花掉的材料会被立刻补回来，
+# 相当于无限材料。必须靠版本号做成一次性的。
+#
+# ⚠️⚠️ **`new_player()` 里绝对不能写这个字段**。踩过一次：
+#     `_migrate` 开头有「按 key 把 new_player 的字段补进老存档」那一圈，
+#     它会把 `talentStockVersion` 先补上，于是轮到下面那段补货代码时
+#     「版本已经等于当前版本」→ 直接跳过 → 老存档一颗材料都拿不到。
+#     这个字段只能由 `_migrate` 自己写。
+TALENT_STOCK_VERSION = 2
+
+
+def new_talents() -> dict:
+    """天赋的初始状态。
+
+    形状是**反汇编 `TalentCenter._initTalentTypes(args)` 的字节码定死的**，不是猜的：
+
+        this._talentTypes = {};
+        for (var k in args) {                       // ← 遍历 args 的 key（= type）
+            cc.assert(args[k].curTalentKey !== undefined && args[k].lv !== undefined, ...);
+            this._talentTypes[k] = {type: k, curTalentKey: args[k].curTalentKey,
+                                    lv: args[k].lv, unlockLv: table_talent_type[k].unlock_lv};
+            if (this._talentTypes[k].curTalentKey === "")
+                this._talentTypes[k].curTalentKey = table_talent_type[k].default_talent_key;
+        }
+
+    ⚠️ 每个 value 必须是 **`{curTalentKey, lv}` 对象**。早先给的是
+    `{"101": "1001"}`（字符串），于是 `args[k].curTalentKey` / `.lv` 全是 undefined：
+    `cc.assert` 当场失败，紧接着 `_initTalents()` 用 `k + "#" + lv` 拼出
+    `"1001#undefined"` 去查 `table_talent`，整条链断掉 —— 表现就是天赋面板空的、
+    logcat 里只有构造容错吞掉的一条异常。
+
+    `curTalentKey` 给空串 = 「还没选」，客户端会用
+    `table_talent_type[k].default_talent_key`（1001 / 2001 / 3001）补上，
+    这正是原版新号的状态。
+    """
+    return {t: {"curTalentKey": "", "lv": 0} for t in TALENT_TYPES}
+
+
+def player_talents(player: dict) -> dict:
+    """玩家天赋状态。
+
+    缺失/坏掉就补一份默认的（客户端构造时直接读属性，缺了会在 initUserData 里抛）。
+    已经存在的按 key 补齐，以后多加一条天赋线时老存档也能直接用。
+    """
+    talents = player.get("talents")
+    if not isinstance(talents, dict):
+        talents = new_talents()
+        player["talents"] = talents
+        return talents
+    for t in TALENT_TYPES:
+        row = talents.get(t)
+        if not isinstance(row, dict):
+            talents[t] = {"curTalentKey": "", "lv": 0}
+        else:
+            row.setdefault("curTalentKey", "")
+            row.setdefault("lv", 0)
+    return talents
+
+
+def top_up_talent_materials(items: dict) -> None:
+    """把天赋材料补到 TALENT_MATERIAL_STOCK（只加不减，不碰玩家已有的更多存量）。"""
+    for key in TALENT_MATERIAL_KEYS:
+        items[key] = max(int(items.get(key) or 0), TALENT_MATERIAL_STOCK)
+
+
 # 新手引导位掩码全 1 = 所有引导都已完成。见 new_player() 里的说明。
 GUIDE_MARK_DONE = 0x7FFFFFFF
 
@@ -313,6 +399,8 @@ def new_player(account: str) -> dict:
     私服没必要让人从 1 级刷起，想体验原版就从 MIN_PLAYER_LV 改回去。
     """
     now = int(time.time())
+    items = default_items()
+    top_up_talent_materials(items)
     return {
         "id": 1,
         "account": account,
@@ -331,7 +419,11 @@ def new_player(account: str) -> dict:
         "moduleState": new_module_state(),
         # 背包。登录包的 `item` 块直接用它，买东西/领奖励也改它。
         # 平铺的 `{itemKey: count}` —— 客户端 Bag.ctor 拿它 + table_item 建对象。
-        "items": default_items(),
+        "items": items,
+        # 天赋（培养）。形状见 new_talents() 的注释 —— 必须是 {curTalentKey, lv} 对象。
+        "talents": new_talents(),
+        # ⚠️ 这里**故意不写** `talentStockVersion`：它由 _migrate 独家维护，
+        #    否则「按 key 补字段」那一圈会先把版本号补上，把一次性补货门闩顶开。见上面的注释。
         # 军士（18 个初始军士）。**建号时就发**，不是等第一次登录现生成 ——
         # `ensure_soldiers` 只在内存里补，登录接口不写盘，所以「现生成」的版本
         # 每次都可能是新的，军士升级/突破的结果会莫名其妙回退。
@@ -407,6 +499,21 @@ def _migrate(player: dict) -> bool:
         player["lv"] = MIN_PLAYER_LV
         changed = True
         log.info("玩家 %s 指挥部等级补到 %d", player.get("account"), MIN_PLAYER_LV)
+    # 天赋材料补货。老存档的 `items` 已经存在，上面「按 key 补字段」那圈救不到，
+    # 所以单独做一步。
+    #
+    # ⚠️ **必须靠版本号做成一次性的**：`_migrate` 每次取存档都会跑
+    # （get_or_create_player / update_player 都调它），
+    # 要是写成「少于 STOCK 就补」，玩家花掉的材料会立刻长回来 —— 等于无限材料。
+    if int(player.get("talentStockVersion") or 0) != TALENT_STOCK_VERSION:
+        items = player.get("items")
+        if isinstance(items, dict):
+            top_up_talent_materials(items)
+            log.info("玩家 %s 补天赋材料（v%s，%d 种各 %d 个）",
+                     player.get("account"), TALENT_STOCK_VERSION,
+                     len(TALENT_MATERIAL_KEYS), TALENT_MATERIAL_STOCK)
+        player["talentStockVersion"] = TALENT_STOCK_VERSION
+        changed = True
     return changed
 
 
