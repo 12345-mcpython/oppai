@@ -8,6 +8,34 @@ Kuro Game《战场双马尾》v2.2.0 已停服。这个项目用**纯 Python（�
 
 ---
 
+## 这个仓库里有什么 / 没有什么
+
+**只放我们自己写的东西**（190 个文件，约 3 MB）：
+
+| 路径 | 内容 |
+|---|---|
+| `server/` | Python 服务端（纯标准库，无依赖），51 条业务路由 + 浏览器调试台 + 引擎调试桥 |
+| `script/` | 实用脚本：jsc 反编译 / 反汇编 / 按函数切原子表、抽客户端表、apktool 打包、APK 体积体检、smali 可达性分析、路由缺口分析… |
+| `engine/build/` | 引擎补丁脚本（30 个，每个都幂等可重跑）+ `oppai-engine/{Classes,jni}`：我们自己写的 `jsb_oppai_*` 绑定和 `Android.mk` |
+| `build.ps1` | 一键构建 |
+
+### 不在仓库里 —— 这些要自己准备
+
+`.gitignore` 里逐条写了原因，简单说就是**版权**和**体积**（GitHub 单文件硬上限 100 MB）：
+
+| 缺什么 | 体积 | 怎么来 |
+|---|---|---|
+| `game/` | 1.16 GB | 自备 v2.2.0 的 APK，`script\apktool.bat d` 解包。**游戏素材和反编译代码的版权不属于本项目，请勿再分发** |
+| `engine/src/` | 985 MB | cocos2d-js v3.6 源码（含 cocos2d-x 3.6 + SpiderMonkey 33.1.1） |
+| `engine/ndk/` | 4.4 GB | Android NDK **r10e**（版本必须对，别的版本编不过） |
+| `script/apktool_3.0.3.jar` | 15 MB | apktool 3.0.3（Apache-2.0），放到 `script\` 下即可 |
+| `engine/build/oppai-engine/Classes/{protobuf-lite,runtime}/` | 2.2 MB | 从 cocos2d-js 的 `js-template-runtime`（`frameworks/runtime-src/proj.android`）抄回来 |
+| `engine/ref/libcocos2djs-original.so` | 18 MB | 从原版 APK 的 `lib/armeabi/` 里取出来 |
+
+凑齐之后 `.\build.ps1 -Engine -Install -Launch` 就能编出可安装的包。
+
+---
+
 ## 目录结构
 
 ```
