@@ -364,41 +364,42 @@ logcat 里只有一行 `JS ERROR: TypeError: config is undefined @ equipmentstre
 **每次都从盘上重新 load**；直接改内存里的 player 是没用的，必须
 `save_player` 之后再由 handler 重新读，否则测出来的是假的。
 
-### 6.8 「登录块」不一定是给客户端读的 —— 有的模块是**只认响应推送**
+### 6.8 「登录块」有的被读、有的没读 —— **别靠读反汇编猜，实机量一下**
 
-宿舍事件（`favorevent`）就是这种。反汇编 `FavorEventCenter._initData(data)`：
+> ⚠️ **这一节我第一版写错了，留在这里当反面教材。**
+> 我当初读 `FavorEventCenter._initData` 的反汇编，把末尾那个 `setelem` 的目标
+> 认成了参数 `data`，于是断言「登录块 `favorevent` 是个 scratch 对象、
+> 客户端不拿它填界面，事件只能靠响应键 `newFavorEvent` 推」。
+> **实机一量就打脸了。**
 
-    this._eventsInTable = {};
-    this._favorEvents   = {};                       // ← 全程空着
-    for (var i in table_favor_random_event) {
-        this._eventsInTable[i] = table_favor_random_event[i];
-        this._eventsInTable[i].table_id = i;
-        data[i] = new FavorEvent(data[i] || {eventKey: i}, this._eventsInTable[i]);
-        //      ^^^^^^^ 写回的是**登录块那个对象**，不是 _favorEvents
-    }
+宿舍事件（`favorevent`）实机数据 —— 重启客户端（走一次完整登录）之后：
 
-也就是说 `data.favorevent` 在客户端眼里只是一个**临时容器**：给什么都不影响界面，
-`_favorEvents`（界面真正读的那张表）只在响应键 `newFavorEvent` 里填。
+    Object.keys(dataManager.favorEventCenter._favorEvents).length   ->  184
+    其中 _id 有值的                                                 ->  19
 
-推论 + 一个必须实机确认的点：响应派发那道闸
+`184` = `table_favor_random_event` 的**整张表**；`19` = 服务端在登录块里建的那 19 条。
+而且那 19 条的 `createTimeSec` 是**服务端的时间戳**，客户端编不出来。
 
-    if (dataManager.isLogin) { for (k in responseConfig) responseConfig[k](e.data); }
+结论：`_initData` 就是**往 `_favorEvents` 里写**的
+（`this._favorEvents[i] = new FavorEvent(data[i] || {eventKey: i}, table[i])`），
+所以**登录块 `favorevent` 本来就会被读**，事件不依赖响应推送。
+没建的那些用 `{eventKey: i}` 占位（`_id` / `_status` / `_isToBeUnlocked` 全是 undefined）。
 
-`dataManager.isLogin` 是登录成功**之后**才置 true 的（否则首次登录时
-`dataManager.favorCenter` 还是 null，`cb4ResFavor` 直接抛），
-所以**登录响应里的 `newFavorEvent` 很可能派发不进去**。
+登录响应和好感度涨了的响应里各带一份 `newFavorEvent`，现在看是**冗余的**
+（留着无害，路径都通）。
 
-现在的做法是**两处都发**（登录响应 + 好感度涨了的响应），哪条通都能用；
-实机验证方法：登录后看
+**这一节真正的教训**（比上面那个结论值钱）：
 
-    Object.keys(dataManager.favorEventCenter._favorEvents).length
-
-是 0 就说明登录那条路不通，只能靠好感度涨了才推。
-
-教训：**别假设「登录包里给了客户端就会用」**。每个模块都要回字节码确认
-「这个 key 到底被谁读了」—— 同一个登录包里，三种情况都真实存在过：
-读了（`favor.favors`）、没读（`favor.isNeedAsstEff`，§6.5）、
-读进去但立刻丢掉（`favorevent`，本节）。
+1. **分不清 `setelem` 的目标时，别硬读字节码 —— 去实机量。**
+   这个页面本来就是自己写的，加一行 `cc.log` / 用 `/devtools` 控制台
+   敲个 `Object.keys(...).length`，成本远低于反复反汇编。
+2. **同一个登录包里三种情况都真实存在过**，所以「登录块字段」这件事**没有通则**：
+   * 读了 —— `favor.favors`（map vs list，§6.6）
+   * 没读 —— `favor.isNeedAsstEff`（死键，§6.5）
+   * **读的**（我一度以为没读）—— `favorevent`
+   每条都得单独确认：`script/jsc_find.py <key> --func` 看有没有人读，
+   **再加一次实机量**。
+3. 反汇编的 `getlocal`/`setlocal` 槽位**不要盲信** —— 那一处就是被它坑的。
 
 ### 6.9 调试台自己也会坏，而且症状很像「游戏挂了」
 

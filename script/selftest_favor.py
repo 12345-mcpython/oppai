@@ -223,31 +223,34 @@ def desc_check():
 def look_check():
     print("== 换装 / 换背景 ==")
     reload_()
-    # ⚠️ 别用 key 最小的那件衣服 —— `ensure_default_looks` 现在会给每个角色发
-    # 默认衣服，而默认衣服恰好就是 key 最小的（400001 阿呆芙军装）。
-    # 要测「没拥有就拒绝」得挑一件玩家真没有的。
-    not_owned = [k for k, v in items.table("table_item").items()
-                 if v.get("t") == 40 and items.count_of(player, k) == 0]
-    bgs = [k for k, v in items.table("table_item").items()
-           if v.get("t") == 50 and items.count_of(player, k) == 0]
-    check("有一件没拥有的衣服可测", len(not_owned) > 0, "%d 件" % len(not_owned))
-    check("有一件没拥有的背景可测", len(bgs) > 0, "%d 件" % len(bgs))
-    r = call(hfavor.set_clothes, {"charKey": "hadf", "itemKey": not_owned[0]}, 7)
-    check("背包里没有就换 -> 被拒", r["code"] != 200, str(r)[:120])
-    items.add_item(player, not_owned[0], 1)
-    items.add_item(player, bgs[0], 1)
+    # ⚠️ 别用 key 最小的那件衣服 —— `ensure_default_looks` / `ensure_look_stock`
+    # 会把衣柜发满，一件不剩。这里自己先摘掉两件来测「没拥有就拒绝」那条分支。
+    all_clothes = [k for k, v in items.table("table_item").items() if v.get("t") == 40]
+    all_bgs = [k for k, v in items.table("table_item").items() if v.get("t") == 50]
+    not_owned = all_clothes[0]
+    bg_key = all_bgs[0]
+    items.items_of(player).pop(not_owned, None)
+    items.items_of(player).pop(bg_key, None)
     save()
-    r = call(hfavor.set_clothes, {"charKey": "hadf", "itemKey": not_owned[0]}, 8)
+    reload_()
+    check("已经摘掉一件衣服", items.count_of(player, not_owned) == 0)
+    check("已经摘掉一张背景", items.count_of(player, bg_key) == 0)
+    r = call(hfavor.set_clothes, {"charKey": "hadf", "itemKey": not_owned}, 7)
+    check("背包里没有就换 -> 被拒", r["code"] != 200, str(r)[:120])
+    items.add_item(player, not_owned, 1)
+    items.add_item(player, bg_key, 1)
+    save()
+    r = call(hfavor.set_clothes, {"charKey": "hadf", "itemKey": not_owned}, 8)
     check("拥有后能换", r["code"] == 200, str(r)[:160])
     check("回调要的 favorValue 在", "favorValue" in r["data"])
     reload_()
-    check("curClothes 落盘", store.find_favor(player, "hadf")["curClothes"] == not_owned[0])
-    r = call(hfavor.set_clothes, {"charKey": "hadf", "itemKey": bgs[0]}, 9)
+    check("curClothes 落盘", store.find_favor(player, "hadf")["curClothes"] == not_owned)
+    r = call(hfavor.set_clothes, {"charKey": "hadf", "itemKey": bg_key}, 9)
     check("拿背景当衣服 -> 被拒", r["code"] != 200, str(r)[:120])
-    r = call(hfavor.set_cur_bg, {"charKey": "hadf", "itemKey": bgs[0]}, 10)
+    r = call(hfavor.set_cur_bg, {"charKey": "hadf", "itemKey": bg_key}, 10)
     check("能换背景", r["code"] == 200, str(r)[:160])
     reload_()
-    check("curBg 落盘", store.find_favor(player, "hadf")["curBg"] == bgs[0])
+    check("curBg 落盘", store.find_favor(player, "hadf")["curBg"] == bg_key)
 
 
 def return_item_check():
@@ -320,6 +323,41 @@ def default_look_check():
     check("登录包里 hadf.curClothes 有值",
           res["data"]["favor"]["favors"]["hadf"]["curClothes"] == "400001",
           "= %s" % res["data"]["favor"]["favors"]["hadf"]["curClothes"])
+
+
+def look_stock_check():
+    print("== 衣柜 / 背景发满（私服取舍）==")
+    reload_()
+    all_looks = [k for k, v in items.table("table_item").items() if v.get("t") in (40, 50)]
+    check("表里有 109 件衣服 + 54 张背景", len(all_looks) == 163, "= %d" % len(all_looks))
+    # 把版本号抹掉，模拟老存档
+    player.pop("lookStockVersion", None)
+    for k in all_looks:
+        items.items_of(player).pop(k, None)
+    save()
+    reload_()
+    check("清空后一件都没有", sum(1 for k in all_looks if items.count_of(player, k)) == 0)
+    check("发满返回 True", favor.ensure_look_stock(player) is True)
+    have = [k for k in all_looks if items.count_of(player, k) >= 1]
+    check("163 件全到手", len(have) == 163, "= %d" % len(have))
+    check("版本号写上了", player.get("lookStockVersion") == favor.LOOK_STOCK_VERSION)
+    check("再调一次不动（幂等）", favor.ensure_look_stock(player) is False)
+    check("衣服不会被重复加量（limit_count=1）",
+          all(items.count_of(player, k) == 1 for k in all_looks))
+    # 换装用得到的那些
+    mine = [k for k in all_looks
+            if (items.table("table_item")[k].get("ck") or "") in store.player_favors(player)]
+    check("玩家拥有的角色有衣服可换", len(mine) > 0, "%d 件" % len(mine))
+    # 登录路径也会自动发
+    reload_()
+    player.pop("lookStockVersion", None)
+    for k in all_looks:
+        items.items_of(player).pop(k, None)
+    save()
+    res = call(agent.get_login_data, {}, 40)
+    check("登录包 code=200", res["code"] == 200)
+    reload_()
+    check("登录后就发满了", all(items.count_of(player, k) >= 1 for k in all_looks))
 
 
 def favor_event_check():
@@ -454,6 +492,7 @@ def main() -> int:
     look_check()
     return_item_check()
     default_look_check()
+    look_stock_check()
     favor_event_check()
     interact_check()
     print()

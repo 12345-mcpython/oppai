@@ -91,11 +91,12 @@ def _module_stubs(player: dict | None = None) -> dict:
         #   3. isNeedAsstEff / favorExpAdd 是**死键**：`FavorCenter._initData` 把这两个
         #      写死成 false / 0，压根不从 data 读
         "favor": favor.favor_block(player),
-        # 宿舍事件。⚠️ **登录块这块是 scratch 对象，客户端不会拿它填界面** ——
-        # `FavorEventCenter._initData` 把 `data[i]` 覆写成 FavorEvent，
-        # 真正的事件表 `_favorEvents` 只在响应键 `newFavorEvent` 里填。
-        # 所以真正推送在下面 data["newFavorEvent"]（登录响应里带一份，双保险）。
-        # 详见 gamesrv/favor.py「宿舍事件」那一段。
+        # 宿舍事件。⚠️ **这块是「已解锁事件」的唯一来源，别删** ——
+        # `FavorEventCenter._initData` 按 `table_favor_random_event` 整张表建
+        # `_favorEvents`，其中 `_favorEvents[i] = new FavorEvent(data[i] || {eventKey:i}, ...)`
+        # 用的是**这里给的行**；没给的用占位。
+        # （我一度以为它是 scratch 对象、不读 —— 实机量过：184 条里 19 条带 id，
+        #   正好是这里建的那 19 条。见 favor.py「宿舍事件」段 + overview §6.8）
         "favorevent": favor.event_block(player),
         "friend": {"friendMapList": [], "recommendationList": [], "isNeedShowTip": 0},
         "exchange": {},
@@ -198,6 +199,9 @@ def get_login_data(session: dict, msg: dict, req_id):
     # 见 gamesrv/favor.py 里 default_clothes 那段。
     if favor.ensure_default_looks(player):
         store.save_player(player)
+    # 衣柜/背景一次性发满（私服取舍：原版靠扭蛋和活动，我们扭蛋是空卡池）
+    if favor.ensure_look_stock(player):
+        store.save_player(player)
     # 宿舍事件同理：好感度到级就解锁，登录时把还没建的补上。
     new_events = favor.sync_events(player)
     if new_events:
@@ -234,6 +238,8 @@ def create_player(session: dict, msg: dict, req_id):
     if favor.ensure_favors(player):
         store.save_player(player)
     if favor.ensure_default_looks(player):
+        store.save_player(player)
+    if favor.ensure_look_stock(player):
         store.save_player(player)
     new_events = favor.sync_events(player)
     if new_events:

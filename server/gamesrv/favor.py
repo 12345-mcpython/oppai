@@ -237,6 +237,44 @@ def ensure_default_looks(player: dict) -> bool:
     return changed
 
 
+# 衣柜 / 背景一次性发满的版本号（见 ensure_look_stock 和 differences.md §B）
+LOOK_STOCK_VERSION = 1
+
+
+def ensure_look_stock(player: dict) -> bool:
+    """把**所有**衣服（`type==40`）和背景（`type==50`）各发一件。返回是否有改动。
+
+    **这是私服取舍，不是原版行为。** 原版的衣服来自扭蛋和活动：
+    `table_item` 里 109 件衣服 / 54 张背景，其中 `icon == "appareldefault"`
+    那件是默认造型（`ensure_default_looks` 已经在发），其余全是
+    quality 40 的"活动限定时装"。私服的扭蛋是空卡池（缺运营配置，见
+    `handlers/gacha.py`），不主动发的话**「换装」和「换背景」两个页签
+    永远只有一件**，宿舍这块等于没做。
+
+    所以一次性发满，和天赋材料 / 装备材料 / 默认造型同一个套路。
+    要还原原版就从 `LOOK_STOCK_VERSION` 那个判断里删掉，
+    或者把 `LOOK_STOCK_VERSION` 保持不动、手动清背包。
+
+    ⚠️ 衣服 `limit_count` 就是 1，而且**永远不会被消耗**，所以这个是幂等的
+    （重复调用不会加数量）。发的时候**不标"新获得"**
+    （`newClothes` / `newBgList` 留空）—— 一次给一百多件、每个角色都挂红点太吵。
+    """
+    if int(player.get("lookStockVersion") or 0) == LOOK_STOCK_VERSION:
+        return False
+    bag = items.items_of(player)
+    n = 0
+    for key, row in items.table("table_item").items():
+        if str(row.get("t")) not in ("40", "50"):
+            continue
+        if int(bag.get(key) or 0) < 1:
+            bag[key] = 1
+            n += 1
+    player["lookStockVersion"] = LOOK_STOCK_VERSION
+    log.info("玩家 %s 发满衣柜/背景：新增 %d 件（私服取舍，见 docs/differences.md §B）",
+             player.get("account"), n)
+    return True
+
+
 def _split_types(text) -> set:
     if not text:
         return set()
@@ -511,30 +549,40 @@ def birthday_bonus(base: int) -> int:
 # ---------------------------------------------------------------------------
 # 宿舍事件（favorevent.*）
 # ---------------------------------------------------------------------------
-# ⚠️⚠️ **这一块是本次适配里推断最多的地方，实机要重点看。**
+# ⚠️⚠️ **这一块的"什么时候解锁 / 读完给多少奖励"是推断的，实机要重点看。**
 #
-# 反汇编能确定的（`FavorEventCenter` / `FavorEvent`）：
+# 反汇编 + **实机量过**的（`FavorEventCenter` / `FavorEvent`）：
 #
-#   1. 登录块 `data.favorevent` 是个 **scratch 对象**，不是事件列表。
-#      `_initData(data)` 干的是（逐条反汇编）：
+#   1. `FavorEventCenter._initData(data)` 会按 `table_favor_random_event` **整张表**
+#      建出 `_favorEvents`：
 #          this._eventsInTable = {};
-#          this._favorEvents   = {};                       // ← 只在**响应推送**里填
+#          this._favorEvents   = {};
 #          for (var i in table_favor_random_event) {
 #              this._eventsInTable[i] = table_favor_random_event[i];
 #              this._eventsInTable[i].table_id = i;
-#              data[i] = new FavorEvent(data[i] || {eventKey: i}, this._eventsInTable[i]);
+#              this._favorEvents[i] = new FavorEvent(data[i] || {eventKey: i},
+#                                                    this._eventsInTable[i]);
 #          }
-#      注意最后一行写回的是 **`data[i]`**，而 `_favorEvents` 全程是空的 ——
-#      也就是说**登录块里给什么都不影响界面**，事件只能靠响应键 `newFavorEvent` 推。
+#      **所以登录块 `favorevent` 是会被读的** —— 服务端给了哪几条，那几条就是"真"的，
+#      其余用 `{eventKey: i}` 占位（`_id` / `_status` / `_isToBeUnlocked` 全 undefined）。
+#
+#      ⚠️ 我第一版把最后那行的目标读成了参数 `data`，于是断言「登录块是 scratch 对象、
+#      事件只能靠响应推」——**错的**。实机量（重启客户端走完整登录之后）：
+#          Object.keys(dataManager.favorEventCenter._favorEvents).length  ->  184（整表）
+#          其中 _id 有值的                                                ->  19（我们建的）
+#      而 `184` 这个数只有在"写进 `_favorEvents`"时才可能出现（写进 data 的话
+#      `_favorEvents` 只会剩下响应推的那几条）。
+#      **教训：`setelem` 的目标分不清时别硬读字节码，去实机量一行长度。**（overview §6.8）
 #
 #   2. `cb4ResNewFavorEvent(res)`：`data` 是 **`{eventKey: 行}` 的 map**，
 #      逐条 `this._favorEvents[行.eventKey] = new FavorEvent(行, table[eventKey])`。
+#      这是「好感度涨到级、新解锁事件」的推送路径。
 #
 #   3. `submitFesRead(eventKeys)` 的请求体是 **裸数组**（不是 `{eventKeys: [...]}`）：
 #          if (!_.isArray(eventKeys) || eventKeys.length == 0) return;
 #          for (var i in eventKeys) if (!events[eventKeys[i]]) return;   // 有一个不认识就整个不发
 #          server.request("favorevent.seteventsunlock", eventKeys, cb, true);
-#      回调**只打日志、不读 res.data**，所以「读过了」这个状态也得靠响应推回去。
+#      回调**只打日志、不读 res.data**，所以「读过了」这个状态得靠响应推回去。
 #
 # 推断的部分（没有字节码佐证，靠表结构反推）：
 #
@@ -542,14 +590,12 @@ def birthday_bonus(base: int) -> int:
 #     好感度等级（"1"/"3"/"5"...）。所以「好感度升到 N 级 → 解锁该角色 lv<=N 的事件」。
 #   * **读完给奖励**：`reward_favor` 是纯服务端数值（客户端全库 0 命中），
 #     所以服务端在读事件时把这份好感度加上。
-#   * **`newFavorEvent` 从哪来**：客户端只在 `request` 的响应派发里认这个键，
-#     而 `dataManager.isLogin` 那道闸让**首次登录的响应派发不进**（否则
-#     `dataManager.favorCenter` 还是 null，`cb4ResFavor` 会直接抛）。
-#     所以这里**两处都发**（双保险）：
-#        - 登录响应里带一份（万一派发其实是通的）
-#        - 好感度涨了之后（`favor.usegift` / `favor.touchcharasst`）带上新增的那几条
-#     实机验证方法：登录后看 `Object.keys(dataManager.favorEventCenter._favorEvents).length`，
-#     是 0 就说明登录那条路不通、只能靠好感度涨了才推。
+#
+# 推送策略：登录块带一份（**已实机确认会被 `_initData` 读进去**），
+# 好感度涨了之后（`favor.usegift` / `favor.touchcharasst`）再带一份 `newFavorEvent`
+# 推新增的那几条。**两条路都通**，登录那份不是冗余 —— 它是"已解锁事件"的唯一来源，
+# 少了它玩家重登之后事件列表就空了。
+#
 #   * `level_key` 有 getter 但**没人读**，服务端不用管。
 
 
@@ -610,12 +656,13 @@ def sync_events(player: dict) -> list:
 
 
 def event_block(player: dict) -> dict:
-    """登录包里 `favorevent` 那一块。
+    """登录包里 `favorevent` 那一块：`{eventKey: 行}`，只发已解锁的那几条。
 
-    ⚠️ 只发已解锁的事件（按 eventKey 索引）。**首次登录时客户端并不会用它** ——
-    见上面「登录块是 scratch 对象」那段；真正的推送靠 `new_favor_event_block()`。
-    之所以还发一份，是因为 `_initData` 会 `data[i] = new FavorEvent(data[i] || ...)`，
-    给了正确的行它构造出来的 `FavorEvent` 就是对的（万一别处要用）。
+    ⚠️ **这是"已解锁事件"的唯一来源**，别删。客户端 `FavorEventCenter._initData`
+    会按 `table_favor_random_event` **整张表**建 `_favorEvents`，其中
+    `_favorEvents[i] = new FavorEvent(data[i] || {eventKey: i}, table[i])`
+    —— 登录块给了哪几条，那几条才有 `id` / `status` / `isToBeUnlocked`，
+    其余是占位（见模块顶部「宿舍事件」那段，实测 184 条里 19 条是我们建的）。
     """
     return dict(store.player_favor_events(player))
 
