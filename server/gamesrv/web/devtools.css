@@ -76,6 +76,11 @@ input, select, textarea {
 }
 input:focus, select:focus, textarea:focus { outline: 1px solid var(--accent); border-color: var(--accent); }
 textarea { font-family: var(--mono); font-size: 12px; resize: none; }
+/* ⚠️ `hidden` 属性只是一条 UA 样式（`[hidden]{display:none}`），**作者样式能盖掉它**。
+   `.chk { display: inline-flex }` / `button { display: ... }` 这类规则一写，
+   带 `hidden` 的元素照样显示 —— 之前「每页 N」那个 <label class="chk"> 就藏不掉。
+   加这条兜底，让 `el.hidden = true` 在任何元素上都真的有效。 */
+[hidden] { display: none !important; }
 .chk { color: var(--muted); display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
 .chk input { vertical-align: middle; }
 
@@ -165,10 +170,18 @@ main { flex: 1 1 auto; min-height: 0; display: flex; }
 .cc-out.logs .ln.console .tag { color: #8fb8ff; }
 .cc-out.logs .ln.probe .tag { color: #b48ce0; }
 .cc-out.logs .ln.server .tag { color: #d0a05a; }
-.cc-out.logs .ln.server.ERROR .body,
-.cc-out.logs .ln.server.CRITICAL .body { color: var(--err); }
-.cc-out.logs .ln.server.WARNING .body { color: var(--warn); }
+/* 级别类名统一小写（devbus 发 levelname.lower()，前端 addLog 也归一化） */
+.cc-out.logs .ln.error .body,
+.cc-out.logs .ln.critical .body,
+.cc-out.logs .ln.fatal .body { color: var(--err); }
+.cc-out.logs .ln.warning .body { color: var(--warn); }
 .cc-out.logs .ln .body { color: var(--fg); }
+/* 客户端行的级别（服务端按行首判的，小写）也给来源标签上色，方便一眼扫出异常 */
+.cc-out.logs .ln.debug .tag { color: var(--muted); }
+.cc-out.logs .ln.info .tag { color: #7fd4c1; }
+.cc-out.logs .ln.warning .tag { color: var(--warn); }
+.cc-out.logs .ln.error .tag,
+.cc-out.logs .ln.fatal .tag { color: var(--err); }
 
 /* ---------------- 玩家 ---------------- */
 
@@ -189,15 +202,22 @@ main { flex: 1 1 auto; min-height: 0; display: flex; }
 /* ---------------- 数据 ---------------- */
 
 .dt-out { flex: 1 1 auto; overflow: auto; }
-.dt-out table { width: 100%; border-collapse: collapse; font-family: var(--mono); font-size: 12px; }
+/* `table-layout: fixed` 是省略号能生效的前提：auto 布局下浏览器会按内容撑宽单元格，
+   `text-overflow: ellipsis` 就没机会出场。 */
+.dt-out table { width: 100%; border-collapse: collapse; table-layout: fixed; font-family: var(--mono); font-size: 12px; }
 .dt-out th, .dt-out td {
   text-align: left; vertical-align: top; padding: 4px 10px; border-bottom: 1px solid #22262d;
+  /* 默认**一行 + 省略号**；完整内容靠点行展开（`tr.expanded`，见下） */
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .dt-out th { position: sticky; top: 0; background: var(--bg2); color: var(--muted); z-index: 1; }
-.dt-out td.k { color: var(--accent); white-space: nowrap; width: 1%; }
-.dt-out td.v { word-break: break-all; white-space: pre-wrap; }
+.dt-out td.k { color: var(--accent); width: 26%; }
 .dt-out td.v.str { color: var(--fg); }
-.dt-out .doc { color: var(--muted); word-break: break-all; }
+.dt-out .doc { color: var(--muted); }
+/* 点整行切换展开：展开后换回 pre-wrap，`pretty()` 出来的缩进/换行才是可读的 */
+.dt-out tbody tr { cursor: pointer; }
+.dt-out tbody tr:hover { background: #1b1f26; }
+.dt-out tr.expanded td { white-space: pre-wrap; word-break: break-all; overflow: visible; }
 
 .toast {
   position: fixed; right: 16px; bottom: 16px; max-width: 460px; z-index: 50;

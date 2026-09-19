@@ -153,7 +153,12 @@ class _LogBridge:
                     message += " | " + str(record.exc_info[1])
                 bus.publish(
                     "server",
-                    level=record.levelname,
+                    # 级别统一成前端那**五档**：debug / info / warning / error / fatal。
+                    # 1) 一律**小写**：Python 的 levelname 是大写，而客户端行的级别是按
+                    #    行首判的、本来就是小写，并排显示会出现 `store/INFO` 挨着 `client/info`。
+                    # 2) `CRITICAL` 归到 **fatal**：两套名字同一个档，看着乱。
+                    level={"critical": "fatal"}.get(record.levelname.lower(),
+                                                    record.levelname.lower()),
                     logger=record.name.replace("gamesrv.", "", 1),
                     message=message[:4000],
                 )

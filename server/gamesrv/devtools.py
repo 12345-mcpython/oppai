@@ -327,6 +327,47 @@ _tailer = _LogcatTailer()
 _push_seen_at = 0.0
 
 
+# 客户端行的级别**在产生这一端就判好**，不留给前端猜。
+# 只有从 logcat 收原文这条路能判（原文里级别信息是隐含的），规则按**行首**：
+#   1) 行首（可带 `|` 前缀）就是级别词 → 用它
+#   2) 行首是探针的逐包追踪标签（CRYPT / GAME REQ / GAME RESP / REQ / RES / …）→ debug
+#   3) 行里有 JS 异常特征 → error；有 WARN → warning
+#   4) 都不是 → info（**永远给一个级别**，留空的话前端按级别过滤会失效）
+#
+# 前端 `guessClientLevel()` 里有一份同样的规则，只作兜底（老事件 / 别的来源）。
+_LEVEL_WORD = re.compile(
+    r"^(DEBUG|TRACE|INFO|NOTICE|WARN(?:ING)?|ERROR|ERR|FATAL|CRITICAL|CRIT|ASSERT)\b", re.I)
+_LEVEL_DEBUG_TAG = re.compile(r"^(CRYPT|GAME REQ|GAME RESP|REQ|RES|SEND|RECV|POPUP|HOOK)\b")
+_LEVEL_ERROR_HINT = re.compile(
+    r"\b(ERROR|TypeError|ReferenceError|SyntaxError|is undefined|cannot read)\b", re.I)
+_LEVEL_WARN_HINT = re.compile(r"\bWARN(?:ING)?\b", re.I)
+
+
+def _guess_client_level(line: str) -> str:
+    """按行首判客户端日志的级别（永远返回一个级别，不会是空串）。"""
+    s = (line or "").strip()
+    head = s.lstrip("|").lstrip()
+    m = _LEVEL_WORD.match(head)
+    if m:
+        w = m.group(1).upper()
+        if w in ("DEBUG", "TRACE"):
+            return "debug"
+        if w in ("INFO", "NOTICE"):
+            return "info"
+        if w.startswith("WARN"):
+            return "warning"
+        if w in ("ERROR", "ERR"):
+            return "error"
+        return "fatal"
+    if _LEVEL_DEBUG_TAG.match(head):
+        return "debug"
+    if _LEVEL_ERROR_HINT.search(s):
+        return "error"
+    if _LEVEL_WARN_HINT.search(s):
+        return "warning"
+    return "info"
+
+
 def _publish_client_line(line: str, source: str = "client") -> None:
     """把一条客户端日志发到总线上。
 
@@ -338,7 +379,8 @@ def _publish_client_line(line: str, source: str = "client") -> None:
     if source in ("client", "console") and time.time() - _push_seen_at < 15.0:
         # 探针主动上报那条路活着时，logcat 这边静音，免得重复
         return
-    devbus.publish("client", source=source, line=line[:4000])
+    devbus.publish("client", source=source, line=line[:4000],
+                   level=_guess_client_level(line))
 
 
 # ---------------------------------------------------------------------------
@@ -1111,7 +1153,8 @@ def build(service) -> None:
         if isinstance(lines, list):
             _push_seen_at = time.time()
             for line in lines[:2000]:
-                devbus.publish("client", source="probe", line=str(line)[:4000])
+                devbus.publish("client", source="probe", line=str(line)[:4000],
+                               level=_guess_client_level(str(line)))
             return _reply({"ok": True, "n": len(lines)})
         return _err("lines 必须是数组或字符串")
 

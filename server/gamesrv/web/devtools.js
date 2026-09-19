@@ -102,6 +102,7 @@ function post(path, body) {
 }
 
 let toastTimer = null;
+let toastLast = null;
 function toast(message, kind) {
   let node = $('toast');
   if (!node) {
@@ -109,11 +110,21 @@ function toast(message, kind) {
     node.id = 'toast';
     document.body.appendChild(node);
   }
+  // ⚠️ 同一条消息**连续重复**时不要重置计时器。
+  // 探针一直 `XHR onerror` 那种情况会每秒调一次 toast，每次都 `clearTimeout` + 重新计 8 秒，
+  // 结果就是这条红条看着"永远不会关"。这里改成：同一条已经在显示 → 只更新内容，计时照走。
+  const same = (message === toastLast && toastTimer);
+  toastLast = message;
   node.className = 'toast' + (kind ? ' ' + kind : '');
   node.textContent = message;
   node.hidden = false;
+  if (same) return;
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => { node.hidden = true; }, kind === 'err' ? 8000 : 3500);
+  toastTimer = setTimeout(() => {
+    node.hidden = true;
+    toastTimer = null;
+    toastLast = null;
+  }, kind === 'err' ? 5000 : 3000);
 }
 
 /** 按钮包一层：跑的时候禁用 + 出错弹提示，省得每个 handler 都写一遍。 */
@@ -158,8 +169,11 @@ function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
 function routeEvent(ev) {
   switch (ev.kind) {
     case 'traffic': addTraffic(ev); break;
-    case 'client': addLog('client', ev.source || 'logcat', '', ev.line); break;
-    case 'server': addLog('server', ev.logger || 'server', ev.level, ev.message); break;
+    // 级别优先用**服务端产生事件时判好的** `ev.level`（见 devtools.py 的
+    // `_guess_client_level`）；只有老事件/别的来源缺这个字段时才本地兜底猜一次。
+    case 'client': addLog('client', ev.source || 'logcat', ev.level || guessClientLevel(ev.line), ev.line); break;
+    // 服务端行正常情况下自带 level；万一没有也补一个，保证每行都有级别可筛
+    case 'server': addLog('server', ev.logger || 'server', ev.level || guessClientLevel(ev.message), ev.message); break;
     case 'console': addConsole(ev); break;
     case 'action': addLog('server', 'devtools', '', ev.detail || ev.action, 'action'); break;
     default: break;
@@ -340,7 +354,7 @@ async function runConsole() {
   const out = el('div', 'out', '执行中…');
   item.appendChild(out);
   $('cc-out').appendChild(item);
-  $('cc-out').scrollTop = $('cc-out').scrollHeight;
+  stickConsole();
 
   const r = await post('/api/console', { code: code, timeout: timeout });
   if (r.ok) {
@@ -350,7 +364,7 @@ async function runConsole() {
     out.textContent = r.error || '失败';
   }
   if (r.ms !== undefined) item.appendChild(el('div', 'meta', r.ms + 'ms'));
-  $('cc-out').scrollTop = $('cc-out').scrollHeight;
+  stickConsole();
 }
 
 function addConsole(ev) {
@@ -360,6 +374,7 @@ function addConsole(ev) {
   item.appendChild(el('div', 'out', ev.value));
   item.appendChild(el('div', 'meta', (ev.ms || 0) + 'ms（来自 ' + (ev.source || '客户端 REPL') + '）'));
   $('cc-out').appendChild(item);
+  stickConsole();          // ← 这条路以前完全不滚
 }
 
 // ---------------------------------------------------------------- 玩家面板
@@ -538,17 +553,69 @@ async function loadBackups() {
 
 // ---------------------------------------------------------------- 日志面板
 
+// 级别只保留五档：debug / info / warning / error / fatal。
+// 别名在这里归一（服务端 devbus 也做了一次同样的映射），这样不管事件从哪来
+// 面板上都只有这五个词。
+const LEVEL_ALIAS = { critical: 'fatal', crit: 'fatal', warn: 'warning', err: 'error', notice: 'info', trace: 'debug' };
+
 function addLog(source, tag, level, body, kind) {
   const cls = kind || source;
-  const entry = { source: cls, tag: tag, level: level, body: body, ts: Date.now() / 1000 };
+  // 级别一律归一成**小写五档**再存：服务端以前发的是 Python 的 `levelname`（大写、
+  // 且 CRITICAL 与 fatal 是两套名字），客户端那份是小写，并排显示很乱。
+  const raw = String(level || 'info').toLowerCase();
+  const entry = { source: cls, tag: tag, level: LEVEL_ALIAS[raw] || raw, body: body, ts: Date.now() / 1000 };
   state.logs.push(entry);
   if (state.logs.length > state.logsMax) state.logs.shift();
   if (matchesLogFilter(entry)) appendLogLine(entry);
 }
 
+// 日志分级。
+//
+// 服务端行自带 Python 的 `levelname`（DEBUG/INFO/WARNING/ERROR/CRITICAL，见 devbus 的
+// `_LogBridge`），**客户端行是从 logcat 收的原文、本身没有级别**，只能按内容猜 ——
+// 不猜的话「按级别过滤」对最吵的那批探针行完全无效。
+//
+// 级别排序。「按级别过滤」用的就是它。
+// 服务端行自带 Python 的 levelname（DEBUG/INFO/WARNING/ERROR/CRITICAL，见 devbus 的
+// `_LogBridge`）；客户端行是从 logcat 收的原文、本身没有级别，由 `guessClientLevel()` 补。
+const LEVEL_RANK = { debug: 10, info: 20, warning: 30, error: 40, fatal: 50, critical: 50 };
+
+function levelRank(lv) {
+  return LEVEL_RANK[String(lv || 'info').toLowerCase()] || 20;
+}
+
+// 按**行首**判级别。顺序：
+//   1) 行首（可以带 `|` 前缀）就是级别词 → 用它：DEBUG/TRACE/INFO/NOTICE/WARN/ERROR/FATAL…
+//   2) 行首是探针的逐包追踪标签（CRYPT / GAME REQ / GAME RESP / REQ / RES / …）→ debug
+//   3) 行里有 JS 异常特征 → error
+//   4) 都不是 → info
+//
+// ⚠️ **永远返回一个级别，不留空**。留空的话「按级别过滤」对这类行直接失效
+// （`entry.level` 为空时既不算 debug 也不算 error，怎么筛都不对）。
+function guessClientLevel(line) {
+  const s = String(line || '').trim();
+  const head = s.replace(/^[|\s]+/, '');
+
+  const m = head.match(/^(DEBUG|TRACE|INFO|NOTICE|WARN(?:ING)?|ERROR|ERR|FATAL|CRITICAL|CRIT|ASSERT)\b/i);
+  if (m) {
+    const w = m[1].toUpperCase();
+    if (w === 'TRACE' || w === 'DEBUG') return 'debug';
+    if (w === 'INFO' || w === 'NOTICE') return 'info';
+    if (w.startsWith('WARN')) return 'warning';
+    if (w === 'ERROR' || w === 'ERR') return 'error';
+    return 'fatal';
+  }
+  if (/^(CRYPT|GAME REQ|GAME RESP|REQ|RES|SEND|RECV|POPUP|HOOK)\b/.test(head)) return 'debug';
+  if (/\b(ERROR|TypeError|ReferenceError|SyntaxError|is undefined|cannot read)\b/i.test(s)) return 'error';
+  if (/\bWARN(ING)?\b/i.test(s)) return 'warning';
+  return 'info';
+}
+
 function matchesLogFilter(entry) {
   const mode = ($$('input[name=lgsrc]').find((n) => n.checked) || {}).value || 'all';
   if (mode !== 'all' && entry.source !== mode) return false;
+  const min = $('lg-level').value;
+  if (min && levelRank(entry.level) < levelRank(min)) return false;
   const needle = $('lg-filter').value.trim().toLowerCase();
   if (needle && (entry.body + ' ' + entry.tag).toLowerCase().indexOf(needle) < 0) return false;
   return true;
@@ -556,9 +623,10 @@ function matchesLogFilter(entry) {
 
 function logLineNode(entry) {
   const line = el('div', 'ln ' + entry.source + ' ' + (entry.level || ''));
-  const label = entry.source === 'server'
-    ? entry.tag + (entry.level ? '/' + entry.level : '')
-    : entry.source;
+  // ⚠️ 来源后面**一律**跟 `/级别`。以前只有 server 那支拼了 level，
+  // 客户端行只显示 `client` —— 按级别过滤是生效了，但看不出这行是什么级别。
+  const label = (entry.source === 'server' ? entry.tag : entry.source)
+    + (entry.level ? '/' + entry.level : '');
   line.appendChild(el('span', 'tag', label));
   line.appendChild(el('span', 'body', entry.body));
   return line;
@@ -619,28 +687,40 @@ async function renderData() {
   const limit = Number($('dt-limit').value) || 60;
   $('dt-table').hidden = kind !== 'table';
   $('dt-refresh-tables').hidden = kind !== 'table';
-  $('dt-limit-wrap').hidden = kind === 'routes';
+  // 三个视图**都能翻页**了：「路由清单」/「文案对照」在本地切片（本来就一次性全量拿到），
+  // 「表浏览」走服务端分页。所以「每页 / 上一页 / 下一页」一律显示、一律有用。
+  // 以前 routes/dict 两支提前 return、压根不看 offset，按钮点了没反应。
 
   const out = $('dt-out');
   out.textContent = '';
 
+  // 本地分页：切出当前页 + 统一 dt-info 文案
+  const slicePage = (all) => all.slice(state.dtOffset, state.dtOffset + limit);
+  const pageInfo = (total, shown) =>
+    '第 ' + (total ? state.dtOffset + 1 : 0) + '–' + (state.dtOffset + shown) +
+    ' 条 / 共 ' + total + ' 条';
+
   if (kind === 'routes') {
     const data = await api('/api/routes');
     if (!data.ok) { toast(data.error || '失败', 'err'); return; }
-    const rows = (data.routes || []).filter((r) =>
+    const all = (data.routes || []).filter((r) =>
       !q || (r.route + ' ' + r.handler + ' ' + r.doc).toLowerCase().indexOf(q.toLowerCase()) >= 0);
-    $('dt-info').textContent = rows.length + ' / ' + (data.routes || []).length + ' 条路由';
-    out.appendChild(buildTable(['route', '实现', '说明'], rows.map((r) => [r.route, r.handler, r.doc])));
+    const page = slicePage(all);
+    $('dt-info').textContent = (q ? '命中 ' + all.length + ' 条，' : '') + pageInfo(all.length, page.length);
+    out.appendChild(buildTable(['route', '实现', '说明'],
+      page.map((r) => [r.route, r.handler, r.doc])));
     return;
   }
 
   if (kind === 'dict') {
     if (!q) { $('dt-info').textContent = '输入关键词再搜（比如 指挥部 / 军士 / 未开启）'; return; }
-    const data = await api('/api/dict?q=' + encodeURIComponent(q) + '&limit=' + limit);
+    // `/api/dict` 没有 offset，所以一次多要一点、在本地切页
+    const data = await api('/api/dict?q=' + encodeURIComponent(q) + '&limit=2000');
     if (!data.ok) { toast(data.error || '失败', 'err'); return; }
-    const keys = Object.keys(data.rows || {});
-    $('dt-info').textContent = keys.length + ' 条命中';
-    out.appendChild(buildTable(['id', '文案'], keys.map((k) => [k, String(data.rows[k])])));
+    const all = Object.keys(data.rows || {});
+    const page = slicePage(all);
+    $('dt-info').textContent = '命中 ' + all.length + ' 条，' + pageInfo(all.length, page.length);
+    out.appendChild(buildTable(['id', '文案'], page.map((k) => [k, String(data.rows[k])])));
     return;
   }
 
@@ -672,6 +752,10 @@ function buildTable(headers, rows) {
       td.textContent = typeof c === 'string' ? c : pretty(c);
       r.appendChild(td);
     });
+    // 默认一行省略（见 .dt-out td 的 CSS），点整行展开 / 收起看完整内容。
+    // 展开后 td 换回 pre-wrap，`pretty()` 打出来的缩进和换行才可读。
+    r.title = '点击展开 / 收起';
+    r.addEventListener('click', () => r.classList.toggle('expanded'));
     tb.appendChild(r);
   });
   t.appendChild(tb);
@@ -680,14 +764,59 @@ function buildTable(headers, rows) {
 
 // ---------------------------------------------------------------- 初始化
 
+// ---------------------------------------------------------------- 页签
+
+// 记住停在哪个页签：以前刷新总是弹回「流量」，正看着日志就被拽走了。
+const TAB_KEY = 'dt-tab';
+
+function activateTab(name) {
+  if (!name) return;
+  const btn = $$('#tabs button').find((b) => b.dataset.tab === name);
+  const sect = $('tab-' + name);
+  if (!btn || !sect) return;      // 存的名字不认识（页签改过名）→ 保持 HTML 里的默认
+  $$('#tabs button').forEach((x) => x.classList.toggle('on', x === btn));
+  $$('.tab').forEach((s) => s.classList.toggle('on', s === sect));
+  if (name === 'data') renderData();
+  if (name === 'jsd') { jsdStatus(); jsdLoadSources(); }
+  stickToBottom(name);
+}
+
 function setupTabs() {
   $$('#tabs button').forEach((b) => {
     b.addEventListener('click', () => {
-      $$('#tabs button').forEach((x) => x.classList.toggle('on', x === b));
-      $$('.tab').forEach((s) => s.classList.toggle('on', s.id === 'tab-' + b.dataset.tab));
-      if (b.dataset.tab === 'data') renderData();
-      if (b.dataset.tab === 'jsd') { jsdStatus(); jsdLoadSources(); }
+      activateTab(b.dataset.tab);
+      try { localStorage.setItem(TAB_KEY, b.dataset.tab); } catch (e) { /* 隐私模式算了 */ }
     });
+  });
+  let saved = null;
+  try { saved = localStorage.getItem(TAB_KEY); } catch (e) { saved = null; }
+  activateTab(saved);             // saved 为空时什么都不做，用 HTML 的默认页签
+}
+
+// 控制台输出滚到底。
+// 和日志/流量那两个面板统一成同一个开关（`cc-autoscroll`）：
+// 不想被拽下去看历史时，取消勾选就行。
+// ⚠️ 以前 `runConsole()` 里是无条件滚的，而**从 `script\repl.py` 发过来的**
+// （`addConsole`）**一次都没滚** —— 所以用命令行发命令时输出会停在上面。
+function stickConsole() {
+  if (!$('cc-autoscroll').checked) return;
+  const out = $('cc-out');
+  out.scrollTop = out.scrollHeight;
+}
+
+// 把某个页签里可滚动的面板贴到底（仅当该面板的「自动滚动」勾着）。
+// `requestAnimationFrame` 是因为要先等浏览器完成布局，元素才有真实高度。
+function stickToBottom(tab) {
+  requestAnimationFrame(() => {
+    if (tab === 'traffic' && $('tr-autoscroll').checked) {
+      const list = TR_LIST();
+      list.scrollTop = list.scrollHeight;
+    }
+    if (tab === 'logs' && $('lg-autoscroll').checked) {
+      const out = $('lg-out');
+      out.scrollTop = out.scrollHeight;
+    }
+    if (tab === 'console') stickConsole();
   });
 }
 
@@ -776,6 +905,7 @@ function setupPlayer() {
 
 function setupLogs() {
   ['lg-filter'].forEach((id) => $(id).addEventListener('input', redrawLogs));
+  $('lg-level').addEventListener('change', redrawLogs);
   $$('input[name=lgsrc]').forEach((n) => n.addEventListener('change', redrawLogs));
   onClick('lg-clear', async () => { state.logs = []; $('lg-out').textContent = ''; });
   onClick('lg-logcat-start', () => logcat('start'));

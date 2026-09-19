@@ -62,6 +62,7 @@
       <span class="muted">在手机上那个游戏进程里跑 JS（等于 <code>tools/repl.py</code> 的网页版）</span>
       <span class="spacer"></span>
       <label class="chk">超时 <input type="number" id="cc-timeout" value="15" min="1" max="60" style="width:64px"> 秒</label>
+      <label class="chk"><input type="checkbox" id="cc-autoscroll" checked> 自动滚动</label>
       <button id="cc-clear" class="ghost">清空输出</button>
     </div>
     <div class="bar snippets" id="cc-snippets"></div>
@@ -103,6 +104,14 @@
       <label class="chk" title="原生 console.log 的输出（JSB 里没法从 JS 侧包一层，只能从 logcat 收原文）"><input type="radio" name="lgsrc" value="console"> console.log</label>
       <label class="chk" title="probe.js 通过 POST /hook/log 主动上报"><input type="radio" name="lgsrc" value="probe"> 上报</label>
       <label class="chk"><input type="radio" name="lgsrc" value="server"> 服务端</label>
+      <select id="lg-level" title="按级别过滤。⚠️ 服务端行用 Python 的 levelname；客户端行（logcat 原文）本身没有级别，是按内容猜的：探针的逐包追踪（CRYPT / GAME REQ / GAME RESP）算 debug，JS 异常算 error。想滤掉那批 hex dump 就把这里调到 info 以上。">
+        <option value="">全部级别</option>
+        <option value="debug">debug 以上</option>
+        <option value="info">info 以上</option>
+        <option value="warning">warning 以上</option>
+        <option value="error">error 以上</option>
+        <option value="fatal">只看 fatal</option>
+      </select>
       <label class="chk"><input type="checkbox" id="lg-autoscroll" checked> 自动滚动</label>
       <span class="spacer"></span>
       <button id="lg-cc-help" class="ghost" title="console.log 在 JSB 里无法被覆盖，只能走 logcat 收原文">console.log 收得到吗？</button>
