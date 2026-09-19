@@ -73,7 +73,7 @@ server/                        （= E:\code\zcsmw\server）
 │   ├── jsdlink.py             引擎远程 JS 调试器的连接层（Firefox 远程调试协议）
 │   ├── web/devtools.*         调试台前端（明文 html/css/js，改完刷新即可）
 │   ├── crypto/des.py          标准 DES（已用客户端真实密文对拍验证）
-│   ├── handlers/              业务路由（agent.* / char.* / player.* / quest.* / equipment.* / favor.* / favorevent.*，共 70 条）
+│   ├── handlers/              业务路由（agent.* / char.* / player.* / quest.* / equipment.* / favor.* / favorevent.*，共 72 条）
 │   ├── favor.py               好感度（宿舍）的业务逻辑：加经验 / 升级 / 礼物偏好 / 回礼 / 宿舍事件
 │   ├── data/table_*.json      从客户端抽出来的表（任务 / 关卡奖励 / 军士养成 / 助战 NPC / 天赋 / 装备 / 好感度 / 道具）
 │   └── apps.py                cdn / gate / login / game 四个端口的实现

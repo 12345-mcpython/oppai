@@ -28,6 +28,40 @@ def get_data(session: dict, msg: dict, req_id):
     return {"code": CODE_OK, "msg": "", "data": {"player": store.get_or_create_player(_account(session))}}
 
 
+@route("player.updateasst")
+def update_asst(session: dict, msg: dict, req_id):
+    """设置**助战角色**（宿舍右下角「设置助战」那个按钮）。
+
+    反汇编 `Player.updateAsst(favor, cb)`：
+
+        if (!favor.isAsstEnabled)               { cb({msg: table_dictionary[109]}); return; }
+        if (this._asstKey === favor.charKey)    { cb({msg: table_dictionary[110]}); return; }
+        this._asst = favor;
+        this._asstKey = favor.charKey;          // ← **本地先改**
+        if (dataManager.isLogin)
+            server.request("player.updateasst", {charKey: this._asstKey}, cb, true);
+        // 回调里：失败弹 table_dictionary[111]，成功调 favorCenter.resetIsNeedAsstEff()
+
+    请求体就是 `{charKey}`。`isAsstEnabled` 是客户端那边
+    `Favor._isAsstEnabled`（受 `table_favor_common[好感度等级].enable_set_asst` 控制，
+    好感度 1 级就开了），服务端不校验 —— 校验在客户端，且它已经本地改过了。
+
+    回包**必须带 `player`** —— `asstKey` 是玩家数据的一部分，重登时
+    `Player._initData` 从登录包的 `player.asstKey` 恢复；只回 code 的话
+    这次会话看着好了，一重登就回到旧值。
+    """
+    account = _account(session)
+    char_key = str((msg or {}).get("charKey") or "")
+    if not char_key:
+        return {"code": FAIL, "msg": "缺少 charKey", "data": {}}
+    player = store.get_or_create_player(account)
+    player["asstKey"] = char_key
+    player["asst"] = {"charKey": char_key}
+    store.save_player(player)
+    log.info("player.updateasst account=%s 助战 -> %s", account, char_key)
+    return {"code": CODE_OK, "msg": "", "data": {"player": player}}
+
+
 @route("player.naming")
 def naming(session: dict, msg: dict, req_id):
     """新号起名。

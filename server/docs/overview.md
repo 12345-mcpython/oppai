@@ -540,12 +540,14 @@ logcat 里只有一行 `JS ERROR: TypeError: config is undefined @ equipmentstre
       送礼 / 换装 / 换背景 / 抚摸 / 资料已读全实现。数值表 7 张进 `gamesrv/data/`。
       ⚠️ 三条坑各成一节：死键（§6.5）、map vs list（§6.6）、
       「算错不报错所以要自测」（§6.7）
-- [x] **宿舍事件**（`favorevent.seteventsunlock` 1 条，路由 69→70）：好感度到级解锁剧情，
-      读完发 `reward_favor` 好感度。⚠️ 这一块的**形状是反汇编钉死的、触发时机是推断的**，
-      推断的部分单独列在 `gamesrv/favor.py` 的「宿舍事件」那一段 —— 关键是
-      **登录块 `favorevent` 是个 scratch 对象，客户端不拿它填界面**，
-      事件只能靠响应键 `newFavorEvent` 推（见 §6.8）
-- [x] 文档：协议 / 逆向手法 / 打包逻辑 / 调试台 / 引擎调试 / 本总览
+- [x] **宿舍事件**（`favorevent.seteventsunlock` 1 条）：好感度到级解锁剧情，
+      读完发 `reward_favor` 好感度。⚠️ 事件靠**登录块**下发（实测 184 条里 19 条是我们建的），
+      见 §6.8
+- [x] **守护灵**（`char.upgradedaemon`）+ **设置助战**（`player.updateasst`），路由 70→72：
+      守护灵上限跟着**好感度等级**走（`table_favor_upgrade[lv].max_daemon_lv`，前 6 级是 0）、
+      材料喂军士（`table_daemon_exp[品质]` 的同角色/同类型/其它三档）、军士真被吃掉；
+      助战改 `player.asstKey`（重登靠登录包恢复）
+- [x] 文档：协议 / 逆向手法 / 打包逻辑 / 调试台 / 引擎调试 / 本总览 / **与原版的差异** / **从零复刻**
 
 ### 待办（按卡点排序）
 
@@ -571,7 +573,7 @@ logcat 里只有一行 `JS ERROR: TypeError: config is undefined @ equipmentstre
    `{item, innSize, index}`），所以卡在「层的 `_recommendList` 是 0」。
    **不影响战斗**（这个弹窗是可选的好友助战）。
 5. **其余未实现的 route** —— `python script/route_gap.py --static` 能列出全部。
-   当前：客户端静态候选 **161** 条，服务端 **70** 条，缺 **99** 条。按单机价值排：
+   当前：客户端静态候选 **161** 条，服务端 **72** 条，缺 **97** 条。按单机价值排：
 
    | 命名空间 | 缺 | 说明 |
    |---|---|---|
@@ -585,8 +587,9 @@ logcat 里只有一行 `JS ERROR: TypeError: config is undefined @ equipmentstre
    ⚠️ **`rank.*` / `boss.getbosslist` 这类"回空表"不算缺口**：私服没有榜、没有好友，
    回空才是对的（见 `handlers/rank.py` 的论证），别当成没实现去"补"。
 
-   ✅ `equipment.*`(7)、`favor.*`(5)、`favorevent.*`(1)、
-   `player.selecttalent`/`upgradetalent` 已经补完。
+   ✅ 已经补完的：`equipment.*`(7)、`favor.*`(5)、`favorevent.*`(1)、
+   **`char.upgradedaemon`**(1)、**`player.updateasst`**(1)、
+   `player.selecttalent`/`upgradetalent`。
 6. `hashKey` / `hmac64` 还没复刻（登录靠单位元绕过）；自研 DH 的完整算法也没还原。
 
 ---

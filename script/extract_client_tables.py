@@ -211,8 +211,13 @@ SOLDIER_JS = r"""
     // 只有 1 是自军卡 —— 见 gamesrv/store.py 里 SOLDIER_KEYS 的说明，
     // 服务端要靠它判断"这个 key 能不能当军士发给玩家"。
     var master = {};
+    // 守护灵（宿舍）：`daemon_mode` 就是 table_daemon 的 key（at0101/df0101/hp0101），
+    // `type` 用来判"同类型材料"的额外经验。缺这俩字段驾驭不了 daemon 升级。
+    var daemon = {};
     for (var m in table_soldier_master) {
-        master[m] = table_soldier_master[m].card_type;
+        var mr = table_soldier_master[m];
+        master[m] = mr.card_type;
+        daemon[m] = {mode: mr.daemon_mode || "", type: mr.type};
     }
     return JSON.stringify({
         upgrade_exp: table_soldier_upgrade_exp,
@@ -221,7 +226,8 @@ SOLDIER_JS = r"""
         lv_limit: table_soldier_lv_limit,
         constant: table_soldier_constant,
         card: card,
-        master: master
+        master: master,
+        daemon: daemon
     });
 })()
 """
@@ -455,6 +461,36 @@ FAVOR_EVENT_JS = r"""
 """
 
 
+# 守护灵（宿舍左侧那个 guard 按钮）四张表。全部很小。
+#
+#   table_daemon_upgrade["<lv>"]        lv = "0".."10"（MAX_DAEMON_LV = 10）
+#       exp   升到 lv+1 需要的经验；**最后一档是 -1**（和 table_favor_upgrade 一个套路）
+#   table_daemon["<mode>"]              mode = at0101 / df0101 / hp0101
+#       11 项数组（daemon_lv 0..10），每项给 damage/defense/hp 加成（都是 +40）
+#       角色用哪一套由 `table_soldier_master[charKey].daemon_mode` 决定
+#   table_daemon_exp["<quality>"]       quality = "1".."4"
+#       {default, same_type, same_char} —— 当材料喂进去时给多少经验：
+#         同角色  same_char  >  同类型  same_type  >  其它  default
+#       品质 1 全是 0（喂 1 星材料一点经验都没有）
+#   table_soldier_master[charKey].{daemon_mode, type}  —— 见 SOLDIER_JS 的 `daemon`
+#
+# ⚠️ `CharCenter.calcDaemonUpgrade(materials, daemon, favorLv)` 是**客户端预览**，
+#    服务端要按同一套规则算，否则「预览涨 300、点完不变」。
+#    另外升级上限不是固定 10，而是 `table_favor_upgrade[favorLv].max_daemon_lv`
+#    （实测 getMaxDaemonLv(1)=0 / (5)=0 / (10)=4），见 favor.daemon_max_lv()。
+DAEMON_UPGRADE_JS = r"""
+(function () { return JSON.stringify(table_daemon_upgrade); })()
+"""
+
+DAEMON_JS = r"""
+(function () { return JSON.stringify(table_daemon); })()
+"""
+
+DAEMON_EXP_JS = r"""
+(function () { return JSON.stringify(table_daemon_exp); })()
+"""
+
+
 def _dump(base: str, js: str, name: str):
     result = eval_remote(base, js, timeout=30.0)
     if not result.get("ok"):
@@ -514,6 +550,9 @@ def main() -> int:
         ("table_favor_receive.json", FAVOR_RECEIVE_JS),
         ("table_favor_constant.json", FAVOR_CONSTANT_JS),
         ("table_favor_event.json", FAVOR_EVENT_JS),
+        ("table_daemon_upgrade.json", DAEMON_UPGRADE_JS),
+        ("table_daemon.json", DAEMON_JS),
+        ("table_daemon_exp.json", DAEMON_EXP_JS),
         ("table_item.json", ITEM_JS),
     ]
     if args.only:

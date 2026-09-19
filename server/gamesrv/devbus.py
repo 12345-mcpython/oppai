@@ -72,8 +72,13 @@ MAX_KEYS = 200
 MAX_EVENT_JSON = 60000
 
 
-def _clip(obj, limit: int = MAX_TEXT):
-    """把事件里超长的字符串 / 超长的数组截掉。返回 (截断后的对象, 截了几个)。
+def _clip(obj, limit: int = MAX_TEXT, max_items: int = MAX_KEYS):
+    """把事件里超长的字符串 / 超长的容器截掉。返回 (截断后的对象, 截了几个)。
+
+    ⚠️ **`limit` 和 `max_items` 要一起收**。踩过两次：
+      ① 只截字符串 → 1142 key 的 map 每个值都很短，照样 22 万字符
+      ② 加了 key 上限、但第二遍只降 `limit` → 200 个 key × 几百字符，还是 7 万
+    所以「太长了」的第二遍必须把**项数**也砍下来。
 
     只动展示用的字段（`line` / `msg` / `res` …），**不影响业务数据** ——
     事件总线只喂调试台，存档和回包本身走的是各自的路。
@@ -85,21 +90,21 @@ def _clip(obj, limit: int = MAX_TEXT):
     if isinstance(obj, dict):
         out, n = {}, 0
         keys = list(obj.keys())
-        for k in keys[:MAX_KEYS]:
-            nv, c = _clip(obj[k], limit)
+        for k in keys[:max_items]:
+            nv, c = _clip(obj[k], limit, max_items)
             out[k] = nv
             n += c
-        if len(keys) > MAX_KEYS:
+        if len(keys) > max_items:
             out["…"] = "(截断，原有 %d 个 key)" % len(keys)
             n += 1
         return out, n
     if isinstance(obj, (list, tuple)):
         out, n = [], 0
-        for v in obj[:MAX_LIST]:
-            nv, c = _clip(v, limit)
+        for v in obj[:max_items]:
+            nv, c = _clip(v, limit, max_items)
             out.append(nv)
             n += c
-        if len(obj) > MAX_LIST:
+        if len(obj) > max_items:
             out.append("…(截断，原长 %d 项)" % len(obj))
             n += 1
         return out, n
@@ -122,12 +127,13 @@ class _Bus:
         ⚠️ 入库前会过一遍 `_clip()`：**超长的字符串必须截掉**（见 MAX_TEXT 的说明），
         否则一条 131KB 的 `CRYPT ... hex=...` 就够把 devtools 页面卡死。
         """
-        clipped, cut = _clip(fields, KIND_TEXT_LIMIT.get(kind, MAX_TEXT))
-        # 分项上限都过了还嫌大？用更狠的额度再过一遍（只留 1/4），
-        # 保证「一条事件最多占多少」有个硬上限。
+        clipped, cut = _clip(fields, KIND_TEXT_LIMIT.get(kind, MAX_TEXT), MAX_KEYS)
+        # 分项上限都过了还嫌大？**字符串额度和容器项数一起收**（只留 1/8 / 20 项），
+        # 给「一条事件最多占多少」一个硬上限。
+        # ⚠️ 必须两个都收：只降字符串额度的话，200 个 key × 几百字符照样 7 万。
         try:
             if len(json.dumps(clipped, ensure_ascii=False)) > MAX_EVENT_JSON:
-                clipped, cut2 = _clip(clipped, max(200, MAX_TEXT // 4))
+                clipped, cut2 = _clip(clipped, max(200, MAX_TEXT // 8), 20)
                 cut += cut2 + 1
         except (TypeError, ValueError):
             clipped = {"_unserializable": True}

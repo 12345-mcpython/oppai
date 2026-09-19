@@ -64,7 +64,11 @@ def _module_stubs(player: dict | None = None) -> dict:
             # ⚠️ 军士存在玩家存档里（升级过就不能每次登录现生成，否则升级会回退）
             "soldiers": store.ensure_soldiers(player) if player else store.new_soldiers(),
             "mechas": [store.new_mecha()],
-            "daemons": [],
+            # 守护灵（宿舍 guard 面板）。**按 charKey 索引的 map，不是数组** ——
+            # `CharCenter.getDaemon(k)` 是 `this._daemons[k]`，给数组的话恒 undefined。
+            # 行只有 `{charKey, lv, curExp}`，属性/上限客户端自己算。
+            # 只有军士角色有守护灵（主角没有 daemon_mode）。见 store.player_daemons。
+            "daemons": store.player_daemons(player),
             "maxSoldiersCount": 50,
             "charManual": {},
             "skillComb": {},
@@ -202,6 +206,9 @@ def get_login_data(session: dict, msg: dict, req_id):
     # 衣柜/背景一次性发满（私服取舍：原版靠扭蛋和活动，我们扭蛋是空卡池）
     if favor.ensure_look_stock(player):
         store.save_player(player)
+    # 守护灵行：只给「有 daemon_mode 的角色」建（主角没有）
+    if store.ensure_daemons(player):
+        store.save_player(player)
     # 宿舍事件同理：好感度到级就解锁，登录时把还没建的补上。
     new_events = favor.sync_events(player)
     if new_events:
@@ -240,6 +247,8 @@ def create_player(session: dict, msg: dict, req_id):
     if favor.ensure_default_looks(player):
         store.save_player(player)
     if favor.ensure_look_stock(player):
+        store.save_player(player)
+    if store.ensure_daemons(player):
         store.save_player(player)
     new_events = favor.sync_events(player)
     if new_events:

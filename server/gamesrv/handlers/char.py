@@ -27,7 +27,7 @@
 
 from __future__ import annotations
 
-from .. import config, logx, quests, store
+from .. import config, favor, items, logx, quests, store
 from .. import soldier as soldier_calc
 from ..gameproto import CODE_OK
 from . import route
@@ -235,3 +235,101 @@ def sell_soldiers(session: dict, msg: dict, req_id):
         store.save_player(player)
     log.info("分解军士 %s 个：%s", len(ids), sorted(ids))
     return {"code": CODE_OK, "msg": "", "data": {"rewards": []}}
+
+
+@route("char.upgradedaemon")
+def upgrade_daemon(session: dict, msg: dict, req_id):
+    """守护灵升级（宿舍左侧 guard 按钮里的面板）。
+
+    反汇编 `CharCenter.requestUpgradeDaemon(data, succCb, failCb)`：
+
+        var res = this.checkUpgradeDaemon(data);        // ← 空桩，恒 {code:200}
+        var charKey = data.charKey;
+        var lastLv  = this._daemons[charKey] ? this._daemons[charKey].lv : 0;
+        if (res.code == 200) server.request("char.upgradedaemon", data, cb);
+        ... 回调里 this.updateDaemon(getData.data.daemon)
+
+    ⚠️ 请求体就是客户端那个 `data` 对象，形状没能完全确定（`checkUpgradeDaemon`
+    是个空桩，读不出它要什么）。按 `FavorDaemonWrapper.upgradeDaemon` 的原子顺序
+    （`favor charKey materials`）推，它是 `{charKey, materials}`；
+    这里**两种都收**：`charKey` 直接取，取不到就从 `msg.favor.charKey` 拿。
+
+    ⚠️ 响应必须是 `{"daemon": 整行}`，`updateDaemon` 是
+    `this._daemons[d.charKey] = d` —— 只回 `lv` 的话 `charKey` 变 undefined，
+    下次 `getDaemon()` 就查不到了。
+
+    数值规则（上游 / 上限 / 材料经验）见 `gamesrv/favor.py` 的「守护灵」那一段。
+    """
+    player = _player(session)
+    body = msg or {}
+    char_key = str(body.get("charKey")
+                   or ((body.get("favor") or {}) if isinstance(body.get("favor"), dict) else {}).get("charKey")
+                   or "")
+    if not char_key:
+        return {"code": FAIL, "msg": "缺少 charKey", "data": {}}
+
+    raw_ids = body.get("materials") or []
+    if not isinstance(raw_ids, list) or not raw_ids:
+        return {"code": FAIL, "msg": "没有选材料", "data": {}}
+
+    # 守护灵只对军士角色开放（主角没有 daemon_mode，客户端 getDaemonAttr 会抛）
+    if not favor.daemon_mode(char_key):
+        return {"code": FAIL, "msg": "这个角色没有守护灵", "data": {}}
+
+    favor_row = store.find_favor(player, char_key)
+    if favor_row is None:
+        return {"code": FAIL, "msg": "角色不存在", "data": {}}
+    favor_lv = int(favor_row.get("lv") or 1)
+
+    row = store.find_daemon(player, char_key)
+    if row is None:
+        store.ensure_daemons(player)
+        row = store.find_daemon(player, char_key)
+    if row is None:
+        row = store.new_daemon_row(char_key)
+        store.player_daemons(player)[char_key] = row
+
+    cap = favor.daemon_max_lv(favor_lv)
+    if int(row.get("lv") or 0) >= cap:
+        log.info("守护灵 %s 已到好感度 lv%s 的上限（%s 级）", char_key, favor_lv, cap)
+        return {"code": FAIL, "msg": "守护灵已达上限（好感度 lv%s 只能到 %s 级）"
+                                     % (favor_lv, cap), "data": {}}
+
+    # 整单校验：每件都得是玩家名下的军士、不能重复
+    #
+    # ⚠️ **同名角色是允许当材料的** —— 我一度加过「不能拿同名角色当材料」，
+    # 那是自己编的：`table_daemon_exp` 里专门有 `same_char` 这一档
+    # （7500 vs 同类型 3750 vs 其它 2500），**表的存在本身就证明喂同名是合法且最划算的**。
+    mats = []
+    seen = set()
+    for raw in raw_ids:
+        try:
+            sid = int(raw)
+        except (TypeError, ValueError):
+            return {"code": FAIL, "msg": "材料 id 不对", "data": {}}
+        if sid in seen:
+            return {"code": FAIL, "msg": "材料重复", "data": {}}
+        seen.add(sid)
+        soldier = store.find_soldier(player, sid)
+        if soldier is None:
+            return {"code": FAIL, "msg": "材料军士不在名下", "data": {}}
+        mats.append(soldier)
+
+    total = sum(favor.daemon_material_exp(char_key, s) for s in mats)
+    up = favor.daemon_add_exp(row, total, favor_lv)
+
+    # 材料**真的吃掉**（客户端 requestUpgradeDaemon 回调里也 removeSoldier）
+    eaten = {int(s.get("id") or 0) for s in mats}
+    player["soldiers"] = [s for s in store.ensure_soldiers(player)
+                          if int(s.get("id") or 0) not in eaten]
+    for team in player.get("teams") or []:
+        keys = team.get("soldierKeys")
+        if isinstance(keys, list):
+            team["soldierKeys"] = [k for k in keys
+                                   if not (isinstance(k, int) and k in eaten)]
+            team["soldierCount"] = len(team["soldierKeys"])
+
+    store.save_player(player)
+    log.info("守护灵 %s 喂 %d 个材料 +%d 经验（升 %d 级 -> lv%s，好感度 lv%s 上限 %s）",
+             char_key, len(mats), total, up, row.get("lv"), favor_lv, cap)
+    return {"code": CODE_OK, "msg": "", "data": {"daemon": favor.daemon_row_block(char_key, row)}}

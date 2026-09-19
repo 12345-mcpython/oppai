@@ -12,9 +12,9 @@
 ## 0. 复刻完之后你会得到什么
 
 * 一台**模拟器**上跑起来的原版《战场双马尾》v2.2.0 客户端
-* 一个自己写的服务端（纯 Python 标准库），**70 条业务路由**：
+* 一个自己写的服务端（纯 Python 标准库），**72 条业务路由**：
   登录 / 编成 / 军士培养 / 关卡战斗 / 主线任务 / 商店 / 邮件 /
-  天赋 / 装备 / 好感度（宿舍）/ 宿舍事件
+  天赋 / 装备 / 好感度（宿舍）/ 宿舍事件 / 守护灵 / 设置助战
 * 一个浏览器调试台（`http://127.0.0.1:18080/devtools`）：流量重放、
   在游戏进程里跑 JS、改存档、看日志、查客户端表
 * 一整套逆向工具：`.jsc` 反编译 / 反汇编 / 原子表提取 / 运行时探针
@@ -330,7 +330,7 @@ Get-ChildItem server\gamesrv\data\table_*.json | Measure-Object -Property Length
 cd E:\code\zcsmw
 
 # 不需要游戏、不需要服务端（进程内自测）
-python script\selftest_favor.py          # 好感度/宿舍事件公式：136 条断言
+python script\selftest_favor.py          # 好感度/宿舍/守护灵/助战公式：172 条断言
 python script\check_soldier_calc.py      # 军士升级公式 vs 客户端（要游戏在跑）
 
 # 需要服务端在跑
@@ -338,7 +338,7 @@ python script\selftest_game.py           # 走真协议：加解密+路由+落�
 python script\check_devtools.py          # 调试台：静态一致性 + 接口全打一遍
 
 # 缺口盘点
-python script\route_gap.py --static      # 客户端候选 161 / 已实现 70 / 缺 99
+python script\route_gap.py --static      # 客户端候选 161 / 已实现 72 / 缺 97
 ```
 
 **游戏内该看到的**：

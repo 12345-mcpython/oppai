@@ -547,6 +547,141 @@ def birthday_bonus(base: int) -> int:
 
 
 # ---------------------------------------------------------------------------
+# 守护灵（宿舍的 guard 面板 / char.upgradedaemon）
+# ---------------------------------------------------------------------------
+# 反汇编来源：`CharCenter.getDaemon / calcDaemonUpgrade / updateDaemon`
+# + `charManager.getMaxDaemonLv / checkDaemonMaxWithFavorLv / getDaemonAttrTotal`。
+#
+# 规则（**数值全在客户端表里，服务端照抄**）：
+#
+#   上限    `table_favor_upgrade[好感度等级].max_daemon_lv`（不是固定 10！）
+#           实测 getMaxDaemonLv(1)=0 / (5)=0 / (10)=4 —— 好感度不够就一级都升不了
+#   曲线    `table_daemon_upgrade[lv].exp`，lv = 0..10，`[10].exp = -1` 是满级
+#   材料    喂**军士**，每个给多少经验看 `table_daemon_exp[品质]`：
+#             同角色 same_char > 同类型 same_type > 其它 default
+#           品质 1 三个值全是 0（喂 1 星材料一点经验都没有）
+#   属性    改完只是 `lv` 变了，`attrTotal` 客户端自己拿 `table_daemon[mode][lv]` 算；
+#           服务端**不用**回属性。`mode` 来自 `table_soldier_master[charKey].daemon_mode`。
+
+
+def _daemon_upgrade() -> dict:
+    return items.table("table_daemon_upgrade")
+
+
+def _daemon_exp_table() -> dict:
+    return items.table("table_daemon_exp")
+
+
+def _daemon_cfg() -> dict:
+    """`table_soldier.json` 里的 `daemon` 段：`{charKey: {mode, type}}`。"""
+    return (items.table("table_soldier") or {}).get("daemon") or {}
+
+
+def daemon_mode(char_key) -> str:
+    """这个角色用哪套守护灵属性（at0101 / df0101 / hp0101）。取不到回空串。"""
+    return str((_daemon_cfg().get(str(char_key)) or {}).get("mode") or "")
+
+
+def daemon_max_lv(favor_lv) -> int:
+    """好感度这个等级能升到几级守护灵。
+
+    ⚠️ **不是固定 MAX_DAEMON_LV(10)** —— `charManager.getMaxDaemonLv(favorLv)`
+    读的是 `table_favor_upgrade[favorLv].max_daemon_lv`，前 6 级都是 0，
+    也就是「好感度没到 7 级，守护灵一级都升不了」。
+    """
+    row = _upgrade().get(str(favor_lv)) or {}
+    try:
+        return int(row.get("max_daemon_lv") or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def daemon_max_lv_hard() -> int:
+    """数值表的硬上限（`table_daemon_upgrade` 里 `exp == -1` 那一档）。"""
+    best = 0
+    for k, row in _daemon_upgrade().items():
+        try:
+            if int((row or {}).get("exp")) == -1:
+                best = max(best, int(k))
+        except (TypeError, ValueError):
+            continue
+    return best
+
+
+def daemon_exp_to_next(lv) -> int | None:
+    """守护灵从 lv 升到 lv+1 需要多少经验；满级回 None。"""
+    row = _daemon_upgrade().get(str(lv)) or {}
+    try:
+        need = int(row.get("exp"))
+    except (TypeError, ValueError):
+        return None
+    return None if need < 0 else need
+
+
+def daemon_material_exp(char_key: str, soldier: dict) -> int:
+    """一个军士当守护灵材料值多少经验。
+
+    和 `CharCenter.calcDaemonUpgrade` 同一套判据：
+      军士的 charKey == 目标角色 -> `same_char`
+      军士的 type   == 目标 type -> `same_type`
+      否则                       -> `default`
+    品质查 `table_daemon_exp[品质]`（1 星全是 0）。
+    """
+    try:
+        quality = int(soldier.get("quality") or 1)
+    except (TypeError, ValueError):
+        quality = 1
+    row = _daemon_exp_table().get(str(quality)) or {}
+    card = (items.table("table_soldier") or {}).get("card") or {}
+    mat_char = str((card.get(str(soldier.get("key"))) or {}).get("ck") or "")
+    tgt_type = (_daemon_cfg().get(str(char_key)) or {}).get("type")
+    mat_type = (_daemon_cfg().get(mat_char) or {}).get("type")
+    if mat_char and mat_char == str(char_key):
+        field = "same_char"
+    elif tgt_type is not None and mat_type is not None and mat_type == tgt_type:
+        field = "same_type"
+    else:
+        field = "default"
+    try:
+        return int(row.get(field) or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def daemon_row_block(char_key: str, row: dict) -> dict:
+    """`char.upgradedaemon` 响应里的 `daemon`：`updateDaemon()` 会
+    `this._daemons[d.charKey] = d`，所以**整行**要带上。"""
+    return dict(row)
+
+
+def daemon_add_exp(row: dict, amount: int, favor_lv) -> int:
+    """给守护灵加经验并结算升级，返回升了几级。
+
+    上限取 `min(好感度允许的, 表的硬上限)`；到顶之后 `curExp` 夹回 0 ——
+    满级那档 `exp == -1`，留着余额客户端算不出百分比（和好感度一个道理）。
+    """
+    amount = int(amount or 0)
+    if amount <= 0:
+        return 0
+    top = min(daemon_max_lv(favor_lv) or 0, daemon_max_lv_hard())
+    lv = int(row.get("lv") or 0)
+    exp = int(row.get("curExp") or 0) + amount
+    up = 0
+    while lv < top:
+        need = daemon_exp_to_next(lv)
+        if not need or exp < need:
+            break
+        exp -= need
+        lv += 1
+        up += 1
+    if lv >= top:
+        exp = 0
+    row["lv"] = lv
+    row["curExp"] = exp
+    return up
+
+
+# ---------------------------------------------------------------------------
 # 宿舍事件（favorevent.*）
 # ---------------------------------------------------------------------------
 # ⚠️⚠️ **这一块的"什么时候解锁 / 读完给多少奖励"是推断的，实机要重点看。**

@@ -360,6 +360,128 @@ def look_stock_check():
     check("登录后就发满了", all(items.count_of(player, k) >= 1 for k in all_looks))
 
 
+def daemon_check():
+    print("== 守护灵 char.upgradedaemon ==")
+    from gamesrv.handlers import char as hchar
+
+    check("table_daemon_upgrade 11 行（lv 0..10）", len(favor._daemon_upgrade()) == 11)
+    check("lv0 -> lv1 要 3000 经验", favor.daemon_exp_to_next(0) == 3000)
+    check("lv10 是满级（exp == -1）", favor.daemon_exp_to_next(10) is None)
+    check("硬上限 = 10", favor.daemon_max_lv_hard() == 10)
+    check("table_daemon 3 套属性", len(items.table("table_daemon")) == 3)
+    exp_tab = items.table("table_daemon_exp")
+    check("品质4：同角色 7500 / 同类型 3750 / 其它 2500",
+          (exp_tab["4"]["same_char"], exp_tab["4"]["same_type"], exp_tab["4"]["default"])
+          == (7500, 3750, 2500))
+    check("品质1 全是 0（喂 1 星没经验）",
+          all(int(exp_tab["1"][k] or 0) == 0 for k in ("same_char", "same_type", "default")))
+
+    check("sasm 有守护灵属性（daemon_mode）", favor.daemon_mode("sasm") == "df0101",
+          "= %s" % favor.daemon_mode("sasm"))
+    check("主角 hadf 没有守护灵（hero 不在 soldier_master 里）",
+          favor.daemon_mode("hadf") == "", "= %r" % favor.daemon_mode("hadf"))
+
+    # 上限跟着**好感度等级**走，不是固定 10
+    check("好感度 lv1 -> 守护灵上限 0", favor.daemon_max_lv(1) == 0)
+    check("好感度 lv5 -> 守护灵上限 0", favor.daemon_max_lv(5) == 0)
+    check("好感度 lv10 -> 守护灵上限 4", favor.daemon_max_lv(10) == 4)
+    check("好感度 lv15 -> 守护灵上限 10", favor.daemon_max_lv(15) == 10)
+
+    # 材料经验：同角色 > 同类型 > 其它
+    reload_()
+    sol = store.ensure_soldiers(player)
+    by_key = {s["key"]: s for s in sol}
+    sasm = next((s for s in sol if str(s.get("key", "")).startswith("sasm")), None)
+    check("测试角色有 sasm 的军士", sasm is not None)
+    if sasm:
+        check("同角色材料 = same_char(7500)", favor.daemon_material_exp("sasm", sasm) == 7500,
+              "= %s" % favor.daemon_material_exp("sasm", sasm))
+
+    # 好感度 lv1 时上限是 0 -> 拒绝
+    reload_()
+    store.find_favor(player, "sasm")["lv"] = 1
+    save()
+    mats = [s["id"] for s in store.ensure_soldiers(player)
+            if str(s.get("key", "")).startswith("sasm")][:1]
+    r = call(hchar.upgrade_daemon, {"charKey": "sasm", "materials": mats}, 50)
+    check("好感度 lv1（上限 0）-> 拒绝", r["code"] != 200, str(r)[:110])
+
+    # 好感度 lv10（上限 4）-> 能升
+    reload_()
+    store.find_favor(player, "sasm")["lv"] = 10
+    store.player_daemons(player)["sasm"] = store.new_daemon_row("sasm")
+    save()
+    reload_()
+    before = len(store.ensure_soldiers(player))
+    mats = [s["id"] for s in store.ensure_soldiers(player)
+            if str(s.get("key", "")).startswith("sasm")][:1]
+    check("备好 1 个同角色材料", len(mats) == 1, str(mats))
+    r = call(hchar.upgrade_daemon, {"charKey": "sasm", "materials": mats}, 51)
+    check("code = 200", r["code"] == 200, str(r)[:160])
+    d = r["data"].get("daemon") or {}
+    check("响应带整行 daemon（updateDaemon 要 charKey）", d.get("charKey") == "sasm", str(d))
+    # ⚠️ 期望值**按表推**，别写死 —— 第一版我写的是「7500 只升一级、余 4500」，
+    # 实际 3000 + 4500 正好升两级余 0，是断言错了不是代码错了。
+    lv, exp = 0, 7500
+    while lv < favor.daemon_max_lv(10):
+        need = favor.daemon_exp_to_next(lv)
+        if not need or exp < need:
+            break
+        exp -= need
+        lv += 1
+    check("按表推算的结果一致（喂 7500：lv%d 余 %d）" % (lv, exp),
+          (d.get("lv"), d.get("curExp")) == (lv, exp), str(d))
+    check("确实升级了（不是原地不动）", int(d.get("lv") or 0) > 0, str(d))
+    reload_()
+    check("材料军士真被吃掉", len(store.ensure_soldiers(player)) == before - 1,
+          "%d -> %d" % (before, len(store.ensure_soldiers(player))))
+    check("守护灵落盘", (store.find_daemon(player, "sasm") or {}).get("lv") == lv)
+    print("      （升级曲线：" + " ".join(
+        "%s->%s:%s" % (i, i + 1, favor.daemon_exp_to_next(i)) for i in range(4)) + "）")
+
+    bad = call(hchar.upgrade_daemon, {"charKey": "sasm", "materials": [999999]}, 52)
+    check("材料不在名下 -> 拒绝", bad["code"] != 200, str(bad)[:110])
+    bad = call(hchar.upgrade_daemon, {"charKey": "hadf", "materials": [1]}, 53)
+    check("主角没有守护灵 -> 拒绝", bad["code"] != 200, str(bad)[:110])
+    bad = call(hchar.upgrade_daemon, {"charKey": "sasm", "materials": []}, 54)
+    check("空材料 -> 拒绝", bad["code"] != 200, str(bad)[:110])
+
+    # ensure_daemons 只给有 daemon_mode 的角色建行
+    reload_()
+    player["daemons"] = {}
+    save()
+    reload_()
+    favor.ensure_favors(player)
+    store.ensure_daemons(player)
+    rows = store.player_daemons(player)
+    check("建了守护灵行", len(rows) > 0, "%d 个" % len(rows))
+    check("主角不在里面", "hadf" not in rows, str(sorted(rows))[:70])
+    check("每行都有 charKey/lv/curExp",
+          all(set(r) == {"charKey", "lv", "curExp"} for r in rows.values()))
+    check("只给有 daemon_mode 的建",
+          all(favor.daemon_mode(k) for k in rows))
+
+
+def update_asst_check():
+    print("== 设置助战 player.updateasst ==")
+    from gamesrv.handlers import player as hplayer
+
+    reload_()
+    r = call(hplayer.update_asst, {"charKey": "same"}, 60)
+    check("code = 200", r["code"] == 200, str(r)[:140])
+    check("响应带 player（asstKey 是玩家数据的一部分，重登要靠它）",
+          isinstance(r["data"].get("player"), dict))
+    reload_()
+    check("落盘到 player.asstKey", player.get("asstKey") == "same",
+          "= %r" % player.get("asstKey"))
+    check("asst 也写了一份（Player._initData 读它）",
+          (player.get("asst") or {}).get("charKey") == "same")
+    res = call(agent.get_login_data, {}, 61)
+    check("登录包里也带 asstKey", res["data"]["player"].get("asstKey") == "same")
+    bad = call(hplayer.update_asst, {}, 62)
+    check("缺 charKey -> 拒绝", bad["code"] != 200, str(bad)[:90])
+
+
 def favor_event_check():
     print("== 宿舍事件 favorevent.* ==")
     table = favor._event_table()
@@ -493,6 +615,8 @@ def main() -> int:
     return_item_check()
     default_look_check()
     look_stock_check()
+    daemon_check()
+    update_asst_check()
     favor_event_check()
     interact_check()
     print()

@@ -573,6 +573,59 @@ def next_favor_event_id(player: dict) -> int:
     return n
 
 
+# --- 守护灵（宿舍的 guard 面板 / char.upgradedaemon）------------------------
+# **按 charKey 索引的 map**，不是数组。判据是反汇编 `CharCenter`：
+#
+#   ctor:          this._daemons = data.daemons;          // 原样赋值，不重排
+#   getDaemon(k):  this._daemons[k]                       // ← 拿 charKey 直接索引
+#   updateDaemon(d): this._daemons[d.charKey] = d;        // ← 同上
+#
+# 所以登录块里给数组的话 `getDaemon('sasm')` 恒为 undefined，守护灵面板全空。
+# 行只有三个字段：`{charKey, lv, curExp}` —— `maxExp` / `nextTipsDesc` / `attrTotal`
+# 都是客户端自己拿 table_daemon_upgrade / table_daemon 算的，不用发。
+def new_daemon_row(char_key: str) -> dict:
+    return {"charKey": str(char_key), "lv": 0, "curExp": 0}
+
+
+def player_daemons(player: dict) -> dict:
+    daemons = player.get("daemons")
+    if not isinstance(daemons, dict):
+        daemons = {}
+        player["daemons"] = daemons
+    return daemons
+
+
+def find_daemon(player: dict, char_key) -> dict | None:
+    return player_daemons(player).get(str(char_key))
+
+
+def ensure_daemons(player: dict) -> bool:
+    """给每个「在 table_soldier_master 里有 daemon_mode 的角色」补一行。
+
+    主角（hero）没有 daemon_mode，`charManager.getDaemonAttr('hadf')` 会直接抛
+    `table_soldier_master[charKey] is undefined` —— 所以守护灵只对军士角色开放，
+    这里也只给这些角色建行。返回是否有改动。
+    """
+    from . import items  # 延迟 import：items 反过来依赖 store，模块级会循环
+
+    daemon_cfg = (items.table("table_soldier") or {}).get("daemon") or {}
+    rows = player_daemons(player)
+    changed = False
+    for char_key in favor_char_keys(player):
+        if char_key in rows:
+            continue
+        if not (daemon_cfg.get(char_key) or {}).get("mode"):
+            continue
+        rows[char_key] = new_daemon_row(char_key)
+        changed = True
+    return changed
+
+
+def favor_char_keys(player: dict) -> list:
+    """玩家拥有好感度的角色 key（好感度行的那批，含主角）。"""
+    return list(player_favors(player))
+
+
 # 新手引导位掩码全 1 = 所有引导都已完成。见 new_player() 里的说明。
 GUIDE_MARK_DONE = 0x7FFFFFFF
 # 玩家「指挥部」初始等级。客户端按等级解锁功能，最靠前的门槛是编成里的
