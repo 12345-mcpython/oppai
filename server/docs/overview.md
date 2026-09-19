@@ -227,15 +227,19 @@ vanilla 不传参 → 游戏代码 `function (eventName) { if (/began\d/.test(ev
 - [x] DES 标准实现双向对拍；DH 用单位元绕过
 - [x] Java 层去掉百度登录弹窗；删掉 46.6MB 没用的第三方 SDK
 - [x] 全自动登录 → 主场景 → 开场动画 → 主界面
-- [x] **引擎源码重建**（11 个补丁），战斗可完整跑完
+- [x] **引擎源码重建**（13 个补丁），战斗可完整跑完
 - [x] `jsc` 反汇编器 + atom 表提取器 + 运行时 REPL 探针
 - [x] **浏览器调试台**（`http://127.0.0.1:18080/devtools`）：
       流量重放 / JS 控制台 / 存档编辑 + 作弊 / 客户端日志流 / 表查询
       —— 见 [`docs/devtools.md`](devtools.md)
+- [x] **引擎层 JS 调试器**（断点 / 单步 / 调用栈 / 暂停时求值）：
+      引擎本来就带（SpiderMonkey Debugger API + Firefox 远程调试协议），
+      只是被 `#if COCOS2D_DEBUG` 挡着；打开它 + 修 4 个坑
+      —— 见 [`docs/engine-debug.md`](engine-debug.md)
 - [x] 编成 / 上阵队伍（含士兵数据）
 - [x] **军士培养 / 突破 / 技能**（升级公式和客户端逐字段对齐，材料会被真的吃掉）
 - [x] 主线任务（窗口推进 + 领奖 + 刷新）
-- [x] 文档：协议 / 逆向手法 / 打包逻辑 / 调试台 / 本总览
+- [x] 文档：协议 / 逆向手法 / 打包逻辑 / 调试台 / 引擎调试 / 本总览
 
 ### 待办（按卡点排序）
 
@@ -325,7 +329,10 @@ python tools\disasm_func.py  <assets>\src\data\questcenter.jsc _createQuest
    （调试台的**日志**面板就是这条流，不用手动 `adb logcat`）
 4. JS 异常先看 stack；`initUserData` 抛异常会连累一大片（见 §6）
 5. 拿不准的数据形状，直接在调试台控制台里试 —— 几秒钟一个
-6. 实在不行就包一层打日志，别猜
+6. **要看「这个函数被谁调的 / 某个变量到底是多少」**：调试台的**调试器**页签
+   （或 `python tools\jsd.py repl`）下断点 —— 那是引擎级的断点，游戏会真的停住，
+   能拿调用栈、能在栈帧里求值。见 [`docs/engine-debug.md`](engine-debug.md)
+7. 实在不行就包一层打日志，别猜
 
 > ⚠️ `adb shell input tap` 在 MuMu 上**不可靠**，注入的事件不一定到得了 App。
 > 别用它判断"点击坏了"。同理 `adb screencap` 有时抓不到 GL 层（截出来一片白），
@@ -339,12 +346,13 @@ python tools\disasm_func.py  <assets>\src\data\questcenter.jsc _createQuest
 |---|---|
 | `README.md` | 上手：项目结构、快速开始、补丁清单、协议骨架 |
 | **`docs/overview.md`**（本文） | 全景：成果、分层、逆向结论、坑速查、待办 |
-| `docs/devtools.md` | 浏览器调试台：五个面板怎么用、架构取舍、怎么加面板 |
+| `docs/devtools.md` | 浏览器调试台：六个面板怎么用、架构取舍、怎么加面板 |
+| `docs/engine-debug.md` | **引擎层调试**：引擎自带的远程 JS 调试器怎么打开、协议、4 个坑、复现清单 |
 | `docs/protocol.md` | 协议逐项细节 + 反汇编证据（含 quest 协议、session 前缀） |
 | `docs/reverse-engineering.md` | jsc 反汇编器原理、运行时探测手法、排障套路 |
 | `docs/build.md` | 打包逻辑（为什么这么做） |
 | `tools/README.md` | 工具索引（哪个脚本干什么、加新模块的推荐流程） |
-| `E:\code\apk\move\ENGINE_PATCHES.md` | 11 个引擎补丁的证据链与复现脚本 |
+| `E:\code\apk\move\ENGINE_PATCHES.md` | 13 个引擎补丁的证据链与复现脚本 |
 
 仓库外的关键路径：
 

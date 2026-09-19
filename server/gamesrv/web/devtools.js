@@ -686,6 +686,7 @@ function setupTabs() {
       $$('#tabs button').forEach((x) => x.classList.toggle('on', x === b));
       $$('.tab').forEach((s) => s.classList.toggle('on', s.id === 'tab-' + b.dataset.tab));
       if (b.dataset.tab === 'data') renderData();
+      if (b.dataset.tab === 'jsd') { jsdStatus(); jsdLoadSources(); }
     });
   });
 }
@@ -815,6 +816,170 @@ function setupData() {
   });
 }
 
+// ---------------------------------------------------------------- 引擎调试器
+
+const JSD_STATE_CLASS = { idle: '', attached: 'warn', paused: 'warn', running: 'good', error: 'bad' };
+const JSD_STATE_TEXT = {
+  idle: '未连接', attached: '已连接', paused: '已暂停（游戏冻住了）',
+  running: '运行中', error: '出错',
+};
+let jsdSelSource = null;
+let jsdSelFrame = null;
+let jsdPoll = null;
+
+async function jsdStatus() {
+  const data = await api('/api/jsd/status');
+  if (!data.ok) return null;
+
+  const pill = $('jd-state');
+  pill.className = 'pill ' + (JSD_STATE_CLASS[data.state] || '');
+  pill.innerHTML = '状态 <b>' + (JSD_STATE_TEXT[data.state] || data.state) + '</b>';
+
+  $('jd-connect').disabled = data.connected;
+  $('jd-disconnect').disabled = !data.connected;
+  ['jd-resume', 'jd-pause', 'jd-step-in', 'jd-step-over', 'jd-step-out', 'jd-bp']
+    .forEach((id) => { $(id).disabled = !data.connected; });
+  $('jd-resume').disabled = data.state !== 'paused';
+  $('jd-pause').disabled = data.state !== 'running';
+  ['jd-step-in', 'jd-step-over', 'jd-step-out'].forEach((id) => {
+    $(id).disabled = data.state !== 'paused';
+  });
+  $('jd-bp').disabled = data.state !== 'paused';
+
+  const why = data.why ? JSON.stringify(data.why) : '';
+  $('jd-why').textContent = data.connected
+    ? (data.state === 'paused' ? '暂停原因 ' + why : '游戏在跑，随时可以「暂停」')
+    : '没连上。第一次连会**把游戏冻住**（attach 会立刻暂停），这是正常的。';
+
+  $('jd-note').textContent = data.connected
+    ? 'ctrl+enter 求值 · 断点只能在暂停时下'
+    : '';
+
+  if (data.state === 'paused' && data.frames) renderFrames(data.frames);
+  if (data.breakpoints) renderBreakpoints(data.breakpoints);
+  return data;
+}
+
+function renderFrames(frames) {
+  const box = $('jd-frames');
+  box.textContent = '';
+  if (!frames.length) {
+    box.appendChild(el('div', 'item', '（没有栈帧 —— 如果你用「暂停」停的，'
+      + '那是停在调试器自己的循环里，拿不到游戏栈帧；让断点命中才有）'));
+    return;
+  }
+  frames.forEach((f) => {
+    const node = el('div', 'item frame' + (jsdSelFrame === f.actor ? ' sel' : ''));
+    const head = el('span');
+    head.appendChild(el('span', 'dim', '#' + f.depth));
+    head.appendChild(el('strong', null, f.name));
+    node.appendChild(head);
+    node.appendChild(el('div', 'loc', (f.url || '?') + ':' + f.line));
+    node.addEventListener('click', () => { jsdSelFrame = f.actor; renderFrames(frames); });
+    box.appendChild(node);
+  });
+}
+
+function renderBreakpoints(bps) {
+  const box = $('jd-bps');
+  box.textContent = '';
+  if (!bps.length) { box.appendChild(el('div', 'item', '（还没有断点）')); return; }
+  bps.forEach((b) => {
+    const node = el('div', 'item');
+    node.appendChild(el('span', 'dim', '●'));
+    node.textContent = '';
+    node.appendChild(el('span', 'dim', '●'));
+    node.appendChild(el('span', null, (b.url || '').split(/[\\/]/).slice(-2).join('/') + ':' + b.line));
+    node.title = (b.url || '') + ':' + b.line;
+    box.appendChild(node);
+  });
+}
+
+async function jsdLoadSources() {
+  const q = $('jd-filter').value.trim();
+  const data = await api('/api/jsd/sources?q=' + encodeURIComponent(q) + '&limit=400');
+  const box = $('jd-sources');
+  box.textContent = '';
+  if (!data.ok) {
+    box.appendChild(el('div', 'item', data.error || '拉脚本列表失败（先「连接」）'));
+    return;
+  }
+  const list = data.sources || [];
+  box.appendChild(el('div', 'item', '共 ' + data.total + ' 个匹配，显示 ' + list.length));
+  list.forEach((s) => {
+    const node = el('div', 'item' + (jsdSelSource === s.url ? ' sel' : ''));
+    // jsc 的 url 是构建机绝对路径，尾巴两段最有辨识度
+    const tail = (s.url || '').replace(/\\/g, '/').split('/').slice(-3).join('/');
+    node.appendChild(el('span', 'dim', s.actor));
+    node.appendChild(el('span', null, tail));
+    node.title = s.url;
+    node.addEventListener('click', () => {
+      jsdSelSource = s.url;
+      jsdLoadSources();
+    });
+    box.appendChild(node);
+  });
+}
+
+async function jsdEval() {
+  const expr = $('jd-expr').value;
+  if (!expr.trim()) return;
+  const data = await post('/api/jsd/eval', { expression: expr, frame: jsdSelFrame });
+  const out = $('jd-out');
+  const item = el('div', 'cc-item' + (data.ok ? '' : ' err'));
+  item.appendChild(el('div', 'in', '> ' + expr));
+  item.appendChild(el('div', 'out', data.ok
+    ? JSON.stringify(data.result, null, 2)
+    : (data.error || '失败')));
+  out.appendChild(item);
+  out.scrollTop = out.scrollHeight;
+}
+
+async function jsdControl(action, limit) {
+  const data = await post('/api/jsd/control', { action: action, limit: limit });
+  if (!data.ok) toast(data.error || '失败', 'err');
+  else if (action === 'resume') toast('继续运行', 'ok');
+  await jsdStatus();
+}
+
+function setupJsd() {
+  onClick('jd-connect', async () => {
+    const data = await post('/api/jsd/connect', {});
+    if (!data.ok) { toast(data.error || '连接失败', 'err'); return; }
+    toast('已连接 —— 注意游戏现在是冻结的，点「继续」才恢复', 'ok');
+    await jsdStatus();
+    await jsdLoadSources();
+  });
+  onClick('jd-disconnect', async () => {
+    await post('/api/jsd/disconnect', {});
+    toast('已断开，游戏继续', 'ok');
+    await jsdStatus();
+  });
+  onClick('jd-resume', () => jsdControl('resume'));
+  onClick('jd-pause', () => jsdControl('pause'));
+  onClick('jd-step-in', () => jsdControl('resume', 'step'));
+  onClick('jd-step-over', () => jsdControl('resume', 'next'));
+  onClick('jd-step-out', () => jsdControl('resume', 'finish'));
+  onClick('jd-refresh-src', jsdLoadSources);
+  let timer = null;
+  $('jd-filter').addEventListener('input', () => {
+    clearTimeout(timer);
+    timer = setTimeout(jsdLoadSources, 300);
+  });
+  onClick('jd-bp', async () => {
+    if (!jsdSelSource) { toast('先在左边选一个脚本', 'err'); return; }
+    const line = Number($('jd-line').value) || 1;
+    const data = await post('/api/jsd/bp', { url: jsdSelSource, line: line });
+    if (!data.ok) { toast(data.error || '下断点失败', 'err'); return; }
+    toast('断点已下：' + jsdSelSource.split(/[\\/]/).slice(-2).join('/') + ':' + line, 'ok');
+    await jsdStatus();
+  });
+  $('jd-eval').addEventListener('click', jsdEval);
+  $('jd-expr').addEventListener('keydown', (e) => {
+    if (e.ctrlKey && e.key === 'Enter') { e.preventDefault(); jsdEval(); }
+  });
+}
+
 async function init() {
   setupTabs();
   setupTop();
@@ -823,6 +988,7 @@ async function init() {
   setupPlayer();
   setupLogs();
   setupData();
+  setupJsd();
 
   // 先把缓冲里的历史一次性拉出来（timeout=0 = 立刻返回），再转长轮询
   try {
@@ -836,6 +1002,10 @@ async function init() {
   await refreshOverview();
   await loadBackups();
   setInterval(refreshOverview, 5000);
+  setInterval(() => {
+    // 只在「调试器」页签打开时才轮询，免得平时也一直打服务端
+    if ($('tab-jsd').classList.contains('on')) jsdStatus();
+  }, 1000);
   pump();
 }
 

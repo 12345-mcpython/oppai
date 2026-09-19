@@ -16,15 +16,16 @@ http://127.0.0.1:18080/devtools
 
 ---
 
-## 1. 五个面板
+## 1. 六个面板
 
 | 面板 | 干什么 |
 |---|---|
 | **流量** | 每条业务 `route` 的请求 msg 和回包，成对展示（路由 / 结果码 / 耗时 / 是否实现）。可筛选、可导出、可**重放** |
-| **控制台** | 在手机上那个游戏进程里跑 JS，等于 [`tools/repl.py`](../tools/repl.py) 的网页版。带历史记录（↑↓）和一组常用片段 |
+| **控制台** | 在手机上那个游戏进程里跑 JS，等于 [`tools/repl.py`](../tools/repl.py) 的网页版。带历史记录（↑↓）和一组常用片段。**不暂停游戏** |
 | **玩家** | 存档浏览 / 直接编辑 JSON + 一组作弊按钮 + 快照（新建 / 回滚） |
 | **日志** | 客户端探针日志（`adb logcat` 尾随或 probe 上报）和服务端日志，按来源过滤 |
 | **数据** | 路由清单、`table_*` 反查（本地已抽取的 + 客户端里的）、`table_dictionary` 文案对照 |
+| **调试器** | ★ **引擎级的远程 JS 调试器**：断点 / 单步 / 调用栈 / 暂停时求值。接上会把游戏**真正冻住**。原理和坑见 [`engine-debug.md`](engine-debug.md) |
 
 ### 1.1 流量
 
@@ -160,6 +161,36 @@ Object.defineProperty(console, 'log', {...})  // TypeError: can't redefine non-c
 - **文案对照** —— 搜 `table_dictionary`。所有界面提示都在这儿，
   比如「指挥部等级不足哦~OAQ」是 `201`、「培养系统」的开启条件在 `table_function_open[100005]`
 
+### 1.6 调试器（引擎级）
+
+这一档和上面几个不是一个层次的东西：它连的是**引擎自带的远程 JS 调试器**
+（`ScriptingCore::enableDebugger`，SpiderMonkey Debugger API + Firefox 远程调试协议），
+**断点命中时游戏主循环是真的停住的**。
+
+用法：
+
+1. 点「连接」—— attach 会**立刻把游戏冻住**，这是正常的
+2. 左边筛脚本、选中一个、填行号、点「在选中脚本下断点」
+3. 点「继续」让游戏跑；撞上断点时右边会自己刷出调用栈
+4. 点栈帧选中它，在下面输入框里**在那个帧里求值**（Ctrl+Enter）
+5. 「断开」或者「继续」把游戏放开
+
+几个必须知道的点：
+
+* **断点只能在暂停状态下下**（协议限制），所以「连接」之后、不要先点「继续」。
+* **「暂停」按钮停下来的地方拿不到栈帧** —— `interrupt` 是在调试器自己的循环里处理的，
+  不在 debuggee 的帧里。要看调用栈，必须让**断点命中**。
+* **脚本 URL 是构建机上的绝对路径**（`F:\oppai\v2.2.0\client\oppai\frameworks\runtime-src\...`），
+  但 `patch.js` / `probe.js` / 调试器自己是 `assets/...` 相对路径
+  —— 因为前者是 `.jsc`（保留了编译时的文件名），后者是明文 `.js`。
+  面板里只显示尾巴几段，鼠标悬停看全路径。
+* **游戏脚本的行号要猜**：`.jsc` 里没留源码。实用做法是先断在明文脚本里，
+  从调用栈读出游戏脚本的 `url:line`，再用那个行号下断点。
+* 同一时间**只能接一个客户端**（C++ 那边 `listen(s, 1)` + 单客户端 `recv` 循环）。
+  `tools/jsd.py` 和这个面板会互相抢，别同时开。
+
+原理、怎么打开、四个坑： [`engine-debug.md`](engine-debug.md)。
+
 ---
 
 ## 2. 架构（为什么这么写）
@@ -167,14 +198,19 @@ Object.defineProperty(console, 'log', {...})  // TypeError: can't redefine non-c
 ```
 浏览器  ──长轮询──▶  /devtools/api/events?since=N&timeout=25
         ──REST────▶  /devtools/api/{overview,players,player,cheat,console,replay,table,dict,...}
-                            │
-游戏服务端 ──devbus.publish()─┤
-  apps._game (traffic)        │
+        ──REST────▶  /devtools/api/jsd/{connect,status,sources,bp,control,eval}
+                            │                                  │
+游戏服务端 ──devbus.publish()─┤                          gamesrv/jsdlink.py
+  apps._game (traffic)        │                          （常驻调试器会话，独立 TCP 连 5086）
   logcat 尾随线程 (client)     ├─▶ devbus 环形缓冲（2000 条）+ Condition
   probe /hook/log (client)    │
   logging Handler (server)    │
   repl / control.eval (console)┘
 ```
+
+调试器那条路是**独立的一条 TCP**：`gamesrv/jsdlink.py` 的 `Session` 持有一个到引擎
+5086 端口的连接，带锁串行化（协议没有请求 id，两个线程同时收发必然串包），
+另有一个后台线程专门等「服务端主动推的 paused」。
 
 ### 2.1 为什么用长轮询而不是 SSE / WebSocket
 

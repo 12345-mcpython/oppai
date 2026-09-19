@@ -1114,3 +1114,123 @@ def build(service) -> None:
                 devbus.publish("client", source="probe", line=str(line)[:4000])
             return _reply({"ok": True, "n": len(lines)})
         return _err("lines 必须是数组或字符串")
+
+    # ---------------- 引擎 JS 调试器 ----------------
+    #
+    # 后端是 gamesrv/jsdlink.py —— 引擎自带的那个远程 JS 调试器
+    # （SpiderMonkey Debugger API + Firefox 远程调试协议）。
+    # 引擎侧怎么打开、踩过哪些坑，见 docs/engine-debug.md。
+
+    @router.any("/devtools/api/jsd/connect")
+    def _jsd_connect(req):
+        denied = _guard(req)
+        if denied:
+            return denied
+        from . import jsdlink
+        try:
+            return _reply({"ok": True, **jsdlink.session.connect()})
+        except Exception as exc:  # noqa: BLE001
+            log.warning("devtools jsd connect 失败: %s", exc)
+            return _reply({"ok": False, "error": f"{type(exc).__name__}: {exc}"})
+
+    @router.any("/devtools/api/jsd/disconnect")
+    def _jsd_disconnect(req):
+        denied = _guard(req)
+        if denied:
+            return denied
+        from . import jsdlink
+        return _reply({"ok": True, **jsdlink.session.disconnect()})
+
+    @router.any("/devtools/api/jsd/status")
+    def _jsd_status(req):
+        denied = _guard(req)
+        if denied:
+            return denied
+        from . import jsdlink
+        st = jsdlink.session.status()
+        st["ok"] = True
+        if jsdlink.session.state == "paused":
+            st["frames"] = jsdlink.frames_brief(jsdlink.session.frames())
+        return _reply(st)
+
+    @router.any("/devtools/api/jsd/sources")
+    def _jsd_sources(req):
+        denied = _guard(req)
+        if denied:
+            return denied
+        from . import jsdlink
+        payload = _body(req)
+        q = str(_arg(req, payload, "q", "") or "")
+        try:
+            limit = int(_arg(req, payload, "limit", 200) or 200)
+        except (TypeError, ValueError):
+            limit = 200
+        try:
+            hits = jsdlink.session.sources(q)
+            return _reply({"ok": True, "total": len(hits),
+                           "sources": [{"actor": s.get("actor"), "url": s.get("url")}
+                                       for s in hits[:max(1, min(limit, 2000))]]})
+        except Exception as exc:  # noqa: BLE001
+            return _reply({"ok": False, "error": str(exc)})
+
+    @router.any("/devtools/api/jsd/bp")
+    def _jsd_bp(req):
+        denied = _guard(req)
+        if denied:
+            return denied
+        from . import jsdlink
+        payload = _body(req)
+        url = str(payload.get("url") or "")
+        if not url:
+            return _err("要给 url")
+        try:
+            line = int(payload.get("line") or 0)
+        except (TypeError, ValueError):
+            return _err("line 要是数字")
+        try:
+            reply = jsdlink.session.set_breakpoint(url, line)
+            devbus.publish("action", action="jsd-breakpoint",
+                           detail=f"引擎断点 {url}:{line}")
+            return _reply({"ok": True, "breakpoint": reply,
+                           "breakpoints": jsdlink.session.breakpoints()})
+        except Exception as exc:  # noqa: BLE001
+            return _reply({"ok": False, "error": str(exc)})
+
+    @router.any("/devtools/api/jsd/control")
+    def _jsd_control(req):
+        denied = _guard(req)
+        if denied:
+            return denied
+        from . import jsdlink
+        payload = _body(req)
+        action = str(payload.get("action") or "")
+        try:
+            if action == "resume":
+                jsdlink.session.resume(payload.get("limit") or None)
+            elif action == "pause":
+                jsdlink.session.pause()
+            else:
+                return _err(f"未知 action: {action}")
+        except Exception as exc:  # noqa: BLE001
+            return _reply({"ok": False, "error": str(exc)})
+        return _reply({"ok": True, **jsdlink.session.status()})
+
+    @router.any("/devtools/api/jsd/eval")
+    def _jsd_eval(req):
+        denied = _guard(req)
+        if denied:
+            return denied
+        from . import jsdlink
+        payload = _body(req)
+        expr = str(payload.get("expression") or "")
+        if not expr.strip():
+            return _err("expression 不能为空")
+        try:
+            reply = jsdlink.session.evaluate(expr, frame=payload.get("frame") or None)
+        except Exception as exc:  # noqa: BLE001
+            return _reply({"ok": False, "error": str(exc)})
+        fin = ((reply.get("why") or {}).get("frameFinished") or {})
+        devbus.publish("console", code=expr, ok=True,
+                       value=json.dumps(fin, ensure_ascii=False)[:2000], ms=0,
+                       source="引擎调试器")
+        return _reply({"ok": True, "result": fin})

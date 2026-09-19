@@ -47,8 +47,10 @@ python tools\csb_dump.py <assets>\res\ui\battlebeganui\src\battlebeganui.csb
 
 | 脚本 | 干什么 |
 |---|---|
-| **`/devtools`** | ★ **浏览器调试台**（`gamesrv/devtools.py` + `gamesrv/web/`，挂在 CDN 端口）。流量 / JS 控制台 / 存档编辑+作弊 / 日志流 / 表查询，详见 [`../docs/devtools.md`](../docs/devtools.md) |
-| `repl.py` | **在游戏进程里执行任意 JS**。前提：装了 probe 版 APK + 服务端在跑。验证数据形状、翻运行时状态全靠它 |
+| **`/devtools`** | ★ **浏览器调试台**（`gamesrv/devtools.py` + `gamesrv/web/`，挂在 CDN 端口）。流量 / JS 控制台 / 存档编辑+作弊 / 日志流 / 表查询 / **引擎调试器**，详见 [`../docs/devtools.md`](../docs/devtools.md) |
+| `jsd.py` | ★ **引擎自带的远程 JS 调试器**客户端：断点 / 单步 / 调用栈 / 暂停时求值（`tabs` / `sources` / `repl` / `demo`）。见 [`../docs/engine-debug.md`](../docs/engine-debug.md) |
+| `patch_js_debugger.py` | 把调试器自己的 JS（`script/jsb_debugger.js` + `script/debugger/**`）换成**明文并打补丁** —— 不用重编引擎就能改调试器（`.jsc` 只是缓存，删掉引擎就改读同名 `.js`） |
+| `repl.py` | **在游戏进程里执行任意 JS（不暂停）**。前提：装了 probe 版 APK + 服务端在跑。验证数据形状、翻运行时状态全靠它 |
 | `probe.py` | 重启客户端 + 批量执行 JS 表达式（`repl.py` 的批处理版） |
 | `shots.py` | 重启客户端并连续截图 |
 | `bisect_init.py` | 逐个构造 `initUserData` 里的数据模块，找会把 JS 主线程卡死的那个 |

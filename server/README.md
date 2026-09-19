@@ -14,6 +14,7 @@ Kuro Game《战场双马尾》v2.2.0 已经停服。这个项目用 **纯 Python
 - [2. 项目结构](#2-项目结构)
 - [3. 快速开始](#3-快速开始)
   - [3.4 浏览器调试台](#34-浏览器调试台)
+  - [3.5 引擎层的 JS 调试器](#35-引擎层的-js-调试器)
 - [4. 客户端补丁](#4-客户端补丁)
 - [5. 协议全貌](#5-协议全貌)
 - [6. jsc 反汇编器](#6-jsc-反汇编器)
@@ -69,6 +70,7 @@ game_server/
 │   ├── repl.py                下发给客户端探针的命令队列
 │   ├── devbus.py              调试事件总线（环形缓冲 + 长轮询等待）
 │   ├── devtools.py            ★ 浏览器调试台后端（/devtools，挂在 CDN 端口）
+│   ├── jsdlink.py             引擎远程 JS 调试器的连接层（Firefox 远程调试协议）
 │   ├── web/devtools.*         调试台前端（明文 html/css/js，改完刷新即可）
 │   ├── crypto/des.py          标准 DES（已用客户端真实密文对拍验证）
 │   ├── handlers/              业务路由（agent.* / char.* / instance.* / player.* / quest.*，共 34 条）
@@ -96,6 +98,8 @@ game_server/
 │   ├── selftest_game.py       不开游戏也能自测业务协议
 │   ├── check_soldier_calc.py  服务端 vs 客户端的军士升级公式对拍
 │   ├── check_devtools.py      调试台自测（静态检查 + 接口全打一遍）
+│   ├── jsd.py                 引擎远程 JS 调试器客户端（断点 / 单步 / 栈 / 求值）
+│   ├── patch_js_debugger.py   把调试器自己的 JS 换成明文并打补丁
 │   ├── bisect_init.py         逐模块二分，找把 JS 主线程卡死的那个
 │   ├── shots.py               连续截图
 │   ├── sdk_strip/             删掉没用的第三方 SDK（详见 4.0）
@@ -112,6 +116,7 @@ game_server/
 └── docs/
     ├── overview.md            ★ 全景总览（先看这份）
     ├── devtools.md            浏览器调试台（面板说明 + 架构取舍 + 怎么扩展）
+    ├── engine-debug.md        ★ 引擎层调试：自带远程 JS 调试器怎么打开、协议、4 个坑
     ├── build.md               打包逻辑（为什么这么做）
     ├── protocol.md            协议逐项细节
     └── reverse-engineering.md 反汇编器原理 + 运行时探测手法
@@ -192,13 +197,40 @@ http://127.0.0.1:18080/devtools
 | 面板 | 干什么 |
 |---|---|
 | **流量** | 每条业务 `route` 的请求 msg / 回包成对展示（结果码、耗时、**客户端调了但服务端没实现**的高亮），可筛选、可导出、可重放 |
-| **控制台** | 在手机上那个游戏进程里跑 JS（`repl.py` 的网页版），带历史记录和一组常用片段 |
+| **控制台** | 在手机上那个游戏进程里跑 JS（`repl.py` 的网页版），带历史记录和一组常用片段。**不暂停游戏** |
 | **玩家** | 存档浏览 / 直接编辑 JSON + 一组作弊按钮（等级 / 道具 / 军士 / 关卡 / 任务）+ 快照回滚 |
 | **日志** | 客户端探针日志（`adb logcat` 尾随）+ 服务端日志，按来源过滤 |
 | **数据** | 路由清单、`table_*` 反查、`table_dictionary` 文案对照 |
+| **调试器** | ★ **引擎级的远程 JS 调试器**：断点 / 单步 / 调用栈 / 暂停时求值 —— 接上会把游戏真正冻住 |
 
 自测：`python tools\check_devtools.py`。
 细节、架构取舍、以及**怎么给它加面板**见 [`docs/devtools.md`](docs/devtools.md)。
+
+### 3.5 引擎层的 JS 调试器
+
+**引擎本来就带一个完整的 JS 调试器**（cocos2d-js 3.6 的
+`ScriptingCore::enableDebugger`：SpiderMonkey Debugger API + Firefox 远程调试协议），
+只是官方模板把它放在 `#if COCOS2D_DEBUG` 里，我们的 release 包（`NDK_DEBUG=0`）
+从来没调用过。
+
+```powershell
+cd E:\code\apk\move\build
+python enable_js_debugger.py      # 打开它（幂等）
+python fix_js_log.py              # 顺带修「引擎的 JS log() 被 CCLOG 空宏吃掉」
+.\build.ps1 -Abi armeabi
+cd ..\..\game_server
+python tools\patch_js_debugger.py # 调试器自己的 JS 换成明文可改（不用重编引擎）
+python tools\build_apk.py
+adb install -r -d E:\code\apk\work\zcsmw-mod-signed.apk
+adb forward tcp:5086 tcp:5086     # MuMu 是 NAT 的，要把端口转出来
+
+python tools\jsd.py tabs          # 连得上吗
+python tools\jsd.py repl          # 交互式：断点 / 单步 / 栈 / 求值
+python tools\jsd.py demo probe.js 78
+```
+
+浏览器里就是调试台的**「调试器」**页签。原理、协议、踩过的四个坑、复现清单：
+[`docs/engine-debug.md`](docs/engine-debug.md)。
 
 ---
 
@@ -699,8 +731,9 @@ python tools\disasm_func.py <file.jsc> cb4AfterLogin
 - [x] **编成 / 上阵队伍**（18 个初始士兵，前锋/中卫/后卫各 6）
 - [x] **军士培养 / 突破 / 技能**（升级公式和客户端逐字段对齐，材料会被真的吃掉）
 - [x] **主线任务**（12 条窗口 + 领奖 + 窗口推进 + 刷新）
-- [x] **浏览器调试台**（`/devtools`：流量 / 控制台 / 存档编辑+作弊 / 日志流 / 表查询）
-- [x] 文档：`docs/overview.md`（全景）/ `protocol.md` / `reverse-engineering.md` / `build.md` / `devtools.md`
+- [x] **浏览器调试台**（`/devtools`：流量 / 控制台 / 存档编辑+作弊 / 日志流 / 表查询 / 引擎调试器）
+- [x] **引擎层 JS 调试器**（断点 / 单步 / 调用栈 / 暂停时求值，游戏真的会停住）
+- [x] 文档：`docs/overview.md`（全景）/ `protocol.md` / `reverse-engineering.md` / `build.md` / `devtools.md` / `engine-debug.md`
 
 ### 待办
 

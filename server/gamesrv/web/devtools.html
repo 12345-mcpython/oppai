@@ -31,6 +31,7 @@
   <button data-tab="player">玩家</button>
   <button data-tab="logs">日志</button>
   <button data-tab="data">数据</button>
+  <button data-tab="jsd" title="引擎自带的远程 JS 调试器（断点 / 单步 / 调用栈 / 暂停时求值）">调试器</button>
 </nav>
 
 <main>
@@ -131,6 +132,46 @@
       <span class="muted" id="dt-info"></span>
     </div>
     <div class="dt-out" id="dt-out"></div>
+  </section>
+
+  <!-- ============ 引擎 JS 调试器 ============ -->
+  <section id="tab-jsd" class="tab">
+    <div class="bar">
+      <button id="jd-connect" class="primary">连接</button>
+      <button id="jd-disconnect" class="ghost">断开</button>
+      <span class="pill" id="jd-state">未连接</span>
+      <span class="spacer"></span>
+      <button id="jd-resume" class="ghost">继续 (F5)</button>
+      <button id="jd-pause" class="ghost">暂停</button>
+      <button id="jd-step-in" class="ghost">步入</button>
+      <button id="jd-step-over" class="ghost">步过</button>
+      <button id="jd-step-out" class="ghost">步出</button>
+      <span class="muted" id="jd-note"></span>
+    </div>
+    <div class="split">
+      <div class="jd-side">
+        <div class="bar">
+          <input id="jd-filter" placeholder="筛选脚本（jsc 的 url 是构建机绝对路径）">
+          <button id="jd-refresh-src" class="ghost">刷新</button>
+        </div>
+        <div class="jd-list" id="jd-sources"></div>
+        <div class="bar">
+          <span class="muted">行</span>
+          <input id="jd-line" type="number" min="1" value="1" style="width:80px">
+          <button id="jd-bp" class="ghost">在选中脚本下断点</button>
+        </div>
+        <div class="jd-list short" id="jd-bps"></div>
+      </div>
+      <div class="detail">
+        <div class="muted" id="jd-why" style="padding:6px 14px;border-bottom:1px solid var(--line)"></div>
+        <div class="jd-list" id="jd-frames"></div>
+        <div class="cc-editor">
+          <textarea id="jd-expr" spellcheck="false" placeholder="在当前栈帧里求值（Ctrl+Enter）"></textarea>
+          <button id="jd-eval" class="primary">求值</button>
+        </div>
+        <div class="cc-out" id="jd-out"></div>
+      </div>
+    </div>
   </section>
 
 </main>

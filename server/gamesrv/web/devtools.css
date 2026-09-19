@@ -207,3 +207,25 @@ main { flex: 1 1 auto; min-height: 0; display: flex; }
 }
 .toast.err { border-left-color: var(--err); }
 .toast.ok { border-left-color: var(--ok); }
+
+/* ---------------- 引擎调试器 ---------------- */
+
+.jd-side {
+  flex: 0 0 44%; display: flex; flex-direction: column; min-height: 0;
+  border-right: 1px solid var(--line);
+}
+.jd-list { flex: 1 1 auto; overflow: auto; font-family: var(--mono); font-size: 12px; }
+.jd-list.short { flex: 0 0 26%; border-top: 1px solid var(--line); }
+.jd-list .item {
+  padding: 3px 12px; border-bottom: 1px solid #22262d; cursor: pointer;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.jd-list .item:hover { background: #1e232b; }
+.jd-list .item.sel { background: #1d3350; }
+.jd-list .item .dim { color: var(--muted); margin-right: 6px; }
+.jd-list .item.frame { white-space: normal; }
+.jd-list .item.frame .loc { color: var(--muted); }
+#jd-state.good b { color: var(--ok); }
+#jd-state.bad b { color: var(--err); }
+#jd-state.warn b { color: var(--warn); }
+#jd-expr { flex: 1 1 auto; height: 64px; }
