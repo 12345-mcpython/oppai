@@ -80,7 +80,7 @@ import shutil
 import sys
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-APK_DIR = os.environ.get("GS_APK_DIR", r"E:\code\apk\zcsmw")
+APK_DIR = os.environ.get("GS_APK_DIR", r"E:\code\zcsmw\game")
 
 MANIFEST = os.path.join(APK_DIR, "AndroidManifest.xml")
 APKTOOL_YML = os.path.join(APK_DIR, "apktool.yml")

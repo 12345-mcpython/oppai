@@ -148,7 +148,7 @@ Object.defineProperty(console, 'log', {...})  // TypeError: can't redefine non-c
 
    ```powershell
    python tools\build_apk.py --host <主机IP>
-   adb install -r -d E:\code\apk\work\zcsmw-mod-signed.apk
+   adb install -r -d E:\code\zcsmw\out\zcsmw-mod-signed.apk
    ```
 
    一旦这个通道有数据（15 秒内有上报），logcat 那条路会自动静音，不会出现两份。

@@ -172,7 +172,7 @@ python tools\build_apk.py --host <主机IP>          # 带探针（开发和排�
 python tools\build_apk.py --host <主机IP> --no-probe   # 正式包：只带 patch.js
 
 # 4) 安装
-adb install -r -d E:\code\apk\work\zcsmw-mod-signed.apk
+adb install -r -d E:\code\zcsmw\out\zcsmw-mod-signed.apk
 ```
 
 ### 3.3 不开游戏自测服务端
@@ -214,14 +214,14 @@ http://127.0.0.1:18080/devtools
 从来没调用过。
 
 ```powershell
-cd E:\code\apk\move\build
+cd E:\code\zcsmw\engine\build
 python enable_js_debugger.py      # 打开它（幂等）
 python fix_js_log.py              # 顺带修「引擎的 JS log() 被 CCLOG 空宏吃掉」
 .\build.ps1 -Abi armeabi
 cd ..\..\game_server
 python tools\patch_js_debugger.py # 调试器自己的 JS 换成明文可改（不用重编引擎）
 python tools\build_apk.py
-adb install -r -d E:\code\apk\work\zcsmw-mod-signed.apk
+adb install -r -d E:\code\zcsmw\out\zcsmw-mod-signed.apk
 adb forward tcp:5086 tcp:5086     # MuMu 是 NAT 的，要把端口转出来
 
 python tools\jsd.py tabs          # 连得上吗

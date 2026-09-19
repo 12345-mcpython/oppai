@@ -122,10 +122,10 @@ apktool 会照样按「不压缩」处理，有时还会把原版 APK 里的 unk
 
 | 变量 | 默认 | 说明 |
 |---|---|---|
-| `GS_APK_SRC` | `E:\code\apk\zcsmw.apk` | 原版 APK（只读，解包用） |
-| `GS_APK_DIR` | `E:\code\apk\zcsmw` | apktool 解包目录 |
-| `GS_WORK_DIR` | `E:\code\apk\work` | 产物目录（也放 keystore） |
-| `GS_APKTOOL` | `E:\code\apk\apktool.bat` | apktool |
+| `GS_APK_SRC` | `E:\code\zcsmw\game.apk` | 原版 APK（只读，解包用） |
+| `GS_APK_DIR` | `E:\code\zcsmw\game` | apktool 解包目录 |
+| `GS_WORK_DIR` | `E:\code\zcsmw\out` | 产物目录（也放 keystore） |
+| `GS_APKTOOL` | `E:\code\zcsmw\script\apktool.bat` | apktool |
 | `GS_BUILD_TOOLS` | `D:\Android\android-sdk\build-tools\36.0.0` | zipalign / apksigner |
 | `GS_JAVA_HOME` | `D:\java\zulu17...` | JDK |
 
@@ -145,7 +145,7 @@ python tools\sdk_strip\gen_native_stubs.py
 python tools\build_apk.py --host 10.110.29.230
 
 # 3) 装
-adb install -r -d E:\code\apk\work\zcsmw-mod-signed.apk
+adb install -r -d E:\code\zcsmw\out\zcsmw-mod-signed.apk
 ```
 
 `build_apk.py` 常用参数：
@@ -162,7 +162,7 @@ adb install -r -d E:\code\apk\work\zcsmw-mod-signed.apk
 ## 产物
 
 ```
-E:\code\apk\work\
+E:\code\zcsmw\out\
   zcsmw-mod-signed.apk   ★   最终可安装（默认会清掉中间产物）
   debug.keystore             签名密钥
 ```
@@ -170,7 +170,7 @@ E:\code\apk\work\
 ## 解包目录里哪些可以删
 
 ```
-E:\code\apk\zcsmw\
+E:\code\zcsmw\game\
   AndroidManifest.xml      ← 必需
   apktool.yml              ← 必需（记录 sdk 版本 / doNotCompress 等）
   smali/ res/ assets/ lib/ ← 必需（被打包的内容）

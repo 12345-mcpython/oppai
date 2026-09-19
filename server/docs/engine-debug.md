@@ -106,11 +106,11 @@ bool JSBDebug_enterNestedEventLoop(...) {
 ### 2.1 引擎侧：一句调用
 
 ```powershell
-cd E:\code\apk\move\build
+cd E:\code\zcsmw\engine\build
 python enable_js_debugger.py      # 往 AppDelegate.cpp 插 enableDebugger()，幂等
 .\build.ps1 -Abi armeabi          # 重编 libcocos2djs.so
 cd ..\..\game_server
-python tools\build_apk.py && adb install -r -d E:\code\apk\work\zcsmw-mod-signed.apk
+python tools\build_apk.py && adb install -r -d E:\code\zcsmw\out\zcsmw-mod-signed.apk
 adb forward tcp:5086 tcp:5086     # MuMu 是 NAT 的，要把端口转出来
 ```
 
@@ -317,7 +317,7 @@ Stack: OA_grip@assets/script/debugger/actors/script.js:2714:21
 
 ```powershell
 # 1. 引擎：打开调试器 + 修 js_log（各一次，幂等）
-cd E:\code\apk\move\build
+cd E:\code\zcsmw\engine\build
 python enable_js_debugger.py
 python fix_js_log.py
 .\build.ps1 -Abi armeabi          # 注意 build.ps1 必须是 UTF-8 **带 BOM**
@@ -331,7 +331,7 @@ python tools\patch_js_debugger.py
 
 # 3. 打包安装 + 端口转发
 python tools\build_apk.py
-adb install -r -d E:\code\apk\work\zcsmw-mod-signed.apk
+adb install -r -d E:\code\zcsmw\out\zcsmw-mod-signed.apk
 adb shell am start -n com.cm.zcsmw.baidu/org.cocos2dx.javascript.SplashActivity
 adb forward tcp:5086 tcp:5086
 

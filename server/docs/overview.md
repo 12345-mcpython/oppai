@@ -58,7 +58,7 @@
 │   └─ assets/src/patch/{patch,probe}.js  ← 明文 JS，绕过 jsc 限制  │
 ├───────────────────────────────────────────────────────────────┤
 │ libcocos2djs.so   自己用 NDK r10e + cocos2d-js v3.6 源码重建      │
-│   └─ 11 个引擎补丁（见 E:\code\apk\move\ENGINE_PATCHES.md）        │
+│   └─ 11 个引擎补丁（见 E:\code\zcsmw\engine\ENGINE_PATCHES.md）        │
 ├───────────────────────────────────────────────────────────────┤
 │ 服务端（Python 标准库）                                          │
 │   cdn:18080  静态资源 + 公告 + 远程配置 + REPL 控制接口            │
@@ -138,8 +138,8 @@ _mainUiLayer dataManager player moduleState ...   ← 函数体里用到的属�
 vanilla 不传参 → 游戏代码 `function (eventName) { if (/began\d/.test(eventName)) … }`
 永远拿不到名字 → 链条断在第一步。
 
-11 个引擎补丁的完整清单 + 证据链见 `E:\code\apk\move\ENGINE_PATCHES.md`，
-每个改动都有一个可重复执行的脚本在 `E:\code\apk\move\build\*.py`。
+11 个引擎补丁的完整清单 + 证据链见 `E:\code\zcsmw\engine\ENGINE_PATCHES.md`，
+每个改动都有一个可重复执行的脚本在 `E:\code\zcsmw\engine\build\*.py`。
 
 ---
 
@@ -281,14 +281,14 @@ vanilla 不传参 → 游戏代码 `function (eventName) { if (/began\d/.test(ev
 ### 8.1 构建链路（每一步都是幂等的）
 
 ```powershell
-cd E:\code\python\game_server
+cd E:\code\zcsmw\server
 python client\patch_smali.py          # Java 层补丁
 python client\modernize.py            # manifest / targetSdk=23 / 运行时权限
 python tools\sdk_strip\strip.py       # 删第三方 SDK + 装桩
 python tools\gen_native_stubs.py      # .so 硬依赖的类
-# 引擎：ndk-build（见 E:\code\apk\move\build\build.ps1）
+# 引擎：ndk-build（见 E:\code\zcsmw\engine\build\build.ps1）
 python tools\build_apk.py [--no-probe]   # 改 assets + apktool 打包 + 对齐 + 签名
-adb install -r -d E:\code\apk\work\zcsmw-mod-signed.apk
+adb install -r -d E:\code\zcsmw\out\zcsmw-mod-signed.apk
 ```
 
 ### 8.2 调试工作流
@@ -352,16 +352,16 @@ python tools\disasm_func.py  <assets>\src\data\questcenter.jsc _createQuest
 | `docs/reverse-engineering.md` | jsc 反汇编器原理、运行时探测手法、排障套路 |
 | `docs/build.md` | 打包逻辑（为什么这么做） |
 | `tools/README.md` | 工具索引（哪个脚本干什么、加新模块的推荐流程） |
-| `E:\code\apk\move\ENGINE_PATCHES.md` | 13 个引擎补丁的证据链与复现脚本 |
+| `E:\code\zcsmw\engine\ENGINE_PATCHES.md` | 13 个引擎补丁的证据链与复现脚本 |
 
 仓库外的关键路径：
 
 ```
-E:\code\apk\zcsmw\             apktool 解包目录（smali / assets / lib）
-E:\code\apk\work\              打包中间产物 + zcsmw-mod-signed.apk
-E:\code\apk\backup\            原版 APK 备份（唯一的一份，别删）
-E:\code\apk\move\              引擎移植工作区（cocos2d-js 源码 + NDK + 构建脚本）
-E:\code\apk\shots\             截图存档
+E:\code\zcsmw\game\             apktool 解包目录（smali / assets / lib）
+E:\code\zcsmw\out\              打包中间产物 + zcsmw-mod-signed.apk
+E:\code\zcsmw\game\original\            原版 APK 备份（唯一的一份，别删）
+E:\code\zcsmw\engine\              引擎移植工作区（cocos2d-js 源码 + NDK + 构建脚本）
+E:\code\zcsmw\out\shots\             截图存档
 ```
 
 ---
