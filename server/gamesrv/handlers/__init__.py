@@ -43,7 +43,9 @@ def load_all():
     from . import boss  # noqa: F401
     from . import char  # noqa: F401
     from . import friendsupport  # noqa: F401
+    from . import gacha  # noqa: F401
     from . import instance  # noqa: F401
+    from . import mail  # noqa: F401
     from . import payment  # noqa: F401
     from . import player  # noqa: F401
     from . import quest  # noqa: F401
