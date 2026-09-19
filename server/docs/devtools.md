@@ -6,7 +6,7 @@
 http://127.0.0.1:18080/devtools
 ```
 
-（端口就是 CDN 那个 `GS_CDN_PORT`。`python tools\serve.py` 起服务端时会自动把它挂上，
+（端口就是 CDN 那个 `GS_CDN_PORT`。`python script\serve.py` 起服务端时会自动把它挂上，
 顺便把 `adb logcat` 的尾随线程也拉起来。）
 
 > 为什么是「浏览器页面」而不是「游戏内悬浮面板」：
@@ -21,7 +21,7 @@ http://127.0.0.1:18080/devtools
 | 面板 | 干什么 |
 |---|---|
 | **流量** | 每条业务 `route` 的请求 msg 和回包，成对展示（路由 / 结果码 / 耗时 / 是否实现）。可筛选、可导出、可**重放** |
-| **控制台** | 在手机上那个游戏进程里跑 JS，等于 [`tools/repl.py`](../tools/repl.py) 的网页版。带历史记录（↑↓）和一组常用片段。**不暂停游戏** |
+| **控制台** | 在手机上那个游戏进程里跑 JS，等于 [`script/repl.py`](../../script/repl.py) 的网页版。带历史记录（↑↓）和一组常用片段。**不暂停游戏** |
 | **玩家** | 存档浏览 / 直接编辑 JSON + 一组作弊按钮 + 快照（新建 / 回滚） |
 | **日志** | 客户端探针日志（`adb logcat` 尾随或 probe 上报）和服务端日志，按来源过滤 |
 | **数据** | 路由清单、`table_*` 反查（本地已抽取的 + 客户端里的）、`table_dictionary` 文案对照 |
@@ -53,7 +53,7 @@ server.request(route, msg, function (e, d) { console.log('REPLAY ' + route + ' =
 ### 1.2 控制台
 
 底层还是 `POST /control/eval` → 探针轮询 `/hook/poll` → 执行 → `POST /hook/result`
-（和 `tools/repl.py` 完全同一条路，只是从浏览器发）。
+（和 `script/repl.py` 完全同一条路，只是从浏览器发）。
 
 几个**形状坑**（片段里已经绕开，自己写的时候注意）：
 
@@ -147,7 +147,7 @@ Object.defineProperty(console, 'log', {...})  // TypeError: can't redefine non-c
    **但要重新打包 + 安装 APK 才生效**：
 
    ```powershell
-   python tools\build_apk.py --host <主机IP>
+   python script\build_apk.py --host <主机IP>
    adb install -r -d E:\code\zcsmw\out\zcsmw-mod-signed.apk
    ```
 
@@ -187,7 +187,7 @@ Object.defineProperty(console, 'log', {...})  // TypeError: can't redefine non-c
 * **游戏脚本的行号要猜**：`.jsc` 里没留源码。实用做法是先断在明文脚本里，
   从调用栈读出游戏脚本的 `url:line`，再用那个行号下断点。
 * 同一时间**只能接一个客户端**（C++ 那边 `listen(s, 1)` + 单客户端 `recv` 循环）。
-  `tools/jsd.py` 和这个面板会互相抢，别同时开。
+  `script/jsd.py` 和这个面板会互相抢，别同时开。
 
 原理、怎么打开、四个坑： [`engine-debug.md`](engine-debug.md)。
 
@@ -253,7 +253,7 @@ gamesrv/web/devtools.js     逻辑
 自测：
 
 ```powershell
-python tools\check_devtools.py
+python script\check_devtools.py
 ```
 
 * 静态检查：JS 里 `$('id')` 引用的 id 在 HTML 里存不存在、
@@ -271,4 +271,4 @@ python tools\check_devtools.py
 2. **前端消费** —— `devtools.js` 的 `routeEvent(ev)` 里加一个 `case`，
    渲染进对应面板
 3. **静态检查** —— 如果新加了 `$('xxx')`，记得 HTML 里也要有（`check_devtools.py` 会查）
-4. **验证** —— `python tools\check_devtools.py`，然后浏览器刷新看
+4. **验证** —— `python script\check_devtools.py`，然后浏览器刷新看

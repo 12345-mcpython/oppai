@@ -13,12 +13,13 @@
 ① apktool d zcsmw.apk                   解包（一次性，产物 zcsmw/）
         ↓
 ② 改解包目录                              ← 四个脚本，全部幂等，可重复跑
-     client/patch_smali.py               Java 层登录补丁
-     client/modernize.py                 现代化（sdk 版本 / 明文 HTTP / 运行时权限）
-     tools/sdk_strip/strip.py            删 SDK + 装桩 + 清 manifest
-     tools/sdk_strip/gen_native_stubs.py 生成 .so 硬依赖的桩
+     server\client\modernize.py                 现代化（sdk 版本 / 明文 HTTP / 运行时权限）
+     script\sdk_strip\strip.py                  删 SDK + 装桩 + 清 manifest
+     script\sdk_strip\gen_native_stubs.py       生成 .so 硬依赖的桩
+     server\client\patch_smali.py               Java 层登录补丁 + 退出弹窗
+                                                ⚠️ 必须最后跑，见「脚本顺序」
         ↓
-③ python tools/build_apk.py              ★ 改 assets + apktool b + 对齐 + 签名
+③ python script\build_apk.py             ★ 改 assets + apktool b + 对齐 + 签名
         ↓
 ④ adb install -r -d
 ```
@@ -291,33 +292,109 @@ apktool 会照样按「不压缩」处理，有时还会把原版 APK 里的 unk
 
 ---
 
+## ⚠️ 脚本顺序：`patch_smali.py` 必须排在 `strip.py` **之后**
+
+`strip.py` 会把 `smali\com\quicksdk` **整个删掉**，再按 `needed.json` 重新生成桩类
+（方法体是空的 `return-void`）。所以顺序反了就等于白改：
+
+```
+patch_smali.py     →  往 com\quicksdk\Sdk.smali 里写真实实现
+strip.py           →  删掉 com\quicksdk，重新生成空桩        ✗ 修复被冲掉
+```
+
+正确顺序：`modernize.py` → `strip.py` → `gen_native_stubs.py` → **`patch_smali.py`** → `build_apk.py`。
+
+`build.ps1` 里不含 `strip.py`，所以不受影响；但照下面「完整重建命令」跑要按这个顺序。
+（`strip.py --dry-run` 就能看到它准备删 `smali\com\quicksdk`。）
+
+---
+
+## ⚠️ `.ps1` 必须带 UTF-8 BOM（不只是 `build.ps1`）
+
+Windows PowerShell 会把**无 BOM** 的 UTF-8 脚本按 ANSI 读（中文系统 = GBK），
+中文注释/字符串被误解析，**顺手把引号吃掉**，于是报一片 `Unexpected token` /
+`Missing closing '}'`。
+
+最坑的不是报错，而是：**解析失败 = 脚本一行都没执行**。
+（曾拿一个解析失败的验证脚本当成"跑过了、只是没效果"，白查一轮。）
+
+* `build.ps1` 保持带 BOM。改它别用会丢 BOM 的工具；用 Python 时 `encoding="utf-8-sig"` 读写。
+* 临时验证脚本**直接写纯 ASCII 源码**最省心 —— 中文只出现在输出的数据里，不写进源码。
+
+### 附带：PowerShell 的别名优先级高于函数
+
+`ps` / `ls` / `cat` / `rm` 都是内置别名（→ `Get-Process` 等），**同名函数盖不过别名**。
+曾把辅助函数命名成 `PS`，结果打印出来的是**整张 Windows 进程表**而不是模拟器进程。
+给脚本函数起名避开这些别名。
+
+### 附带：量出来的"脚本坏了"，先怀疑量法
+
+`& python x.py --help 2>&1 | Select-Object -First 1` —— `-First 1` 会提前掐断管道并
+**杀掉上游进程**，于是 Python 抛 BrokenPipe traceback、`$LASTEXITCODE` 变 `-1`，
+看着像"脚本坏了"，其实脚本是好的（`repl.py` / `jsd.py` 就这么被误判过）。
+要拿退出码就别截断管道：`$all = (& ... | Out-String)`。
+
+---
+
+## 一键构建（`build.ps1`）为什么要跑 `patch_smali.py`
+
+`build.ps1` 原本第 3 步只跑 `patch_js_debugger.py`，**从不调用 `patch_smali.py`**
+—— 而本文档一直把 `patch_smali.py` 列为构建链的一环。后果：重新 `apktool d`
+解包后跑一键构建，Java 层补丁（登录 + 退出弹窗）会**静默丢失**，没有任何提示。
+
+现在补成 **Step 3b**，位置在 Step 4（打包）之前 —— 必须之前，因为 apktool 是从
+`game\smali` 编 `classes.dex` 的；同时显式设了 `$env:GS_APK_DIR = $Game`
+（`patch_smali.py` 的默认路径是写死的，换机器会找不到解包目录）。
+
+---
+
+## 项目重排留下的两个脚本 bug（已修）
+
+`script/` 下的脚本靠往上找 `_paths.py` 自举 `sys.path`。重排项目时有两处搞坏了，
+**表现为脚本从任何目录都跑不起来**：
+
+| 脚本 | 症状 | 原因 |
+|---|---|---|
+| `script\sdk_strip\strip.py` | `NameError: name '_paths' is not defined` | `BASE_DIR = _paths.SERVER` 写在了自举代码**上面**（第 26 行 vs 第 35 行） |
+| `script\sdk_strip\native_stubs.py` | `NameError: name 'sys' is not defined` | 用了 `sys.path.insert` 却**没 `import sys`**；连带 `gen_native_stubs.py`（import 它）一起挂 |
+
+写新脚本照抄现成的自举块，**顺序必须是**：`import` → `HERE` → 自举 → 才轮到
+`_paths.X` 和本地模块的 import。
+
+---
+
 ## 路径配置
 
 全部可用环境变量覆盖，方便换机器：
 
 | 变量 | 默认 | 说明 |
 |---|---|---|
-| `GS_APK_SRC` | `E:\code\zcsmw\game.apk` | 原版 APK（只读，解包用） |
 | `GS_APK_DIR` | `E:\code\zcsmw\game` | apktool 解包目录 |
 | `GS_WORK_DIR` | `E:\code\zcsmw\out` | 产物目录（也放 keystore） |
 | `GS_APKTOOL` | `E:\code\zcsmw\script\apktool.bat` | apktool |
 | `GS_BUILD_TOOLS` | `D:\Android\android-sdk\build-tools\36.0.0` | zipalign / apksigner |
 | `GS_JAVA_HOME` | `D:\java\zulu17...` | JDK |
 
+> 注意：原版 APK **不在** `E:\code\zcsmw\game.apk`，而是
+> `game\original\zcsmw-original.apk`（仓库里唯一一份，别删）。
+> 早期文档里的 `GS_APK_SRC` 环境变量**没有任何代码在用**，已从表里去掉。
+
 ---
 
 ## 完整重建命令
 
 ```powershell
-# 1) 四个补丁（幂等）
-python client\patch_smali.py
-python client\modernize.py
-python tools\sdk_strip\analyze.py --json tools\sdk_strip\needed.json   # SDK 没动过可跳过
-python tools\sdk_strip\strip.py
-python tools\sdk_strip\gen_native_stubs.py
+# 在仓库根 E:\code\zcsmw 下跑。script\ 下的脚本自带 _paths 自举，从哪个目录调都行。
+
+# 1) 四个补丁（幂等）—— ⚠️ patch_smali.py 必须最后，strip.py 会重建 com\quicksdk 的桩
+python server\client\modernize.py
+python script\sdk_strip\analyze.py --json script\sdk_strip\needed.json   # SDK 没动过可跳过
+python script\sdk_strip\strip.py
+python script\sdk_strip\gen_native_stubs.py
+python server\client\patch_smali.py
 
 # 2) 改 assets + 打包 + 签名（一步）
-python tools\build_apk.py --host 10.110.29.230
+python script\build_apk.py --host 10.110.29.230
 
 # 3) 装
 adb install -r -d E:\code\zcsmw\out\zcsmw-mod-signed.apk

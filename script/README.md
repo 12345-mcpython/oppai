@@ -1,8 +1,8 @@
-# tools 索引
+# script/ 索引
 
 按用途分四类。**日常只会用到前两类**，后两类是排障和追溯用的。
 
-> 想先了解整个项目，读 [`../docs/overview.md`](../docs/overview.md)；
+> 想先了解整个项目，读 [`../server/docs/overview.md`](../server/docs/overview.md)；
 > 这份只管「哪个脚本干什么」。
 
 ---
@@ -26,7 +26,7 @@
 | `jsc_strings.py` | **最好用的一把刀**：只扒 `.jsc` 的 atom（标识符）表，按源码顺序输出「参数/局部变量 → 函数体里用到的属性名」。没源码也能看懂一个函数在干什么 |
 | `jsc_disasm.py` | SM33.1.1 XDR 字节码反汇编器（`_opcodes_gen.py` 是它的操作码表，别删） |
 | `disasm_func.py` | 按函数名反汇编，会自动带上嵌套函数 |
-| **`jsc_decompile.py`** | ★ **jsc → js 反编译器**（栈机模拟 + 结构恢复）：`assets/src/**` **572/575** 能过 `node --check`。见 [`../docs/decompile.md`](../docs/decompile.md) |
+| **`jsc_decompile.py`** | ★ **jsc → js 反编译器**（栈机模拟 + 结构恢复）：`assets/src/**` **572/575** 能过 `node --check`。见 [`../server/docs/decompile.md`](../server/docs/decompile.md) |
 | `csb_dump.py` | 解析 cocostudio 的 `.csb`（FlatBuffers）：列出动画区间和所有帧事件 |
 | `extract_client_tables.py` | **把客户端 `table_*` 抽成服务端 JSON**（`gamesrv/data/table_quest.json` 就是这么来的）。客户端换版本重跑一次 |
 | `gen_opcodes.py` | 从 SpiderMonkey 的 `vm/Opcodes.h` 重新生成 `_opcodes_gen.py`（一般不用跑） |
@@ -35,22 +35,22 @@
 
 ```powershell
 # 看某个函数在干什么（最快）
-python tools\jsc_strings.py <assets>\src\ui\main\mainlayer.jsc _initModuleButtons
+python script\jsc_strings.py <assets>\src\ui\main\mainlayer.jsc _initModuleButtons
 
 # 想看具体字节码
-python tools\disasm_func.py <assets>\src\data\questcenter.jsc _createQuest
+python script\disasm_func.py <assets>\src\data\questcenter.jsc _createQuest
 
 # 看某个战斗动画有哪些帧事件
-python tools\csb_dump.py <assets>\res\ui\battlebeganui\src\battlebeganui.csb
+python script\csb_dump.py <assets>\res\ui\battlebeganui\src\battlebeganui.csb
 ```
 
 ## 3. 运行时调试
 
 | 脚本 | 干什么 |
 |---|---|
-| **`/devtools`** | ★ **浏览器调试台**（`gamesrv/devtools.py` + `gamesrv/web/`，挂在 CDN 端口）。流量 / JS 控制台 / 存档编辑+作弊 / 日志流 / 表查询 / **引擎调试器**，详见 [`../docs/devtools.md`](../docs/devtools.md) |
-| `jsd.py` | ★ **引擎自带的远程 JS 调试器**客户端：断点 / 单步 / 调用栈 / 暂停时求值（`tabs` / `sources` / `repl` / `demo`）。见 [`../docs/engine-debug.md`](../docs/engine-debug.md) |
-| `patch_js_debugger.py` | 把调试器自己的 JS（`script/jsb_debugger.js` + `script/debugger/**`）换成**明文并打补丁** —— 不用重编引擎就能改调试器（`.jsc` 只是缓存，删掉引擎就改读同名 `.js`） |
+| **`/devtools`** | ★ **浏览器调试台**（`gamesrv/devtools.py` + `gamesrv/web/`，挂在 CDN 端口）。流量 / JS 控制台 / 存档编辑+作弊 / 日志流 / 表查询 / **引擎调试器**，详见 [`../server/docs/devtools.md`](../server/docs/devtools.md) |
+| `jsd.py` | ★ **引擎自带的远程 JS 调试器**客户端：断点 / 单步 / 调用栈 / 暂停时求值（`tabs` / `sources` / `repl` / `demo`）。见 [`../server/docs/engine-debug.md`](../server/docs/engine-debug.md) |
+| `patch_js_debugger.py` | 把调试器自己的 JS（`assets/script/jsb_debugger.js` + `assets/script/debugger/**`，**注意是游戏 assets 里的 `script/`，不是本目录**）换成**明文并打补丁** —— 不用重编引擎就能改调试器（`.jsc` 只是缓存，删掉引擎就改读同名 `.js`） |
 | `repl.py` | **在游戏进程里执行任意 JS（不暂停）**。前提：装了 probe 版 APK + 服务端在跑。验证数据形状、翻运行时状态全靠它 |
 | `probe.py` | 重启客户端 + 批量执行 JS 表达式（`repl.py` 的批处理版） |
 | `shots.py` | 重启客户端并连续截图 |
@@ -62,11 +62,11 @@ python tools\csb_dump.py <assets>\res\ui\battlebeganui\src\battlebeganui.csb
 
 ## 4. `archive/` —— 一次性脚本（历史存档，别再跑）
 
-当初改 **`client/hook.js`**（现已拆成 `patch.js` + `probe.js`）或服务端源文件用的
+当初改 **`server/client/hook.js`**（现已拆成 `patch.js` + `probe.js`）或服务端源文件用的
 「就地改代码」脚本。它们大多：
 
 * 路径写死（`E:\code\zcsmw\server\...`）
-* 目标文件已经不存在（`client/hook.js`）
+* 目标文件已经不存在（`server/client/hook.js`）
 * 改动**已经落在**现在的 `patch.js` / `probe.js` / `gamesrv/*` 里
 
 留着是因为每个脚本的 docstring 都记着当时**为什么这么改**（现象 + 证据链），

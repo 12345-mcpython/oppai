@@ -36,7 +36,7 @@
 | **编成 → 上阵队伍 → 加号** | ✅ | 18 个初始士兵（前锋/中卫/后卫各 6，角色不重复，全是 `card_type==1` 的自军卡） |
 | **副本 / 关卡（主线战斗）** | ✅ | 11 章 / 1142 关，关卡表在客户端；服务端只存进度 |
 | **任务 → 主线任务** | ✅ | 12 条窗口；**进度接的是真实战斗**（打一次关卡胜利 = 一次任务进度） |
-| **编成 → 军士培养 / 突破 / 技能** | ✅ | `char.upgradesoldierlv` / `improvesoldierstar` / `upgradesoldierskill`；升级公式和客户端逐字段对齐（`tools/check_soldier_calc.py`） |
+| **编成 → 军士培养 / 突破 / 技能** | ✅ | `char.upgradesoldierlv` / `improvesoldierstar` / `upgradesoldierskill`；升级公式和客户端逐字段对齐（`script/check_soldier_calc.py`） |
 | 日常 / 成就任务 | ⚠️ | 数据是空的（只做了主线，`type=2`） |
 | 开场/引导视频 | ✅ | 视频层清理 + 幂等守卫 |
 | 扭蛋 / 抽卡 | ⚠️ | 缺运营配置（`gachaMasterList`），靠兜底不让它崩 |
@@ -95,8 +95,8 @@ gamesrv/
 * 文件 = `uint32 magic` + `XDRScript`；真正的业务代码全在**嵌套 lambda**（对象字面量里的方法）里。
 * **字节码立即数是大端序** —— 这一条不搞对，反汇编全乱。
 
-工具：`tools/jsc_disasm.py`（全量反汇编）、`tools/disasm_func.py`（按函数名）、
-`tools/jsc_strings.py`（只扒 atom 表，定位逻辑最快的一把刀）。
+工具：`script/jsc_disasm.py`（全量反汇编）、`script/disasm_func.py`（按函数名）、
+`script/jsc_strings.py`（只扒 atom 表，定位逻辑最快的一把刀）。
 
 `jsc_strings.py` 的原理：SM33 对每个函数脚本按**源码顺序**写一组 atom，
 编码是 `<uint32 (2*len+1)> <len 字节 ASCII>`。于是能恢复出
@@ -152,7 +152,7 @@ vanilla 不传参 → 游戏代码 `function (eventName) { if (/began\d/.test(ev
 |---|---|---|
 | 模块开启状态 `moduleState` | 服务端生成 | key 是 `table_function_open` 的编号 100001~100032 |
 | 士兵 / 主角 / 机甲 | 服务端生成 | key 必须真实存在于 `table_soldier` / `table_hero` / `table_mecha` |
-| **任务表** | `tools/extract_client_tables.py` 从客户端抽 | 存成 `gamesrv/data/table_quest.json` |
+| **任务表** | `script/extract_client_tables.py` 从客户端抽 | 存成 `gamesrv/data/table_quest.json` |
 | 任务进度 | 服务端维护 | `players.json` 里的 `quests.done` |
 | 扭蛋配置 / 副本关卡 | **缺** | 运营配置类数据，客户端表里也没有，得自己想 |
 
@@ -164,7 +164,7 @@ vanilla 不传参 → 游戏代码 `function (eventName) { if (/began\d/.test(ev
 
 ## 5. 客户端补丁：哪些是必须的，哪些只是诊断
 
-`client/` 下分两个文件，**打包时可以只带前一个**（`tools/build_apk.py --no-probe`）：
+`server/client/` 下分两个文件，**打包时可以只带前一个**（`script/build_apk.py --no-probe`）：
 
 ### `patch.js` —— 必须的适配（进正式包）
 
@@ -200,7 +200,7 @@ vanilla 不传参 → 游戏代码 `function (eventName) { if (/began\d/.test(ev
 | 编成 → **培养**按钮点不了，弹「指挥部等级不足哦~OAQ」 | 「培养系统」在 `table_function_open[100005].unlock_lv = 6`，玩家等级不够 | `store.MIN_PLAYER_LV` |
 | 编成 → 培养里**选不出材料** | 军士的 `card_type` 不是 1（`table_soldier_master[char_key].card_type`），敌方单位不进军士卡列表 | `store.SOLDIER_KEYS` |
 | 培养点一下**直接顶到等级上限** | 材料的 `table_soldier[key].base_cost` 是 `undefined`（敌方行没有这个字段），加法变 `NaN` | 同上 |
-| 培养**预览 +3 级、点完跳 +8 级** | 服务端没复刻客户端的经验曲线 | `gamesrv/soldier.py` + `tools/check_soldier_calc.py` |
+| 培养**预览 +3 级、点完跳 +8 级** | 服务端没复刻客户端的经验曲线 | `gamesrv/soldier.py` + `script/check_soldier_calc.py` |
 | 培养升完**重登又变回去了** | 军士没落盘（`soldiers` 是 `null` / 升级后没 `save_player`） | `store._migrate` / `store.save_player` |
 | 任务**领不了** | 没回 `id`（客户端本地就 return，服务端收不到请求） | `quests._quest_entry` |
 | 任务进度条不显示 / 领奖按钮是灰的 | `schedule` 回了数组，实际要**对象** | 同上 |
@@ -212,10 +212,35 @@ vanilla 不传参 → 游戏代码 `function (eventName) { if (/began\d/.test(ev
 | 进关卡弹**「没有甜甜圈了 是否需要补充行动力」** | 行动力是背包道具（`100003`），不是 `player.actionPoint`；而 `data.item` 必须是**平铺映射** | `agent._module_stubs` |
 | 屏幕被青色的视频层盖住 | Android 侧 `VideoView` 还 VISIBLE | `patch.js` LGL-GUARD |
 | 日志刷屏（每帧一条） | 引擎自己的 LOGD | 引擎补丁 ③ + `vlog()` |
-| 调试台打开是**白板** | `devtools.js` 抛异常（最常见的是引用了 HTML 里没有的 id） | 页面顶部红条会写出来；也跑 `python tools\check_devtools.py` |
+| 调试台打开是**白板** | `devtools.js` 抛异常（最常见的是引用了 HTML 里没有的 id） | 页面顶部红条会写出来；也跑 `python script\check_devtools.py` |
 | 调试台**流量面板不动** | 事件总线的长轮询断了（服务端刚重启） | 刷新页面；`/devtools/api/overview` 里看 `bus.seq` 有没有在涨 |
 | 客户端 `console.log` 在日志面板里**看不到** | JSB 里 `console.log` 是 `writable:false, configurable:false`，**客户端没法包一层**（赋值静默失败），探针一直没转发到；只有 `cc.log` 被包上了 | 调试台改成从 logcat 收 `cocos2d-x debug info` tag 的原文，单独一档「console.log」；要转发请用 `cc.log` —— 见 §11.4 |
 | `console.log('a', b)` 抛 `js_console_log : wrong number of arguments` | 原生 `console.log` **只接受一个参数** | 自己 `[a, b].join(' ')` |
+| Java 层退出确认弹窗**文字是乱码**（一片"盒子问号"，偶尔漏出正常汉字） | **官方包自带的**：原版 `classes2.dex` 里这 4 个串本来就有 26 个 U+FFFD（同一个 dex 里别的「确定」「取消」是正常 UTF-8），字节已被替换符抹掉 | `patch_smali.py` → `patch_exit_dialog()` |
+| 退出弹窗**点「确定」没反应**（「取消」正常） | `Sdk.exit()` 是 `sdk_strip/gen_stubs.py` 生成的**空桩**，按钮调它等于没调 | `patch_smali.py` → `patch_sdk_exit()` |
+
+### 6.1 SDK 桩里的「死键」——一类很容易误判成 JS 层 bug 的问题
+
+`strip.py` / `gen_stubs.py` 删掉第三方 SDK 后，是按 `needed.json` **补空桩**：
+方法签名齐全、方法体是 `return-void`。于是**任何"点了应该有反应"的 SDK 调用都会
+变成死键** —— 界面正常、弹窗正常，点下去无声无息。
+
+退出弹窗就是这么中招的：弹窗文字（我们已修）和按钮是两件独立的事，
+`AppActivity$12$1.onClick → Sdk.exit()` 落在空桩上，所以「确定」不退出。
+
+排查只要两步：
+
+```powershell
+# 1) 谁在调它（拿方法名 + 描述符去搜）
+grep -rn "Lcom/quicksdk/Sdk;->exit(Landroid/app/Activity;)V" game\smali
+# 2) 打开桩看方法体：`.method ...` 之后直接 return-void 就是空桩
+```
+
+> 判据：**弹窗/界面是对的、按钮却毫无反应，先怀疑空桩**，别急着往 JS 层查。
+
+> ⚠️ 改空桩前必须 grep 出**全部**调用点。`Sdk.exit()` 全工程只有 `AppActivity$12`
+> 和 `$12$1` 两处，所以把桩改成"真的退出"是安全的；换一个被到处调的桩
+> （比如 `init` / `onResume`）就可能把启动流程直接搞崩。
 
 ---
 
@@ -239,6 +264,8 @@ vanilla 不传参 → 游戏代码 `function (eventName) { if (/began\d/.test(ev
 - [x] 编成 / 上阵队伍（含士兵数据）
 - [x] **军士培养 / 突破 / 技能**（升级公式和客户端逐字段对齐，材料会被真的吃掉）
 - [x] 主线任务（窗口推进 + 领奖 + 刷新）
+- [x] Java 层退出确认弹窗：官方包自带乱码文案 → 换成正常中文；空桩 `Sdk.exit()` → 软退
+      （`finish`，回桌面但进程进 cached，不留 signal 9）——见 §6.1
 - [x] 文档：协议 / 逆向手法 / 打包逻辑 / 调试台 / 引擎调试 / 本总览
 
 ### 待办（按卡点排序）
@@ -281,13 +308,13 @@ vanilla 不传参 → 游戏代码 `function (eventName) { if (/began\d/.test(ev
 ### 8.1 构建链路（每一步都是幂等的）
 
 ```powershell
-cd E:\code\zcsmw\server
-python client\patch_smali.py          # Java 层补丁
-python client\modernize.py            # manifest / targetSdk=23 / 运行时权限
-python tools\sdk_strip\strip.py       # 删第三方 SDK + 装桩
-python tools\gen_native_stubs.py      # .so 硬依赖的类
+cd E:\code\zcsmw
+python server\client\modernize.py            # manifest / targetSdk=23 / 运行时权限
+python script\sdk_strip\strip.py             # 删第三方 SDK + 装桩
+python script\sdk_strip\gen_native_stubs.py  # .so 硬依赖的类
+python server\client\patch_smali.py          # Java 层补丁（⚠️ 必须最后，见 docs/build.md）
 # 引擎：ndk-build（见 E:\code\zcsmw\engine\build\build.ps1）
-python tools\build_apk.py [--no-probe]   # 改 assets + apktool 打包 + 对齐 + 签名
+python script\build_apk.py [--no-probe]      # 改 assets + apktool 打包 + 对齐 + 签名
 adb install -r -d E:\code\zcsmw\out\zcsmw-mod-signed.apk
 ```
 
@@ -307,17 +334,17 @@ http://127.0.0.1:18080/devtools
 
 ```powershell
 # 服务端（用守护脚本，别用 Start-Process 直接拉 run.py，会被回收）
-python tools\serve.py
+python script\serve.py
 
 # 在游戏进程里执行任意 JS（前提：probe 版本 + 服务端在跑）
-python tools\repl.py "dataManager.player._moduleState ? Object.keys(dataManager.player._moduleState).length : 'none'"
+python script\repl.py "dataManager.player._moduleState ? Object.keys(dataManager.player._moduleState).length : 'none'"
 
 # 抽客户端表
-python tools\extract_client_tables.py
+python script\extract_client_tables.py
 
 # 反汇编
-python tools\jsc_strings.py  <assets>\src\ui\main\mainlayer.jsc _initModuleButtons
-python tools\disasm_func.py  <assets>\src\data\questcenter.jsc _createQuest
+python script\jsc_strings.py  <assets>\src\ui\main\mainlayer.jsc _initModuleButtons
+python script\disasm_func.py  <assets>\src\data\questcenter.jsc _createQuest
 ```
 
 **排障顺序**（按复用性排序）：
@@ -330,13 +357,36 @@ python tools\disasm_func.py  <assets>\src\data\questcenter.jsc _createQuest
 4. JS 异常先看 stack；`initUserData` 抛异常会连累一大片（见 §6）
 5. 拿不准的数据形状，直接在调试台控制台里试 —— 几秒钟一个
 6. **要看「这个函数被谁调的 / 某个变量到底是多少」**：调试台的**调试器**页签
-   （或 `python tools\jsd.py repl`）下断点 —— 那是引擎级的断点，游戏会真的停住，
+   （或 `python script\jsd.py repl`）下断点 —— 那是引擎级的断点，游戏会真的停住，
    能拿调用栈、能在栈帧里求值。见 [`docs/engine-debug.md`](engine-debug.md)
 7. 实在不行就包一层打日志，别猜
 
 > ⚠️ `adb shell input tap` 在 MuMu 上**不可靠**，注入的事件不一定到得了 App。
 > 别用它判断"点击坏了"。同理 `adb screencap` 有时抓不到 GL 层（截出来一片白），
 > 以用户看到 / 服务端日志为准。
+
+✅ **要验原生弹窗（Java 层 AlertDialog）别靠截图，导 View 层级**——比截图可靠得多，
+GL 层截不到的时候它照样能拿到文字：
+
+```powershell
+adb shell uiautomator dump /sdcard/ui.xml
+adb pull /sdcard/ui.xml
+# 弹窗内容就是 TextView 的 text 属性，按 id 取：
+#   android:id/alertTitle  android:id/message  android:id/button1  android:id/button2
+```
+
+实测：`screencap` 连抓 4 张全白，同一时刻 `uiautomator` 里弹窗的标题/正文/两个按钮
+原文一个不缺。**判断"弹窗到底显示成什么样"以它为准。**
+
+💡 想触发某个原生弹窗来验，用 `script\repl.py` 调**静态**入口：
+
+```powershell
+python script\repl.py "jsb.reflection.callStaticMethod('org/cocos2dx/javascript/QuickAdapter','exit','()V')"
+```
+
+⚠️ `jsb.reflection.callStaticMethod` **调不到实例方法**，会报
+`CCJavascriptJavaBridge: Failed to find method id of ...`（logcat 里能看到）。
+`AppActivity.exit()` 是实例方法，得走它的静态包装 `QuickAdapter.exit()`。
 
 ---
 
@@ -351,7 +401,7 @@ python tools\disasm_func.py  <assets>\src\data\questcenter.jsc _createQuest
 | `docs/protocol.md` | 协议逐项细节 + 反汇编证据（含 quest 协议、session 前缀） |
 | `docs/reverse-engineering.md` | jsc 反汇编器原理、运行时探测手法、排障套路 |
 | `docs/build.md` | 打包逻辑（为什么这么做） |
-| `tools/README.md` | 工具索引（哪个脚本干什么、加新模块的推荐流程） |
+| `script/README.md` | 工具索引（哪个脚本干什么、加新模块的推荐流程） |
 | `E:\code\zcsmw\engine\ENGINE_PATCHES.md` | 13 个引擎补丁的证据链与复现脚本 |
 
 仓库外的关键路径：

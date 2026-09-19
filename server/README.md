@@ -54,7 +54,7 @@ Kuro Game《战场双马尾》v2.2.0 已经停服。这个项目用 **纯 Python
 ## 2. 项目结构
 
 ```
-game_server/
+server/                        （= E:\code\zcsmw\server）
 ├── run.py                     服务端启动入口
 ├── gamesrv/
 │   ├── config.py              端口 / 地址 / 版本号
@@ -83,36 +83,6 @@ game_server/
 │   ├── PermissionHelper.smali 运行时权限申请
 │   ├── ServerLoginRunnable.smali   原生登录回调（绕开 SDK 弹窗）
 │   └── patch_smali.py         打 Java 层登录补丁
-├── tools/                      ★ 工具索引见 tools/README.md
-│   ├── jsc_disasm.py          ★ jsc 反汇编器（SM33.1.1 XDR 字节码）
-│   ├── disasm_func.py         按函数名反汇编
-│   ├── jsc_strings.py         ★ 只扒 atom（标识符）表，定位函数逻辑最快
-│   ├── extract_client_tables.py  ★ 把客户端 table_* 抽成服务端 JSON
-│   ├── csb_dump.py            解析 cocostudio .csb（动画区间 / 帧事件）
-│   ├── gen_opcodes.py         从 Opcodes.h 生成操作码表（产物是 _opcodes_gen.py）
-│   ├── build_apk.py           改 assets + apktool 打包 + 对齐 + 签名
-│   ├── serve.py               服务端守护（run.py 挂了自动拉起）
-│   ├── merge_dex.py           把 smali_classesN 并成单 dex
-│   ├── repl.py                在游戏进程里执行任意 JS
-│   ├── probe.py               重启客户端 + 批量执行 JS
-│   ├── selftest_game.py       不开游戏也能自测业务协议
-│   ├── check_soldier_calc.py  服务端 vs 客户端的军士升级公式对拍
-│   ├── check_devtools.py      调试台自测（静态检查 + 接口全打一遍）
-│   ├── jsd.py                 引擎远程 JS 调试器客户端（断点 / 单步 / 栈 / 求值）
-│   ├── patch_js_debugger.py   把调试器自己的 JS 换成明文并打补丁
-│   ├── bisect_init.py         逐模块二分，找把 JS 主线程卡死的那个
-│   ├── shots.py               连续截图
-│   ├── sdk_strip/             删掉没用的第三方 SDK（详见 4.0）
-│   └── archive/               一次性脚本的历史存档（别再跑，但注释里全是当时的证据链）
-│       ├── analyze.py             扫出游戏代码引用了哪些 SDK 类/方法
-│       ├── gen_stubs.py           据此生成桩类
-│       ├── native_stubs.py        .so 硬依赖的类的桩定义
-│       ├── gen_native_stubs.py    生成原生依赖桩
-│       ├── strip.py               删 smali + 装桩 + 清 manifest + 清 assets/lib
-│       ├── manifest_clean.py      用 ElementTree 删 manifest 组件
-│       ├── so_pairs.py            从 .so 挖 JNI 名字+签名
-│       ├── js_class_refs.py       扫 JS 里 jsb.reflection 调的 Java 类名
-│       └── find_orphans.py        找出宿主 SDK 删掉后变成孤儿的包
 └── docs/
     ├── overview.md            ★ 全景总览（先看这份）
     ├── devtools.md            浏览器调试台（面板说明 + 架构取舍 + 怎么扩展）
@@ -122,6 +92,11 @@ game_server/
     └── reverse-engineering.md 反汇编器原理 + 运行时探测手法
 ```
 
+> 工具脚本**不在** `server/` 下 —— 项目重排后它们在仓库根的 `script/`
+> （`sdk_strip/` 那一套也在 `script/sdk_strip/`），索引见
+> [`../script/README.md`](../script/README.md)。
+> 本文所有命令都**在仓库根 `E:\code\zcsmw` 下执行**，路径按仓库根写。
+
 ---
 
 ## 3. 快速开始
@@ -129,14 +104,14 @@ game_server/
 ### 3.1 起服务端
 
 ```powershell
-cd game_server
-python tools\serve.py     # 守护进程，run.py 挂了会自动拉起（推荐）
+cd E:\code\zcsmw
+python script\serve.py     # 守护进程，run.py 挂了会自动拉起（推荐）
 # 或者前台跑：
-python run.py -v
+python server\run.py -v
 ```
 
 > ⚠️ 别用 `Start-Process python run.py` 直接拉 —— 这样起的子进程会被回收，
-> 表现就是「服务器莫名其妙宕机了」。要么前台跑，要么用 `tools/serve.py`。
+> 表现就是「服务器莫名其妙宕机了」。要么前台跑，要么用 `script/serve.py`。
 
 | 端口  | 作用 | 原来对应 |
 |-------|------|----------|
@@ -157,19 +132,18 @@ python run.py -v
 
 ```powershell
 # 0) 准备：原版 APK、apktool 解包目录、JDK、Android build-tools
-#    路径可用 GS_APK_SRC / GS_APK_DIR / GS_JAVA_HOME / GS_BUILD_TOOLS 覆盖
+#    路径可用 GS_APK_DIR / GS_JAVA_HOME / GS_BUILD_TOOLS 覆盖
 
 # 1) Java 层补丁（只做一次）
-python client\patch_smali.py
+python server\client\patch_smali.py
 
 # 2) 重新编译 dex（只重打 dex，不动资源）
-cd <apktool 解包目录>
-apktool.bat b . --no-apk --no-crunch        # 产物在 <解包目录>\build\apk\classes*.dex
+script\apktool.bat b game --no-apk --no-crunch   # 产物在 game\build\apk\classes*.dex
 
 # 3) 打 URL 补丁 + 注入 patch.js/probe.js + 注入 dex + 重新签名
-cd game_server
-python tools\build_apk.py --host <主机IP>          # 带探针（开发和排障用）
-python tools\build_apk.py --host <主机IP> --no-probe   # 正式包：只带 patch.js
+cd E:\code\zcsmw
+python script\build_apk.py --host <主机IP>          # 带探针（开发和排障用）
+python script\build_apk.py --host <主机IP> --no-probe   # 正式包：只带 patch.js
 
 # 4) 安装
 adb install -r -d E:\code\zcsmw\out\zcsmw-mod-signed.apk
@@ -178,7 +152,7 @@ adb install -r -d E:\code\zcsmw\out\zcsmw-mod-signed.apk
 ### 3.3 不开游戏自测服务端
 
 ```powershell
-python tools\selftest_game.py
+python script\selftest_game.py
 ```
 
 自己按客户端格式打包加密请求直接打服务端，验证「加解密 + 路由 + code=200」。
@@ -203,7 +177,7 @@ http://127.0.0.1:18080/devtools
 | **数据** | 路由清单、`table_*` 反查、`table_dictionary` 文案对照 |
 | **调试器** | ★ **引擎级的远程 JS 调试器**：断点 / 单步 / 调用栈 / 暂停时求值 —— 接上会把游戏真正冻住 |
 
-自测：`python tools\check_devtools.py`。
+自测：`python script\check_devtools.py`。
 细节、架构取舍、以及**怎么给它加面板**见 [`docs/devtools.md`](docs/devtools.md)。
 
 ### 3.5 引擎层的 JS 调试器
@@ -218,15 +192,15 @@ cd E:\code\zcsmw\engine\build
 python enable_js_debugger.py      # 打开它（幂等）
 python fix_js_log.py              # 顺带修「引擎的 JS log() 被 CCLOG 空宏吃掉」
 .\build.ps1 -Abi armeabi
-cd ..\..\game_server
-python tools\patch_js_debugger.py # 调试器自己的 JS 换成明文可改（不用重编引擎）
-python tools\build_apk.py
+cd E:\code\zcsmw
+python script\patch_js_debugger.py # 调试器自己的 JS 换成明文可改（不用重编引擎）
+python script\build_apk.py
 adb install -r -d E:\code\zcsmw\out\zcsmw-mod-signed.apk
 adb forward tcp:5086 tcp:5086     # MuMu 是 NAT 的，要把端口转出来
 
-python tools\jsd.py tabs          # 连得上吗
-python tools\jsd.py repl          # 交互式：断点 / 单步 / 栈 / 求值
-python tools\jsd.py demo probe.js 78
+python script\jsd.py tabs          # 连得上吗
+python script\jsd.py repl          # 交互式：断点 / 单步 / 栈 / 求值
+python script\jsd.py demo probe.js 78
 ```
 
 浏览器里就是调试台的**「调试器」**页签。原理、协议、踩过的四个坑、复现清单：
@@ -247,24 +221,23 @@ python tools\jsd.py demo probe.js 78
 百度 / 微博 / 推送 / Bugly / TalkingData SDK。
 
 ```powershell
-# 0) 先备份！
-copy zcsmw.apk backup\zcsmw-original.apk
+# 0) 原版 APK：仓库里备了一份 —— game\original\zcsmw-original.apk（解包它，别删）
 
 # 1) 现代化（manifest / apktool.yml / 运行时权限）
-python client\modernize.py
+python server\client\modernize.py
 
 # 2) 删掉没用的第三方 SDK（会自动生成桩类 + 清理 manifest）
-python tools\sdk_strip\analyze.py --json tools\sdk_strip\needed.json
-python tools\sdk_strip\strip.py
-python tools\sdk_strip\gen_native_stubs.py
+python script\sdk_strip\analyze.py --json script\sdk_strip\needed.json
+python script\sdk_strip\strip.py
+python script\sdk_strip\gen_native_stubs.py
 
 # 3) 改 assets + apktool 打包 + 签名（一步搞定）
-python tools\build_apk.py --host <主机IP>
+python script\build_apk.py --host <主机IP>
 ```
 
 #### 删掉了什么
 
-`tools/sdk_strip/analyze.py` 的 `STRIP_PREFIXES` 里列了全部要删的包，
+`script/sdk_strip/analyze.py` 的 `STRIP_PREFIXES` 里列了全部要删的包，
 **46.6 MB smali**：
 
 ```
@@ -318,7 +291,7 @@ com/chukong/cocosplay/client/CocosPlayClient
 从 `.so` 的 `.rodata` 里按**相邻字符串**把「方法名 + JNI 签名」挖出来
 （`so_pairs.py`），然后**把所有出现过的重载都定义上** ——
 JNI 只按 (名字, 签名) 查，多定义几个参数列表不同的重载没有副作用。
-见 `tools/sdk_strip/native_stubs.py` + `gen_native_stubs.py`。
+见 `script/sdk_strip/native_stubs.py` + `gen_native_stubs.py`。
 
 **坑 4：游戏的 R 类是动态解析资源 ID 的**
 
@@ -354,7 +327,7 @@ APK 只小了 6.33 MB —— 因为 540 MB 是游戏资源（png/mp3），SDK �
 | `usesCleartextTraffic` | `true`（模拟服是明文 HTTP） |
 | `extractNativeLibs` | `true` |
 | `requestLegacyExternalStorage` | `true` |
-| 运行时权限 | 新增 `client/PermissionHelper.smali`，在 `AppActivity.onCreate` 注入一次申请 |
+| 运行时权限 | 新增 `server/client/PermissionHelper.smali`，在 `AppActivity.onCreate` 注入一次申请 |
 
 > #### ⚠️ targetSdk 必须停在 23，不能再往上提
 >
@@ -402,7 +375,7 @@ APK 只小了 6.33 MB —— 因为 540 MB 是游戏资源（png/mp3），SDK �
 >
 > 想再往上提，只能先把 QuickSDK / 百度 SDK 整套删掉。
 
-`tools/build_apk.py` 的 `DROP_ASSETS` 默认剔除：
+`script/build_apk.py` 的 `DROP_ASSETS` 默认剔除：
 
 ```
 assets/res/adimage/        广告图（广告服务早已下线）
@@ -428,7 +401,7 @@ JS jsb.reflection.callStaticMethod(QuickAdapter, "login")
   -> 登录成功后原生 evalString('quicksdk.sdkLoginCallback(1, "uid", "token")')
 ```
 
-QuickSDK / 百度服务器早就下线，弹窗永远登不进去。`client/patch_smali.py` 把
+QuickSDK / 百度服务器早就下线，弹窗永远登不进去。`server/client/patch_smali.py` 把
 `QuickAdapter.login()` 换成：
 
 ```smali
@@ -444,7 +417,7 @@ QuickSDK / 百度服务器早就下线，弹窗永远登不进去。`client/patc
 .end method
 ```
 
-配套新增 `client/ServerLoginRunnable.smali`，仿照 `AppActivity$6$1`
+配套新增 `server/client/ServerLoginRunnable.smali`，仿照 `AppActivity$6$1`
 （QuickSDK 真正登录成功时的回调）拼出并 eval：
 
 ```js
@@ -453,12 +426,12 @@ quicksdk.sdkLoginCallback(1, "emulator", "emulator-token")
 
 这样点「开始游戏」走的还是游戏自己的原始流程，只是原生登录瞬间成功、弹窗不再出现。
 
-### 4.2 注入的明文 JS：`client/patch.js` + `client/probe.js`
+### 4.2 注入的明文 JS：`server/client/patch.js` + `server/client/probe.js`
 
 明文 JS，通过改 `project.json` 的 `jsList` 注入（jsc 不存在时会回退到明文，实测可行）。
 拆成两个文件：
 
-* **`patch.js` —— 必须的适配**，正式包也要带（`tools/build_apk.py` 默认打包）
+* **`patch.js` —— 必须的适配**，正式包也要带（`script/build_apk.py` 默认打包）
 * **`probe.js` —— 诊断探针**，`--no-probe` 时不打包
 
 `patch.js` 做的事：
@@ -494,7 +467,7 @@ quicksdk.sdkLoginCallback(1, "emulator", "emulator-token")
 
 ### 4.3 其它重定向
 
-`tools/build_apk.py` 会做（全部是**原地等长字节替换**）：
+`script/build_apk.py` 会做（全部是**原地等长字节替换**）：
 
 | 文件 | 替换 |
 |------|------|
@@ -645,10 +618,10 @@ else              cb4AfterLogin(data, null);   // ← 把响应当错误 → 弹
 既然格式固定，就自己写了一个解析器：
 
 ```powershell
-python tools\gen_opcodes.py                        # 从 Opcodes.h 生成操作码表
-python tools\jsc_disasm.py <file.jsc> [起] [止]     # 反汇编
-python tools\disasm_func.py <file.jsc> --list      # 列出所有函数
-python tools\disasm_func.py <file.jsc> cb4AfterLogin
+python script\gen_opcodes.py                        # 从 Opcodes.h 生成操作码表
+python script\jsc_disasm.py <file.jsc> [起] [止]     # 反汇编
+python script\disasm_func.py <file.jsc> --list      # 列出所有函数
+python script\disasm_func.py <file.jsc> cb4AfterLogin
 ```
 
 反汇编出来的 `dataManager.cb4AfterLogin`：
@@ -741,7 +714,7 @@ python tools\disasm_func.py <file.jsc> cb4AfterLogin
 
 1. [ ] **副本 / 关卡（`instance`）** —— 主线任务的条件全是「通关 N 次」，
        没有关卡就没法自然完成。关卡表同样可以抽（`table_level` / `table_chapter`），
-       做法见 `tools/extract_client_tables.py`。
+       做法见 `script/extract_client_tables.py`。
 2. [ ] **扭蛋 / 抽卡** —— 缺 `gachaMasterList` 这类运营配置（客户端表里也没有），
        现在只靠空壳兜底保证不崩。`GUIDE_GACHA_KEY = 1002`（`GACHA_KEYS.GEM`）。
 3. [ ] **培养（天赋）** —— `TalentCenter` 构造抛 `this._talentTypes[v.type] is undefined`。
@@ -753,9 +726,9 @@ python tools\disasm_func.py <file.jsc> cb4AfterLogin
    补法：看对应模块的 `updateByServer` / `*Cb` 读哪些 key：
 
    ```powershell
-   python tools\disasm_func.py <assets>\src\data\rank.jsc updateByServer
-   python tools\jsc_strings.py <assets>\src\data\rank.jsc | findstr /i update
-   python tools\disasm_func.py <assets>\src\manager\datamanager.jsc --list
+   python script\disasm_func.py <assets>\src\data\rank.jsc updateByServer
+   python script\jsc_strings.py <assets>\src\data\rank.jsc | findstr /i update
+   python script\disasm_func.py <assets>\src\manager\datamanager.jsc --list
    ```
 
 6. [ ] `hashKey` / `hmac64` 还没复刻（登录靠单位元绕过；要校验 `etoken` 才需要）

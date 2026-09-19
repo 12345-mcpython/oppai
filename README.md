@@ -96,9 +96,11 @@ houdini（ARM→x86 二进制翻译层）接管，实测会在新手引导那段
 `fault addr 0xdead0000` / `signal 4 (SIGILL)`，且每次寄存器状态完全一致。
 同名文件同时放两个 ABI，真机（ARM）和模拟器（x86）都能跑。
 
-> ⚠️ `build.ps1` **必须是 UTF-8 带 BOM**。Windows PowerShell 5.1 会把无 BOM 的 UTF-8
-> 脚本按 ANSI（中文系统上就是 GBK）读，中文注释直接把脚本读崩，报一大片
-> `Unexpected token`。用编辑器改完记得存成「UTF-8 with BOM」。
+> ⚠️ **所有 `.ps1` 都必须是 UTF-8 带 BOM**（不只是 `build.ps1`）。Windows PowerShell
+> 会把无 BOM 的 UTF-8 脚本按 ANSI（中文系统上就是 GBK）读，中文注释和字符串被误解析、
+> 顺手把引号吃掉，报一大片 `Unexpected token` / `Missing closing '}'`。
+> 最坑的是**解析失败 = 脚本一行都没执行** —— 别把它当成"跑过了但没效果"。
+> 用编辑器改完存成「UTF-8 with BOM」；临时的验证脚本干脆只写 ASCII 最省心。
 
 ---
 

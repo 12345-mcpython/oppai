@@ -39,7 +39,7 @@ python fix_js_log.py                # ⑬ 让引擎自己的 JS log() 在 releas
 所以从来没被调用过。`enable_js_debugger.py` 往 `AppDelegate.cpp` 里插一段无条件调用。
 
 细节、协议、以及「调试器自己的 JS 怎么换成明文来改」见
-`game_server/docs/engine-debug.md`。
+`server/docs/engine-debug.md`。
 
 ## ⑬ 修 `js_log`（`CCLOG` 在 release 里是空宏）
 

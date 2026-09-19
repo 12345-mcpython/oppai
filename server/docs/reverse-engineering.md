@@ -161,11 +161,11 @@ PAT = re.compile(
 ### 1.7 用法
 
 ```powershell
-python tools\gen_opcodes.py                        # 生成操作码表
-python tools\jsc_disasm.py <file.jsc>              # 全量反汇编
-python tools\jsc_disasm.py <file.jsc> 0x100 0x200  # 指定区间
-python tools\disasm_func.py <file.jsc> --list      # 列函数
-python tools\disasm_func.py <file.jsc> initUserData
+python script\gen_opcodes.py                        # 生成操作码表
+python script\jsc_disasm.py <file.jsc>              # 全量反汇编
+python script\jsc_disasm.py <file.jsc> 0x100 0x200  # 指定区间
+python script\disasm_func.py <file.jsc> --list      # 列函数
+python script\disasm_func.py <file.jsc> initUserData
 ```
 
 ---
@@ -188,7 +188,7 @@ GET  <cdn>/hook/poll?data=<lastId>   → {"id":N,"code":"js 表达式"}
 POST <cdn>/hook/result               → {"id":N,"ok":true,"value":"..."}
 ```
 
-宿主机侧用 `tools/repl.py` / `tools/probe.py` 下命令。
+宿主机侧用 `script/repl.py` / `script/probe.py` 下命令。
 
 **两个坑**：
 
@@ -227,7 +227,7 @@ VERPROP .2.2.0  stk=UpdateScene<._startUpdate@.../src/patch/update.js:251:35
 ### 2.6 逐模块二分找死的循环
 
 JS 主线程被死循环卡住时，REPL 也发不出去（探针本身跑在 JS 线程上）。
-`tools/bisect_init.py` 的做法：**每次只构造一个模块，然后立刻发一个 `1+1` 探测**，
+`script/bisect_init.py` 的做法：**每次只构造一个模块，然后立刻发一个 `1+1` 探测**，
 超时就说明上一个模块把主线程跑死了。
 
 这次就是靠它把范围从 31 个模块缩到 0 个（模块构造函数都没问题），
@@ -245,16 +245,16 @@ JS 主线程被死循环卡住时，REPL 也发不出去（探针本身跑在 JS
 
 | 工具 | 用途 |
 |------|------|
-| `tools/jsc_disasm.py` | jsc 反汇编 |
-| `tools/disasm_func.py` | 按函数名反汇编 |
-| `tools/jsc_strings.py` | 只扒 atom（标识符）表，按源码顺序，定位函数逻辑最快的一把 🔪 |
-| `tools/gen_opcodes.py` | 生成操作码表 |
-| `tools/repl.py` | 在游戏进程里执行 JS |
-| `tools/probe.py` | 重启客户端 + 批量执行 + 打日志 |
-| `tools/bisect_init.py` | 逐模块二分找死的循环 |
-| `tools/selftest_game.py` | 不开游戏自测业务协议 |
-| `tools/shots.py` | 连续截图 |
-| `tools/sdk_strip/` | 删掉没用的第三方 SDK（见 README 4.0） |
+| `script/jsc_disasm.py` | jsc 反汇编 |
+| `script/disasm_func.py` | 按函数名反汇编 |
+| `script/jsc_strings.py` | 只扒 atom（标识符）表，按源码顺序，定位函数逻辑最快的一把 🔪 |
+| `script/gen_opcodes.py` | 生成操作码表 |
+| `script/repl.py` | 在游戏进程里执行 JS |
+| `script/probe.py` | 重启客户端 + 批量执行 + 打日志 |
+| `script/bisect_init.py` | 逐模块二分找死的循环 |
+| `script/selftest_game.py` | 不开游戏自测业务协议 |
+| `script/shots.py` | 连续截图 |
+| `script/sdk_strip/` | 删掉没用的第三方 SDK（见 README 4.0） |
 
 > ⚠️ **REPL 一路 504 但游戏明明正常** —— 十有八九是服务端重启过。
 > 客户端探针收命令时会 `if (cmd.id <= replSeq) return;`（防重放），
@@ -264,7 +264,7 @@ JS 主线程被死循环卡住时，REPL 也发不出去（探针本身跑在 JS
 
 ### 3.2 「先扒 atom，再上 REPL」——定位客户端问题最快的两步
 
-`tools/jsc_disasm.py` 只能反汇编**顶层脚本**，真正的业务代码全在嵌套 lambda
+`script/jsc_disasm.py` 只能反汇编**顶层脚本**，真正的业务代码全在嵌套 lambda
 （对象字面量里的方法）里，所以很多时候不如换个思路：
 
 **第一步：扒 atom 表。** SM33 的 XDR 里每个函数脚本自带一组 atom，编码是
@@ -274,11 +274,11 @@ JS 主线程被死循环卡住时，REPL 也发不出去（探针本身跑在 JS
 ```
 
 长度字段是「UTF-16 长度 + 1」，内容却是 ASCII。按这个规则扫一遍就能拿到
-**按源码顺序排的标识符表**（`tools/jsc_strings.py`）：每个函数先是它的参数和
+**按源码顺序排的标识符表**（`script/jsc_strings.py`）：每个函数先是它的参数和
 局部变量名，然后是函数体里按出现顺序用到的属性名/方法名。信息量非常大，例如
 
 ```
-$ python tools\jsc_strings.py zcsmw\assets\src\ui\main\mainlayer.jsc _initModuleButtons
+$ python script\jsc_strings.py zcsmw\assets\src\ui\main\mainlayer.jsc _initModuleButtons
    8664   29  MainLayer<._initModuleButtons     <- 函数（debug name）
    8761   11  mainUiLayer                        <- 局部变量（按声明顺序）
    8776    7  modules
@@ -295,7 +295,7 @@ $ python tools\jsc_strings.py zcsmw\assets\src\ui\main\mainlayer.jsc _initModule
 没发 `moduleState` 时它就是 `undefined`，紧接着 `modules[key]` 抛
 `TypeError: modules is undefined`，主界面黑屏。
 
-**第二步：REPL 验证。** 猜测只有落到运行时才算数（`tools/repl.py`），
+**第二步：REPL 验证。** 猜测只有落到运行时才算数（`script/repl.py`），
 而且可以直接 `new Xxx(data)` 试各种数据形状，几秒钟就能试出客户端要的字段结构
 （比如 `TalentCenter` 要的是「天赋类型 -> 当前天赋 key」的平铺映射，
 不是嵌套结构）。
@@ -314,10 +314,10 @@ uiLayoutManager.init / player.initModuleState / initXgNotifications`。
 | `guideManager.init()` | 引导状态是默认值，引导乱走 |
 | 某个数据模块的构造 | `dataManager.xxx` 是半成品，点进对应界面才炸 |
 
-排查办法：`client/probe.js` 的 `hookInitUserData` 会把异常和 stack 打出来，
+排查办法：`server/client/probe.js` 的 `hookInitUserData` 会把异常和 stack 打出来，
 `hookInterfaceTrace` 会把这一段调用逐个打 `CALL xxx`，一眼就能看出死在哪一步。
 
-`client/patch.js` 里的 `INITUSERDATA-GUARD` 是正式版兜底：无论上面死在哪一步，
+`server/client/patch.js` 里的 `INITUSERDATA-GUARD` 是正式版兜底：无论上面死在哪一步，
 都保证 `player._moduleState` 建出来，至少不会黑屏。
 
 
@@ -335,7 +335,7 @@ adb shell dumpsys window windows | findstr "Window # mFrame ty="     # 有没有
 #   空白帧通常 <9KB
 
 # 3) 列出 JS 场景里「可见 + opacity>0 + 有正在跑的动作」的节点
-python tools\repl.py "(function(){var out=[];function w(n,d,p){...}...})()"
+python script\repl.py "(function(){var out=[];function w(n,d,p){...}...})()"
 
 # 4) 反查节点是哪个 JS 类
 for (var k in window) if (typeof window[k]==='function' && node instanceof window[k]) ...

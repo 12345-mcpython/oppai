@@ -1,10 +1,10 @@
 # jsc → js 反编译
 
 ```
-python tools\jsc_decompile.py <file.jsc>            # 打到 stdout
-python tools\jsc_decompile.py <file.jsc> -o out.js
-python tools\jsc_decompile.py --filter soldier      # 批量（路径子串）
-python tools\jsc_decompile.py --check               # 全部反编译 + node --check 验语法
+python script\jsc_decompile.py <file.jsc>            # 打到 stdout
+python script\jsc_decompile.py <file.jsc> -o out.js
+python script\jsc_decompile.py --filter soldier      # 批量（路径子串）
+python script\jsc_decompile.py --check               # 全部反编译 + node --check 验语法
 ```
 
 ## 结果
@@ -19,7 +19,7 @@ python tools\jsc_decompile.py --check               # 全部反编译 + node --c
 
 ## 它是怎么工作的
 
-三层，都建立在 `tools/jsc_disasm.py` 之上（XDR 解析 + 脚本树 + atom 表）：
+三层，都建立在 `script/jsc_disasm.py` 之上（XDR 解析 + 脚本树 + atom 表）：
 
 1. **解码** —— 字节码 → `Ins`（操作数、跳转目标、atom / const / 对象索引）。
    SM 的 XDR 立即数一律**大端**。
@@ -87,7 +87,7 @@ TEST:
 指令长度是 4（1 opcode + 3 操作数），`JSOP_GETLOCAL` 用 `GetLocalNo(pc) = GET_UINT24(pc)` 取。
 早先反汇编器按 u16 读，**所有局部变量的槽号都被解成 0**
 （槽 3 编码成 `00 00 03`，读前两字节就是 0），反汇编和反编译全错。
-`tools/jsc_disasm.py` 和 `tools/jsc_decompile.py` 都已修。
+`script/jsc_disasm.py` 和 `script/jsc_decompile.py` 都已修。
 
 **② 局部变量槽号里不含参数。**
 

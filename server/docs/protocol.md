@@ -1,7 +1,7 @@
 # 协议细节
 
-所有结论都来自两种手段：**jsc 反汇编**（`tools/jsc_disasm.py`）和
-**运行时观察**（`client/hook.js` 的探针日志 / REPL）。
+所有结论都来自两种手段：**jsc 反汇编**（`script/jsc_disasm.py`）和
+**运行时观察**（`server/client/hook.js` 的探针日志 / REPL）。
 
 ---
 
@@ -239,7 +239,7 @@ body = base64(" " + sessionId)  +  base64(desEncode(secret, {route, msg, reqId})
 看到的现象是服务端 `unpack_request` 解密失败，客户端弹
 `温馨提示 {"code":1,"msg":"bad request"}`。
 
-这段以前一直没被发现，因为 `client/probe.js` 早先的版本**把 `server.request` 整个
+这段以前一直没被发现，因为 `server/client/probe.js` 早先的版本**把 `server.request` 整个
 重写了**（自己拿 `httpc` 重发），压根不带这段前缀；探针改成「只包一层」之后真实
 格式才暴露出来。
 
@@ -271,7 +271,7 @@ server.request('player.getdata')  ->  {player: {...}}
 后果是**所有「服务端推数据给客户端」都失效** —— 最直观的表现是主线任务领奖成功、
 奖励也发了，但列表不刷新（改服务端怎么改都没用）。
 
-客户端 `client/patch.js` 里的 `RESP-DISPATCH` 自己补了一层：包住 `server.request`，
+客户端 `server/client/patch.js` 里的 `RESP-DISPATCH` 自己补了一层：包住 `server.request`，
 成功响应里出现已知模块 key 就先 `updateByServer()`，再走原来的回调
 （顺序关键：回调里会立刻重绘列表）。
 
@@ -476,7 +476,7 @@ adb shell dumpsys activity top | findstr "ProgressBar Dialog GLSurfaceView"
 #    -> 只有 Cocos2dxGLSurfaceView + Cocos2dxEditText，Java 层是干净的
 
 # 2) 扫 JS 场景里所有「可见 + opacity>0 + 有正在跑的动作」的节点
-python tools\repl.py "(function(){var out=[];function w(n,d,p){...}...})()"
+python script\repl.py "(function(){var out=[];function w(n,d,p){...}...})()"
 #    -> TopLayer(时间轴) 和 NamingLayer(光标特效)，其余都是 opacity=0 的遮罩
 
 # 3) 用 instanceof 反查节点是哪个 JS 类
@@ -544,7 +544,7 @@ for (var k in window) if (typeof window[k]==='function' && node instanceof windo
 
 `table_quest` / `table_quest_condition` / `table_quest_reward` 编译在
 `assets/src/table/tablequest*.jsc` 里，服务端没有原始文件。
-用 `tools/extract_client_tables.py` 让游戏自己把要用的字段吐出来，
+用 `script/extract_client_tables.py` 让游戏自己把要用的字段吐出来，
 存成 `gamesrv/data/table_quest.json`（508 条，只留 type/rank/activate_lv/
 activate_quest_key/条件个数/达成值/schedule key）。客户端换版本重跑一次即可。
 
@@ -763,7 +763,7 @@ char.sellsoldiers       {materials: [军士id, ...]}
 材料会被**真的吃掉**：客户端 `requestUpgradeCb` 立刻调 `character.removeSoldier(materials)`，
 服务端不删的话重登材料就复活了。
 
-数值来源（`table_soldier` 系列表，见 `tools/extract_client_tables.py` 的 `SOLDIER_JS`）：
+数值来源（`table_soldier` 系列表，见 `script/extract_client_tables.py` 的 `SOLDIER_JS`）：
 
 ```
 gainExp   += table_soldier_to_exp[材料.lv]["quality_<品质>_<星级>"]
@@ -782,5 +782,5 @@ while (true) {
 等级上限 `table_soldier_lv_limit[星级]["quality_<品质>"]`（1 星 30、2 星 40 … 5 星 70），
 星级上限 / 技能上限在 `table_soldier_constant` 的 `max_star_<品质>` / `max_skill_lv_<品质>`。
 
-对齐验证：`python tools/check_soldier_calc.py`（44 个用例，和服务端算的逐字段比对）。
-链路验证：`python tools/selftest_game.py`（喂两个材料 -> 重登确认等级落盘、材料没复活）。
+对齐验证：`python script/check_soldier_calc.py`（44 个用例，和服务端算的逐字段比对）。
+链路验证：`python script/selftest_game.py`（喂两个材料 -> 重登确认等级落盘、材料没复活）。

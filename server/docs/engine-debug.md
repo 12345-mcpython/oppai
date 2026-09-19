@@ -109,8 +109,8 @@ bool JSBDebug_enterNestedEventLoop(...) {
 cd E:\code\zcsmw\engine\build
 python enable_js_debugger.py      # 往 AppDelegate.cpp 插 enableDebugger()，幂等
 .\build.ps1 -Abi armeabi          # 重编 libcocos2djs.so
-cd ..\..\game_server
-python tools\build_apk.py && adb install -r -d E:\code\zcsmw\out\zcsmw-mod-signed.apk
+cd E:\code\zcsmw
+python script\build_apk.py && adb install -r -d E:\code\zcsmw\out\zcsmw-mod-signed.apk
 adb forward tcp:5086 tcp:5086     # MuMu 是 NAT 的，要把端口转出来
 ```
 
@@ -149,7 +149,7 @@ if (!script) { ...JS::Compile(cx, obj, op, jsFileContent.c_str(), ...); }  // b)
 所以把 `assets/script/jsb_debugger.js` 和 `assets/script/debugger/**` 换成明文、
 删掉对应的 `.jsc`，**调试器本身就成了可改的源码**。
 
-`tools\patch_js_debugger.py` 干的就是这件事（顺便打下面几个补丁），幂等。
+`script\patch_js_debugger.py` 干的就是这件事（顺便打下面几个补丁），幂等。
 
 > 这条对别的脚本也成立：任何 `.jsc` 旁边放一份同名 `.js`、把 `.jsc` 删掉，引擎就改读明文。
 > 这是「不重编引擎就能改客户端逻辑」的口子 —— 项目里的 `patch.js` / `probe.js` 本来就是靠它生效的。
@@ -157,10 +157,10 @@ if (!script) { ...JS::Compile(cx, obj, op, jsFileContent.c_str(), ...); }  // b)
 ### 2.3 客户端
 
 ```powershell
-python tools\jsd.py tabs                  # 连不连得上
-python tools\jsd.py sources charcenter    # 列脚本
-python tools\jsd.py repl                  # 交互式
-python tools\jsd.py demo probe.js 78      # 一条龙演示
+python script\jsd.py tabs                  # 连不连得上
+python script\jsd.py sources charcenter    # 列脚本
+python script\jsd.py repl                  # 交互式
+python script\jsd.py demo probe.js 78      # 一条龙演示
 ```
 
 浏览器里则是调试台的 **「调试器」** 页签（`http://127.0.0.1:18080/devtools`）。
@@ -224,7 +224,7 @@ Stack: OA_grip@assets/script/debugger/actors/script.js:2714:21
 
 也就是「断点能命中，但拿不到调用栈」。
 
-→ `tools\patch_js_debugger.py` 里兜一下（函数不存在就给保守值）。
+→ `script\patch_js_debugger.py` 里兜一下（函数不存在就给保守值）。
 
 ### 坑 4：`interrupt` 停下来是**没有栈帧**的
 
@@ -239,7 +239,7 @@ Stack: OA_grip@assets/script/debugger/actors/script.js:2714:21
 
 ## 4. 实测长什么样
 
-`python tools\jsd.py demo probe.js 78`：
+`python script\jsd.py demo probe.js 78`：
 
 ```
 1) attach（这一步会把游戏冻住）
@@ -288,7 +288,7 @@ Stack: OA_grip@assets/script/debugger/actors/script.js:2714:21
 
 * **源码正文取不到**。`{"to":<source>,"type":"source"}` 会去 fetch `file://F:\...`，
   失败返回 `loadSourceError`。`.jsc` 里没留源码（所以还是得靠
-  `tools/jsc_disasm.py` / `tools/jsc_strings.py` 反汇编）。
+  `script/jsc_disasm.py` / `script/jsc_strings.py` 反汇编）。
   例外是我们自己发的明文 `.js`（`patch.js` / `probe.js` / 调试器自己）—— 那些是有的，
   所以行号可以直接对着源文件写。
 * **`.jsc` 的行号要猜**。断点位置是 `{url, line}`，而游戏脚本的源码我们看不到。
@@ -303,8 +303,8 @@ Stack: OA_grip@assets/script/debugger/actors/script.js:2714:21
 
 | 层 | 工具 | 能干什么 | 局限 |
 |---|---|---|---|
-| **引擎层**（本文） | `/devtools` 的「调试器」页签、`tools/jsd.py` | **断点 / 单步 / 调用栈 / 暂停时求值**，游戏真的停住 | 一次只能接一个客户端；接上就会把游戏冻住 |
-| 客户端 JS 层 | `/devtools` 的「控制台」页签、`tools/repl.py` | 在游戏进程里跑任意 JS，**不暂停** | 只能求值，不能停、不能单步、没有栈 |
+| **引擎层**（本文） | `/devtools` 的「调试器」页签、`script/jsd.py` | **断点 / 单步 / 调用栈 / 暂停时求值**，游戏真的停住 | 一次只能接一个客户端；接上就会把游戏冻住 |
+| 客户端 JS 层 | `/devtools` 的「控制台」页签、`script/repl.py` | 在游戏进程里跑任意 JS，**不暂停** | 只能求值，不能停、不能单步、没有栈 |
 | 服务端 | `/devtools` 的「流量」「玩家」「日志」「数据」 | 请求/回包、存档、作弊、日志 | 看不到客户端内部 |
 
 三者共用同一个 `/devtools` 页面：**控制台**用来「顺手试一下」，
@@ -322,23 +322,23 @@ python enable_js_debugger.py
 python fix_js_log.py
 .\build.ps1 -Abi armeabi          # 注意 build.ps1 必须是 UTF-8 **带 BOM**
                                    #（Windows PowerShell 5.1 会把无 BOM 的 UTF-8 当 ANSI，中文注释直接读崩）
-cd ..\..
-copy move\build\oppai-engine\libs\armeabi\libcocos2djs.so zcsmw\lib\armeabi\libcocos2djs.so
+cd E:\code\zcsmw
+# 引擎产物 .so 拷进解包目录（build.ps1 -Engine 会自动做这一步）
+copy engine\build\oppai-engine\libs\armeabi\libcocos2djs.so game\lib\armeabi\libcocos2djs.so
 
 # 2. 调试器自己的 JS 换成明文 + 打四个补丁
-cd game_server
-python tools\patch_js_debugger.py
+python script\patch_js_debugger.py
 
 # 3. 打包安装 + 端口转发
-python tools\build_apk.py
+python script\build_apk.py
 adb install -r -d E:\code\zcsmw\out\zcsmw-mod-signed.apk
 adb shell am start -n com.cm.zcsmw.baidu/org.cocos2dx.javascript.SplashActivity
 adb forward tcp:5086 tcp:5086
 
 # 4. 验证
 adb logcat -d -v brief | findstr "oppai.*Debugger"     # 应该有 enableDebugger port=5086
-python tools\jsd.py tabs
-python tools\jsd.py demo probe.js 78
+python script\jsd.py tabs
+python script\jsd.py demo probe.js 78
 ```
 
 四个坑对应的脚本：
@@ -347,5 +347,5 @@ python tools\jsd.py demo probe.js 78
 |---|---|
 | 调试器没打开 | `move\build\enable_js_debugger.py` |
 | `log()` 被 `CCLOG` 吃掉 | `move\build\fix_js_log.py` |
-| `sources` 空（通知淹没回复） | `tools\patch_js_debugger.py`（客户端改法在 `gamesrv/jsdlink.py`） |
-| `frames` 报 `isExtensible` | `tools\patch_js_debugger.py` |
+| `sources` 空（通知淹没回复） | `script\patch_js_debugger.py`（客户端改法在 `gamesrv/jsdlink.py`） |
+| `frames` 报 `isExtensible` | `script\patch_js_debugger.py` |
