@@ -40,8 +40,8 @@
 | 日常 / 成就任务 | ⚠️ | 数据是空的（只做了主线，`type=2`） |
 | 开场/引导视频 | ✅ | 视频层清理 + 幂等守卫 |
 | 扭蛋 / 抽卡 | ⚠️ | 缺运营配置（`gachaMasterList`），靠兜底不让它崩 |
-| 培养（天赋） | ⚠️ | `TalentCenter` 构造抛异常（被容错吞掉），界面大概率是空的 |
-| 背包 / 道具消耗 | ⚠️ | `data.item` 还是硬编码的平铺映射，买东西/消耗**不落盘** |
+| **培养（天赋）** | ✅ | 三条课题（101 军士 / 102 机甲 / 103 克制），`player.selecttalent` / `player.upgradetalent` 落盘、升级真扣材料。⚠️ 入口是编成→培养里的「**萌源增幅**」，要**通关 3-6** 才解锁（`table_function_open[100014].unlock_level_key = "100316"`）；103 还要指挥部 40 级 |
+| 背包 / 道具消耗 | ✅ | `gamesrv/items.py` + 存档里的 `items`；买东西 / 抽卡 / 培养的消耗都真的扣、重登不回退 |
 | 排行榜 / 交易所 / 好友 Boss 等 | ❌ | 路由只回空 data（stub） |
 
 **"能点但没内容"** 的典型原因就是上面这些数据缺口 —— 客户端不会崩，只是列表空。
@@ -218,6 +218,8 @@ vanilla 不传参 → 游戏代码 `function (eventName) { if (/began\d/.test(ev
 | `console.log('a', b)` 抛 `js_console_log : wrong number of arguments` | 原生 `console.log` **只接受一个参数** | 自己 `[a, b].join(' ')` |
 | Java 层退出确认弹窗**文字是乱码**（一片"盒子问号"，偶尔漏出正常汉字） | **官方包自带的**：原版 `classes2.dex` 里这 4 个串本来就有 26 个 U+FFFD（同一个 dex 里别的「确定」「取消」是正常 UTF-8），字节已被替换符抹掉 | `patch_smali.py` → `patch_exit_dialog()` |
 | 退出弹窗**点「确定」没反应**（「取消」正常） | `Sdk.exit()` 是 `sdk_strip/gen_stubs.py` 生成的**空桩**，按钮调它等于没调 | `patch_smali.py` → `patch_sdk_exit()` |
+| 关卡列表**不显示通关**、章节星级恒为 0；按通关解锁的功能（如「萌源增幅」）**永远锁着** | 登录包里 `instance` 被 `_module_stubs` 的桩覆盖成 `{"levels": []}` —— `data.update()` 排在真实进度**之后**，把整块顶掉。客户端 1142 个 Level 全停在 `_starMark = -1` | `agent.get_login_data` / `_module_stubs`（**桩里不要再出现 `instance`**）—— 见 §6.2 |
+| 用调试台「全部三星通关」作弊、甚至**重登都不生效** | 同一个根因：服务端存档早写对了，但**进度从没发到客户端**。客户端只在登录那一刻读一次关卡，所以"重登"也救不了没发出去的数据 | 同上 |
 
 ### 6.1 SDK 桩里的「死键」——一类很容易误判成 JS 层 bug 的问题
 
@@ -242,7 +244,39 @@ grep -rn "Lcom/quicksdk/Sdk;->exit(Landroid/app/Activity;)V" game\smali
 > 和 `$12$1` 两处，所以把桩改成"真的退出"是安全的；换一个被到处调的桩
 > （比如 `init` / `onResume`）就可能把启动流程直接搞崩。
 
+### 6.2 桩数据把真实数据**覆盖掉** —— 拼包顺序坑
+
+§6.1 讲的是桩**没实现**（死键）；这一条是桩**实现了、但把真数据顶掉**，更隐蔽：
+接口返回 200、字段名也对，只是值是空的 —— 客户端不崩，只是"什么都没发生"。
+
+`get_login_data` 的写法是：
+
+    data = {..., "instance": instance.login_block(player)}   # 真实关卡进度（1142 关）
+    data.update(_module_stubs(player))                       # 把桩并进去
+
+`dict.update()` **只覆盖、不合并**。而 `_module_stubs` 早期返回的第一项就是
+`"instance": {"levels": []}` —— 于是精心拼好的真进度**在同一个函数里当场被丢掉**，
+客户端拿到的 `instance.levels` 是一个空**数组**。
+
+后果链条（这就是「萌源增幅」一直锁着的真正原因）：
+
+    instance.levels = []  →  Instance._updateLevels() 一个都没更新
+                          →  1142 个 Level 全停在 _starMark = -1
+                          →  getStarsCount() 返回 -1
+                          →  layerjumpmanager.checkLevel() 要求 > 0 → 永远不过
+
+**判据**：同一份响应里既有"真数据"又有"桩数据"、且两边可能撞 key 时，
+必须确认 `update` 的方向和顺序；桩只该提供**真数据没有的** key。
+
+**排查姿势**：直接调 handler 看拼出来的包，别猜（也不用起客户端）——
+
+```powershell
+python -c "import sys; sys.path.insert(0,'server'); from gamesrv import handlers; handlers.load_all(); from gamesrv.handlers import agent; d=agent.get_login_data({'info':{'account':'test'}},{},1)['data']; print(type(d['instance']['levels']).__name__, len(d['instance']['levels']))"
+# 修之前 -> list 0     修之后 -> dict 1142
+```
+
 ---
+
 
 ## 7. 现状与待办
 
@@ -266,20 +300,18 @@ grep -rn "Lcom/quicksdk/Sdk;->exit(Landroid/app/Activity;)V" game\smali
 - [x] 主线任务（窗口推进 + 领奖 + 刷新）
 - [x] Java 层退出确认弹窗：官方包自带乱码文案 → 换成正常中文；空桩 `Sdk.exit()` → 软退
       （`finish`，回桌面但进程进 cached，不留 signal 9）——见 §6.1
+- [x] **天赋（培养）**：三条课题 + `player.selecttalent` / `player.upgradetalent`，
+      落盘、升级真扣材料（`table_talent_upgrade` 的三张表进了 `gamesrv/data/`）。
+      顺带修掉「登录包 `instance` 被桩覆盖」—— 那个 bug **把整个关卡进度吞掉了**，
+      不只是天赋，见 §6.2
 - [x] 文档：协议 / 逆向手法 / 打包逻辑 / 调试台 / 引擎调试 / 本总览
 
 ### 待办（按卡点排序）
 
 1. **扭蛋 / 抽卡** —— 缺 `gachaMasterList` 运营配置；现在只保证不崩。
    `GUIDE_GACHA_KEY = 1002`（`GACHA_KEYS.GEM`）。
-2. **背包 / 道具要落盘** —— `data.item` 现在是 `agent._module_stubs` 里硬编码的
-   平铺映射，所以抽卡消耗、商店购买、培养花掉的萌钞都**不会真的扣**。
-   要先在 `store` 里给玩家加一份 `items`，再把 `_module_stubs` 改成读它。
-3. **培养（天赋）** —— `TalentCenter` 构造抛 `this._talentTypes[v.type] is undefined`，
-   已试过 7~8 种形状都没在 REPL 里复现，怀疑 `initUserData` 传进去的不是 `data.talents`，
-   需要在探针里把构造参数打出来再登一次才能确定。
-4. **日常 / 成就任务** —— 只做了 `type=2`（主线）；日常 246 条 / 成就 91 条。
-5. **战果报告的「获得物资」还是空的** —— 服务端已经把通关奖励算出来了
+2. **日常 / 成就任务** —— 只做了 `type=2`（主线）；日常 246 条 / 成就 91 条。
+3. **战果报告的「获得物资」还是空的** —— 服务端已经把通关奖励算出来了
    （`level.dropReward / firstComplete / appraise / levelReward`，日志里能看到
    `掉落={'100002': 593} 首通={'100001': 20} exp=60`），但客户端面板读的不是这里：
 
@@ -290,16 +322,29 @@ grep -rn "Lcom/quicksdk/Sdk;->exit(Landroid/app/Activity;)V" game\smali
    下一步要么找出原版是从哪儿补进去的，要么在 patch.js 里包一层
    `showCb` 的入参（把服务端回来的奖励塞进 `args`）。
 
-6. **助战（好友支援）列表渲染不出来** —— 服务端已经能正确回 NPC 名单
+4. **助战（好友支援）列表渲染不出来** —— 服务端已经能正确回 NPC 名单
    （`friendsupport.getrecommendsoldiers` -> 20 个 `npcId`，客户端
    `FriendSupport._recommendList` 里也确实收到了 20 个），
    但 `SupportChoiceLayer` 那边渲染不出来。已确认的：
    `setSupportList()` 手动调是好的（会往 `_pushAsynList` 里塞 18 个
    `{item, innSize, index}`），所以卡在「层的 `_recommendList` 是 0」。
    **不影响战斗**（这个弹窗是可选的好友助战）。
-7. **其余 stub 路由** —— `rank.*` / `exchange.*` / `boss.*` / `shop.*` / `mail.*` 等，
-   照着对应模块的 `updateByServer` 反汇编补 key 即可。
-8. `hashKey` / `hmac64` 还没复刻（登录靠单位元绕过）；自研 DH 的完整算法也没还原。
+5. **其余未实现的 route** —— `python script/route_gap.py --static` 能列出全部。
+   当前：客户端静态候选 **161** 条，服务端 **57** 条，缺 **114** 条。按单机价值排：
+
+   | 命名空间 | 缺 | 说明 |
+   |---|---|---|
+   | `equipment.*` | 7 | 装备（穿脱/升级/分解），完全没有；能复用 `items` 层 |
+   | `favor.*` | 5 | 宿舍好感度（送礼/换装/换背景） |
+   | `exchange.*` | 6 | 黑市交易所（`checkorder` 已实现） |
+   | `detect.*` | 6 | 侦查 |
+   | `diary.*` / `sign.*` / `subareaachievement.*` | 1+1+1 | 零散领奖类，工作量小 |
+   | `society.*` / `societyclg.*` | 33+6 | 军团——单机价值低、量最大 |
+   | `friend.*` / `medal.*` / `arena.*` | 9+9+4 | 社交类，同上 |
+
+   ⚠️ **`rank.*` / `boss.getbosslist` 这类"回空表"不算缺口**：私服没有榜、没有好友，
+   回空才是对的（见 `handlers/rank.py` 的论证），别当成没实现去"补"。
+6. `hashKey` / `hmac64` 还没复刻（登录靠单位元绕过）；自研 DH 的完整算法也没还原。
 
 ---
 
