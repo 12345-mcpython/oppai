@@ -829,21 +829,33 @@ def build(service) -> None:
             limit = 500
         limit = max(1, min(limit, devbus.RING_MAX))
 
-        if timeout > 0:
-            events = devbus.bus.wait(since, timeout)
+        latest = devbus.bus.latest()
+        # ⚠️⚠️ **前端的游标可能比服务端还超前**：游标是上一次服务端进程留下的
+        # （或者 `/api/events/clear` 清过缓冲），换进程后 `_seq` 从 1 重新数，
+        # 于是前端抱着 `since=570` 一直问，而服务端最新才 298 ——
+        # 永远是「没有新事件」，面板一直是空的（表现：控制台没东西、流量页不动）。
+        #
+        # 这里**必须回退到 0 重放整个缓冲**。以前写的是 `max(since, latest)`，
+        # 本意是「别让游标往回走」，结果是把这个永久瞎掉的状态**焊死**了。
+        stale = since > latest
+
+        if stale:
+            events = devbus.bus.since(0, limit=limit)
+        elif timeout > 0:
+            # wait() 不带 limit（它要等，不适合再截），这里自己截
+            events = devbus.bus.wait(since, timeout)[:limit]
         else:
             events = devbus.bus.since(since, limit=limit)
 
-        # 游标语义（前端据此推进 since）：
-        #   有事件  -> 最后一条的 seq（这样被 limit 截断时下一轮能接着拿）
-        #   没事件  -> 服务端当前最新 seq
-        # 第二种是关键：环形缓冲满了之后旧事件会被丢掉，如果这里回 since，
-        # 前端会卡在一个永远拿不到事件的区间里变成忙循环。
-        cursor = events[-1]["seq"] if events else max(since, devbus.bus.latest())
+        # 游标语义（前端 `state.since = data.seq` 是**无条件采纳**的）：
+        #   有事件  -> 最后一条的 seq（被 limit 截断时下一轮接着拿）
+        #   没事件  -> 服务端当前最新 seq（**不能**是 max(since, latest)）
+        cursor = events[-1]["seq"] if events else latest
         return _reply({
             "ok": True,
             "seq": cursor,
-            "latest": devbus.bus.latest(),
+            "latest": latest,
+            "reset": stale,
             "events": events,
             "stats": devbus.bus.stats(),
         })

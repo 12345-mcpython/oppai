@@ -212,6 +212,16 @@ def build_cdn(service):
             return Response(504, {"ok": False, "value": "timeout"})
         return Response(200, result)
 
+    @router.any("/favicon.ico")
+    def _favicon(req):
+        """浏览器会一直要它，回个空的 204 就完事。
+
+        ⚠️ 以前落到 fallback，每次打一条 `CDN 未处理请求: GET /favicon.ico` ——
+        而 devtools 的**日志面板显示的就是这些服务端日志**。页面卡住/重连时浏览器
+        请求得很勤，日志面板就被自己的 favicon 警告刷屏，看着像"别的东西也坏了"。
+        """
+        return Response(204, b"", content_type="image/x-icon")
+
     @router.set_fallback
     def _catch(req):
         log.warning("CDN 未处理请求: %s %s", req.method, req.raw_path)

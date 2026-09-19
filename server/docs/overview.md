@@ -400,6 +400,46 @@ logcat 里只有一行 `JS ERROR: TypeError: config is undefined @ equipmentstre
 读了（`favor.favors`）、没读（`favor.isNeedAsstEff`，§6.5）、
 读进去但立刻丢掉（`favorevent`，本节）。
 
+### 6.9 调试台自己也会坏，而且症状很像「游戏挂了」
+
+现象：**控制台页里没有东西、流量页也不再动了**，`/devtools/api/events?...`
+那条长轮询要等满 25 秒才回来。看着像服务端卡了，其实是两个独立 bug：
+
+**① 长轮询的游标不能只往前推。** 前端的 `state.since = data.seq` 是**无条件采纳**的，
+而服务端老代码回的是
+
+    cursor = events[-1]["seq"] if events else max(since, latest)
+
+`max(since, latest)` 的注释写的是「别让前端卡在永远拿不到事件的区间里」，
+但它恰好**把这个状态焊死了**：服务端重启后 `_seq` 从 1 重新数，前端还抱着
+上一次进程的 `since=570`，而 `latest` 才 298 —— `max(570, 298) = 570`，
+于是永远问 570、永远答「没有新事件」，面板永久空白。
+
+正确做法是**服务端认得出「游标超前」并回退到 0 重放整个缓冲**，而且**立刻返回**
+（不能还把 25 秒的长轮询等满）：
+
+    stale = since > latest
+    events = bus.since(0, limit) if stale else ...
+    cursor = events[-1]["seq"] if events else latest      # ← 不再 max(since, ...)
+
+**② 单条日志 131KB，浏览器渲染直接卡死。** 客户端探针把**整个登录响应** dump 成 hex：
+
+    CRYPT base64Decode(b64len=131136 hex=436b794f4e4a7276...)
+
+一条 131KB × 一次 2000 条 → 标签页卡住。修法是入库前统一过 `devbus._clip()`：
+字符串按 kind 截断（日志/流量 4000，控制台 20000 —— 那是人主动要看的输出），
+数组封顶 100 项，被截的字段上打 `clipped` 标记。
+
+**③ `/favicon.ico` 落到 fallback，于是日志面板自己刷自己。**
+它每次请求都打一条 `CDN 未处理请求: GET /favicon.ico` warning，而那条 warning
+**就显示在 devtools 的日志面板里**；页面卡住时浏览器请求得特别勤，
+于是「日志面板被自己的 favicon 警告刷屏」——看着像别的东西也坏了。
+现在直接回 204。
+
+教训：**调试工具自己出问题时的现象，会和被调试对象出问题的现象长得一模一样**
+（都是"页面不动了"）。所以它也必须有自测 —— 见
+`script/check_devtools.py` 的 `event_stream_checks()`（超前游标 / 字段长度 / favicon）。
+
 ---
 
 

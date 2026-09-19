@@ -154,6 +154,10 @@ async function pump() {
     try {
       const data = await api('/api/events?since=' + state.since + '&timeout=25&limit=2000');
       if (!data || !data.ok) throw new Error((data && data.error) || '事件接口异常');
+      // ⚠️ `data.reset` = 我们的游标比服务端还超前（服务端重启过 / 缓冲被清过）。
+      // 服务端会从 0 重放整个缓冲，先把面板清空，否则重放的历史会和现有内容交错。
+      // **必须无条件采纳 `data.seq`** —— 服务端保证它不会超前。
+      if (data.reset) resetPanels();
       state.since = data.seq;
       for (const ev of data.events || []) routeEvent(ev);
       if (data.stats) updateStats(data.stats);
@@ -162,6 +166,18 @@ async function pump() {
       await sleep(1500);
     }
   }
+}
+
+function resetPanels() {
+  toast('服务端事件流已重置，重新同步…', 'ok');
+  // 三个面板都要清：日志、流量、控制台。state 里的环形缓冲也一起清，
+  // 否则后面的「清空/重绘/过滤」还会拿旧数据。
+  state.logs = [];
+  state.traffic = [];
+  $('lg-out').textContent = '';
+  TR_LIST().textContent = '';
+  $('tr-count').textContent = '0 条';
+  redrawLogs();
 }
 
 function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }

@@ -34,6 +34,59 @@ import time
 # 2000 条够翻很久了，再多就只是吃内存。
 RING_MAX = 2000
 
+# 单条事件里，单个字符串最多留多少字符。
+#
+# ⚠️⚠️ **这个不是省内存，是防浏览器卡死**。踩过一次：客户端探针会把整个
+# 登录响应 dump 成 hex 打进日志 ——
+#
+#     CRYPT base64Decode(b64len=131136 hex=436b794f4e4a7276...)
+#
+# 一条就 131KB。日志面板一次性收到 2000 条这种行直接把标签页卡住，
+# 看起来就是「控制台页里没有东西、流量页也不再动了」。
+# 截断之后仍然看得出是什么，只是看不到全文。
+MAX_TEXT = 4000
+
+# 控制台（`/api/console` / 浏览器控制台 / repl.py）的结果给宽得多 ——
+# 那是人**主动要看**的输出（`JSON.stringify(某个大对象)`），截到 4000 会很难用，
+# 而它是单条、不会像日志那样每帧刷。
+MAX_TEXT_CONSOLE = 20000
+
+# 按 kind 覆盖上面的默认上限
+KIND_TEXT_LIMIT = {"console": MAX_TEXT_CONSOLE}
+
+# 数组最多留几项（`traffic` 事件的 `res.data` 里可能有几百项列表）。
+MAX_LIST = 100
+
+
+def _clip(obj, limit: int = MAX_TEXT):
+    """把事件里超长的字符串 / 超长的数组截掉。返回 (截断后的对象, 截了几个)。
+
+    只动展示用的字段（`line` / `msg` / `res` …），**不影响业务数据** ——
+    事件总线只喂调试台，存档和回包本身走的是各自的路。
+    """
+    if isinstance(obj, str):
+        if len(obj) > limit:
+            return obj[:limit] + "…(截断，原长 %d)" % len(obj), 1
+        return obj, 0
+    if isinstance(obj, dict):
+        out, n = {}, 0
+        for k, v in obj.items():
+            nv, c = _clip(v, limit)
+            out[k] = nv
+            n += c
+        return out, n
+    if isinstance(obj, (list, tuple)):
+        out, n = [], 0
+        for v in obj[:MAX_LIST]:
+            nv, c = _clip(v, limit)
+            out.append(nv)
+            n += c
+        if len(obj) > MAX_LIST:
+            out.append("…(截断，原长 %d 项)" % len(obj))
+            n += 1
+        return out, n
+    return obj, 0
+
 
 class _Bus:
     def __init__(self) -> None:
@@ -46,11 +99,18 @@ class _Bus:
     # ---------------- 产出 ----------------
 
     def publish(self, kind: str, **fields) -> dict:
-        """发一条事件。字段名随便给，前端按 kind 渲染。"""
+        """发一条事件。字段名随便给，前端按 kind 渲染。
+
+        ⚠️ 入库前会过一遍 `_clip()`：**超长的字符串必须截掉**（见 MAX_TEXT 的说明），
+        否则一条 131KB 的 `CRYPT ... hex=...` 就够把 devtools 页面卡死。
+        """
+        clipped, cut = _clip(fields, KIND_TEXT_LIMIT.get(kind, MAX_TEXT))
         with self._cv:
             self._seq += 1
             event = {"seq": self._seq, "ts": time.time(), "kind": kind}
-            event.update(fields)
+            event.update(clipped)
+            if cut:
+                event["clipped"] = cut
             if len(self._events) == RING_MAX:
                 self._dropped += 1
             self._events.append(event)

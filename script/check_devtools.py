@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+import time
 import urllib.error
 import urllib.request
 
@@ -108,11 +109,99 @@ def static_checks() -> int:
     return bad
 
 
+def event_stream_checks() -> int:
+    """事件流（长轮询）的两个坑，都踩过一次：
+
+    1. **游标跑到服务端前面 → 面板永久空白**。
+       前端的 `state.since` 是**无条件采纳**服务端回的 `seq` 的。
+       服务端重启后 `_seq` 从 1 重新数，而前端还抱着上一次进程的 `since=570`；
+       老代码回的是 `max(since, latest)` = 570，于是永远问 `since=570`、
+       服务端永远答「没有新事件」—— 表现就是「控制台页里没有东西、流量页也不再动了」。
+       现在服务端发现 `since > latest` 会**回退到 0 重放整个缓冲**，并且必须**立刻**返回
+       （不能还把 25 秒的长轮询等满）。
+
+    2. **单条日志 131KB → 浏览器卡死**。
+       客户端探针会把整个登录响应 dump 成 hex：
+       `CRYPT base64Decode(b64len=131136 hex=436b...)`。
+       入库前必须过 `devbus._clip()`。
+    """
+    bad = 0
+
+    # 1. 超前游标：必须立刻返回、reset=True、seq 回退到 latest
+    t0 = time.time()
+    got = call("/api/events?since=999999&timeout=25&limit=2000")
+    dt = time.time() - t0
+    if not isinstance(got, dict) or "__err" in got or "__http" in got:
+        print(f"✗ 超前游标：请求失败 {got}")
+        return bad + 1
+    latest = got.get("latest")
+    if not got.get("reset"):
+        print(f"✗ 超前游标：reset 不是 True（服务端没认出游标超前）{str(got)[:160]}")
+        bad += 1
+    elif got.get("seq") != latest:
+        print(f"✗ 超前游标：seq={got.get('seq')} 应回退到 latest={latest}")
+        bad += 1
+    elif dt > 5:
+        print(f"✗ 超前游标：还等满了长轮询（{dt:.1f}s），应该立刻返回")
+        bad += 1
+    else:
+        print(f"✓ 超前游标 since=999999 -> 立刻返回（{dt:.2f}s）reset=True "
+              f"seq 回退到 {got.get('seq')}，重放 {len(got.get('events') or [])} 条")
+    if got.get("seq") != latest:
+        bad += 1
+
+    # 正常游标（=latest）时不该 reset，也不该立刻返回一堆历史
+    got2 = call(f"/api/events?since={latest}&timeout=0")
+    if isinstance(got2, dict) and not got2.get("reset") and not (got2.get("events") or []):
+        print(f"✓ 正常游标 since={latest} -> 不 reset、无历史重放")
+    else:
+        print(f"✗ 正常游标表现异常：{str(got2)[:160]}")
+        bad += 1
+
+    # 2. 事件里不该有超长字段
+    got3 = call("/api/events?since=0&timeout=0&limit=2000")
+    longest, where = 0, ""
+    for ev in (got3.get("events") or []):
+        for k, v in ev.items():
+            s = v if isinstance(v, str) else json.dumps(v, ensure_ascii=False)
+            if len(s) > longest:
+                longest, where = len(s), f"{ev.get('kind')}.{k}"
+    limit = 40000          # 单个字符串上限 4000；整条事件留点余量
+    if longest <= limit:
+        print(f"✓ 事件字段长度：最长 {longest} 字符（{where}），没有超长 hex dump")
+    else:
+        print(f"✗ 事件字段太长：{where} = {longest} 字符（上限约 {limit}）"
+              f" —— devbus._clip 没生效？")
+        bad += 1
+
+    # 3. favicon 不该落到 fallback（否则日志面板会被自己的 warning 刷屏）
+    #    ⚠️ 是**站点根**的 /favicon.ico，不是 BASE 底下的 —— 浏览器要的是根那个。
+    origin = f"http://127.0.0.1:{config.CDN_PORT}"
+    try:
+        req = urllib.request.Request(origin + "/favicon.ico")
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            code = resp.getcode()
+        if code == 204:
+            print("✓ /favicon.ico -> 204（不再刷「CDN 未处理请求」）")
+        else:
+            print(f"✗ /favicon.ico -> {code}（期望 204）")
+            bad += 1
+    except Exception as exc:  # noqa: BLE001
+        print(f"✗ /favicon.ico: {exc}")
+        bad += 1
+
+    return bad
+
+
 def main() -> int:
     bad = 0
     skipped = 0
 
     bad += static_checks()
+    print()
+
+    print("---- 事件流 ----")
+    bad += event_stream_checks()
     print()
 
     # ---- 静态页面 ----
