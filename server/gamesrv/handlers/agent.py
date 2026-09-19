@@ -91,7 +91,12 @@ def _module_stubs(player: dict | None = None) -> dict:
         #   3. isNeedAsstEff / favorExpAdd 是**死键**：`FavorCenter._initData` 把这两个
         #      写死成 false / 0，压根不从 data 读
         "favor": favor.favor_block(player),
-        "favorevent": {"favorEvents": [], "events": [], "removedFeEventKeys": []},
+        # 宿舍事件。⚠️ **登录块这块是 scratch 对象，客户端不会拿它填界面** ——
+        # `FavorEventCenter._initData` 把 `data[i]` 覆写成 FavorEvent，
+        # 真正的事件表 `_favorEvents` 只在响应键 `newFavorEvent` 里填。
+        # 所以真正推送在下面 data["newFavorEvent"]（登录响应里带一份，双保险）。
+        # 详见 gamesrv/favor.py「宿舍事件」那一段。
+        "favorevent": favor.event_block(player),
         "friend": {"friendMapList": [], "recommendationList": [], "isNeedShowTip": 0},
         "exchange": {},
         # 天赋（培养）。**形状由客户端字节码定死**，反汇编摘录见 store.new_talents()：
@@ -189,6 +194,10 @@ def get_login_data(session: dict, msg: dict, req_id):
     # 不然 `get_or_create_player()` 每次重新 load，id 每次都是新的。
     if favor.ensure_favors(player):
         store.save_player(player)
+    # 宿舍事件同理：好感度到级就解锁，登录时把还没建的补上。
+    new_events = favor.sync_events(player)
+    if new_events:
+        store.save_player(player)
     t = store.time_obj()
     log.info("agent.getlogindata account=%s playerId=%s", account, player["id"])
     data = {
@@ -202,6 +211,12 @@ def get_login_data(session: dict, msg: dict, req_id):
         "instance": instance.login_block(player),
     }
     data.update(_module_stubs(player))
+    # 宿舍事件**必须靠响应键推**（登录块那块客户端不读，见 _module_stubs 里的说明）。
+    # 首次登录时 `dataManager.isLogin` 那道闸很可能不让响应派发进来，所以
+    # favor.usegift / favor.touchcharasst 那边也会带 —— 双保险。
+    block = favor.new_event_block(new_events)
+    if block:
+        data["newFavorEvent"] = block
     return {"code": CODE_OK, "msg": "", "data": data}
 
 
@@ -213,6 +228,9 @@ def create_player(session: dict, msg: dict, req_id):
     log.info("agent.createplayer account=%s activeCode=%s", account, active_code)
     player = store.get_or_create_player(account)
     if favor.ensure_favors(player):
+        store.save_player(player)
+    new_events = favor.sync_events(player)
+    if new_events:
         store.save_player(player)
 
     t = store.time_obj()
@@ -227,6 +245,9 @@ def create_player(session: dict, msg: dict, req_id):
         "instance": instance.login_block(player),
     }
     data.update(_module_stubs(player))
+    block = favor.new_event_block(new_events)
+    if block:
+        data["newFavorEvent"] = block
     return {"code": CODE_OK, "msg": "", "data": data}
 
 

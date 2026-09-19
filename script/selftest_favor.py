@@ -1,4 +1,5 @@
-"""好感度（宿舍 / favor.*）自测。**不需要模拟器，也不需要服务端在跑。**
+"""好感度（宿舍 / favor.*）+ 宿舍事件（favorevent.*）自测。
+**不需要模拟器，也不需要服务端在跑。**
 
     python script\\selftest_favor.py
 
@@ -9,9 +10,9 @@
 ## 为什么要有它
 
 好感度这套东西**大部分逻辑在服务端**（加多少经验、升不升级、回不回礼、
-抚摸次数怎么回），而客户端只拿 `favorValue` / `favorAdd` 去播动画 ——
-也就是说算错了界面上多半只是「数字不对」，不会报错，极难靠看画面发现。
-所以公式必须在这儿钉死。
+抚摸次数怎么回、宿舍事件什么时候解锁、读完给多少奖励），而客户端只拿
+`favorValue` / `favorAdd` 去播动画 —— 也就是说算错了界面上多半只是「数字不对」，
+不会报错，极难靠看画面发现。所以公式必须在这儿钉死。
 
 ⚠️ handler 内部是 `store.get_or_create_player()`，**每次都从盘上重新 load**。
 所以「改内存里的 player」必须 `save_player` 之后再由 handler 重新读，
@@ -35,6 +36,7 @@ sys.path.insert(0, _paths.SERVER)
 
 from gamesrv import favor, items, store  # noqa: E402
 from gamesrv.handlers import agent, favor as hfavor  # noqa: E402
+from gamesrv.handlers import favorevent as hfavor_event  # noqa: E402
 from gamesrv.handlers import load_all  # noqa: E402
 
 load_all()
@@ -254,6 +256,108 @@ def return_item_check():
     check("preference 2（喜欢）会回礼", n_love > 0, str(n_love))
 
 
+def favor_event_check():
+    print("== 宿舍事件 favorevent.* ==")
+    table = favor._event_table()
+    check("table_favor_event 184 条", len(table) == 184, "= %d" % len(table))
+    check("410101 属于 hadf", favor.event_owner("410101") == "hadf")
+    check("410101 要求好感 1 级", favor.event_need_lv("410101") == 1, "= %s" % favor.event_need_lv("410101"))
+    check("410102 要求好感 3 级", favor.event_need_lv("410102") == 3, "= %s" % favor.event_need_lv("410102"))
+    check("410101 奖励好感 100", favor.event_reward("410101") == 100, "= %s" % favor.event_reward("410101"))
+
+    # 好感度全压回 1 级，看看 lv1 该解锁哪些
+    reload_()
+    for r in store.player_favors(player).values():
+        r["lv"], r["curExp"] = 1, 0
+    player["favorEvents"] = {}
+    save()
+    reload_()
+    rows = favor.sync_events(player)
+    keys = {r["eventKey"] for r in rows}
+    check("1 级时解锁了事件", len(rows) > 0, "%d 条" % len(rows))
+    check("410101（hadf lv1）在内", "410101" in keys)
+    check("410102（hadf lv3）不在内", "410102" not in keys)
+    check("解锁的都是 lv<=1 的", all(favor.event_need_lv(k) <= 1 for k in keys))
+    check("再调一次不重复建", favor.sync_events(player) == [])
+
+    row = store.find_favor_event(player, "410101")
+    check("行字段对得上 FavorEvent._initData 读的那几个",
+          set(row) == {"id", "eventKey", "lv", "status", "isToBeUnlocked", "createTimeSec"},
+          str(sorted(row)))
+    check("新建 = ACCEPTABLE(1)", row["status"] == store.FAVOR_EVENT_ACCEPTABLE)
+    check("新建带红点（isToBeUnlocked=1）", row["isToBeUnlocked"] == 1)
+
+    block = favor.new_event_block(rows)
+    check("newFavorEvent 是 {eventKey: 行} 的 map", isinstance(block, dict) and "410101" in block)
+    check("block 里每条都带 eventKey（客户端拿它当索引）",
+          all(v.get("eventKey") == k for k, v in block.items()))
+
+    # 登录响应里也要带一份（双保险，见 favor.py 的说明）
+    res = call(agent.get_login_data, {}, 20)
+    check("登录包 code=200", res["code"] == 200)
+    check("登录包 data.favorevent 是 map", isinstance(res["data"].get("favorevent"), dict))
+
+    for r in store.player_favors(player).values():
+        r["lv"], r["curExp"] = 1, 0
+    player["favorEvents"] = {}
+    save()
+    res = call(agent.get_login_data, {}, 21)
+    check("登录响应里带了 newFavorEvent", isinstance(res["data"].get("newFavorEvent"), dict),
+          str(sorted(res["data"].keys()))[:80])
+
+    # seteventsunlock：裸数组
+    reload_()
+    before_exp = store.find_favor(player, "hadf")["curExp"]
+    r = call(hfavor_event.set_events_unlock, ["410101"], 22)
+    check("seteventsunlock code=200", r["code"] == 200, str(r)[:160])
+    d = r["data"]
+    check("响应里有 favorEvent 块（回调不读，但状态得推回去）", "favorEvent" in d, str(sorted(d)))
+    check("favorEvent 里那条是已读", d["favorEvent"]["410101"]["isToBeUnlocked"] == 0)
+    reload_()
+    row = store.find_favor_event(player, "410101")
+    check("落盘：status=ACCEPTED(2)", row["status"] == store.FAVOR_EVENT_ACCEPTED)
+    check("落盘：红点没了", row["isToBeUnlocked"] == 0)
+    after_exp = store.find_favor(player, "hadf")["curExp"]
+    check("读完发了 reward_favor=100", after_exp == before_exp + 100,
+          "%s -> %s" % (before_exp, after_exp))
+
+    # 幂等：再读一次不再给奖励
+    before_exp = store.find_favor(player, "hadf")["curExp"]
+    r = call(hfavor_event.set_events_unlock, ["410101"], 23)
+    check("重复读 code=200", r["code"] == 200)
+    reload_()
+    check("重复读不再给奖励", store.find_favor(player, "hadf")["curExp"] == before_exp)
+
+    bad = call(hfavor_event.set_events_unlock, ["999999"], 24)
+    check("不认识的事件 -> 整单拒绝", bad["code"] != 200, str(bad)[:120])
+    bad = call(hfavor_event.set_events_unlock, [], 25)
+    check("空数组 -> 拒绝", bad["code"] != 200, str(bad)[:120])
+
+    # 好感度涨到 3 级 -> 410102 解锁
+    reload_()
+    row = store.find_favor(player, "hadf")
+    row["lv"], row["curExp"] = 3, 0
+    save()
+    reload_()
+    rows = favor.sync_events(player)
+    check("升到 3 级解锁 410102", any(r["eventKey"] == "410102" for r in rows),
+          str(sorted(r["eventKey"] for r in rows))[:80])
+
+    # 送礼响应里应该带上新解锁的事件
+    reload_()
+    row = store.find_favor(player, "hadf")
+    row["lv"], row["curExp"] = 1, 0
+    player["favorEvents"] = {}
+    save()
+    items.add_item(player, "305101", 20)
+    save()
+    r = call(hfavor.use_gift, {"charKey": "hadf", "items": {"305101": 1}}, 26)
+    check("送礼 code=200", r["code"] == 200, str(r)[:120])
+    check("送礼后好感度涨了", r["data"]["favor"]["hadf"]["curExp"] > 0)
+    check("送礼响应里带了新解锁事件（登录那条路不通时的兜底）",
+          "newFavorEvent" in r["data"], str(sorted(r["data"]))[:90])
+
+
 def interact_check():
     print("== 抚摸次数节流 ==")
     reload_()
@@ -283,6 +387,7 @@ def main() -> int:
     desc_check()
     look_check()
     return_item_check()
+    favor_event_check()
     interact_check()
     print()
     print("通过 %d，失败 %d" % (_ok, _fail))

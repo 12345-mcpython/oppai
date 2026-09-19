@@ -73,8 +73,8 @@ server/                        （= E:\code\zcsmw\server）
 │   ├── jsdlink.py             引擎远程 JS 调试器的连接层（Firefox 远程调试协议）
 │   ├── web/devtools.*         调试台前端（明文 html/css/js，改完刷新即可）
 │   ├── crypto/des.py          标准 DES（已用客户端真实密文对拍验证）
-│   ├── handlers/              业务路由（agent.* / char.* / player.* / quest.* / equipment.* / favor.*，共 69 条）
-│   ├── favor.py               好感度（宿舍）的业务逻辑：加经验 / 升级 / 礼物偏好 / 回礼
+│   ├── handlers/              业务路由（agent.* / char.* / player.* / quest.* / equipment.* / favor.* / favorevent.*，共 70 条）
+│   ├── favor.py               好感度（宿舍）的业务逻辑：加经验 / 升级 / 礼物偏好 / 回礼 / 宿舍事件
 │   ├── data/table_*.json      从客户端抽出来的表（任务 / 关卡奖励 / 军士养成 / 助战 NPC / 天赋 / 装备 / 好感度 / 道具）
 │   └── apps.py                cdn / gate / login / game 四个端口的实现
 ├── client/                    客户端补丁（全部在这里）
@@ -707,7 +707,8 @@ python script\disasm_func.py <file.jsc> cb4AfterLogin
 - [x] **主线任务**（12 条窗口 + 领奖 + 窗口推进 + 刷新）
 - [x] **浏览器调试台**（`/devtools`：流量 / 控制台 / 存档编辑+作弊 / 日志流 / 表查询 / 引擎调试器）
 - [x] **引擎层 JS 调试器**（断点 / 单步 / 调用栈 / 暂停时求值，游戏真的会停住）
-- [x] **天赋（培养）** + **装备系统**（`equipment.*` 7 条）+ **好感度（宿舍，`favor.*` 5 条）**
+- [x] **天赋（培养）** + **装备系统**（`equipment.*` 7 条）+ **好感度（宿舍，`favor.*` 5 条
+      + `favorevent.*` 1 条）**
 - [x] 文档：`docs/overview.md`（全景）/ `protocol.md` / `reverse-engineering.md` / `build.md` / `devtools.md` / `engine-debug.md`
 
 ### 待办
@@ -723,8 +724,7 @@ python script\disasm_func.py <file.jsc> cb4AfterLogin
        `LevelWinBase._init(args)` 读的 `args.rewards` 没人填，见 overview §7.3。
 3. [ ] **日常 / 成就任务** —— 只做了主线（`QUEST_TYPE.NORMAL = "2"`），
        日常（`1`，246 条）/ 成就（`3`，91 条）还没接。
-4. [ ] **宿舍事件（`favorevent.seteventsunlock`）** —— 好感度已经做完，这个是天然续作。
-5. [ ] **其余 stub 路由** —— `exchange.*` / `detect.*` / `society.*` 等。
+4. [ ] **其余 stub 路由** —— `exchange.*` / `detect.*` / `society.*` 等。
    `rank.*` / `boss.getbosslist` 回空表是**故意的**（私服没有榜也没有好友），别去"补"。
    补法：先 `python script\jsc_find.py <响应 key> --func` 找到客户端那个 callback，
    再看它读了哪些字段。

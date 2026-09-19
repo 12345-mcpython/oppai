@@ -364,6 +364,42 @@ logcat 里只有一行 `JS ERROR: TypeError: config is undefined @ equipmentstre
 **每次都从盘上重新 load**；直接改内存里的 player 是没用的，必须
 `save_player` 之后再由 handler 重新读，否则测出来的是假的。
 
+### 6.8 「登录块」不一定是给客户端读的 —— 有的模块是**只认响应推送**
+
+宿舍事件（`favorevent`）就是这种。反汇编 `FavorEventCenter._initData(data)`：
+
+    this._eventsInTable = {};
+    this._favorEvents   = {};                       // ← 全程空着
+    for (var i in table_favor_random_event) {
+        this._eventsInTable[i] = table_favor_random_event[i];
+        this._eventsInTable[i].table_id = i;
+        data[i] = new FavorEvent(data[i] || {eventKey: i}, this._eventsInTable[i]);
+        //      ^^^^^^^ 写回的是**登录块那个对象**，不是 _favorEvents
+    }
+
+也就是说 `data.favorevent` 在客户端眼里只是一个**临时容器**：给什么都不影响界面，
+`_favorEvents`（界面真正读的那张表）只在响应键 `newFavorEvent` 里填。
+
+推论 + 一个必须实机确认的点：响应派发那道闸
+
+    if (dataManager.isLogin) { for (k in responseConfig) responseConfig[k](e.data); }
+
+`dataManager.isLogin` 是登录成功**之后**才置 true 的（否则首次登录时
+`dataManager.favorCenter` 还是 null，`cb4ResFavor` 直接抛），
+所以**登录响应里的 `newFavorEvent` 很可能派发不进去**。
+
+现在的做法是**两处都发**（登录响应 + 好感度涨了的响应），哪条通都能用；
+实机验证方法：登录后看
+
+    Object.keys(dataManager.favorEventCenter._favorEvents).length
+
+是 0 就说明登录那条路不通，只能靠好感度涨了才推。
+
+教训：**别假设「登录包里给了客户端就会用」**。每个模块都要回字节码确认
+「这个 key 到底被谁读了」—— 同一个登录包里，三种情况都真实存在过：
+读了（`favor.favors`）、没读（`favor.isNeedAsstEff`，§6.5）、
+读进去但立刻丢掉（`favorevent`，本节）。
+
 ---
 
 
@@ -406,7 +442,12 @@ logcat 里只有一行 `JS ERROR: TypeError: config is undefined @ equipmentstre
       的形状给（`favors` 是 **map**、`id` 的有无 = 已获得、缺不得 `favorInteractChance`），
       送礼 / 换装 / 换背景 / 抚摸 / 资料已读全实现。数值表 7 张进 `gamesrv/data/`。
       ⚠️ 三条坑各成一节：死键（§6.5）、map vs list（§6.6）、
-      「算错不报错所以要自测」（§6.7）。**尚未做**：`favorevent.seteventsunlock`
+      「算错不报错所以要自测」（§6.7）
+- [x] **宿舍事件**（`favorevent.seteventsunlock` 1 条，路由 69→70）：好感度到级解锁剧情，
+      读完发 `reward_favor` 好感度。⚠️ 这一块的**形状是反汇编钉死的、触发时机是推断的**，
+      推断的部分单独列在 `gamesrv/favor.py` 的「宿舍事件」那一段 —— 关键是
+      **登录块 `favorevent` 是个 scratch 对象，客户端不拿它填界面**，
+      事件只能靠响应键 `newFavorEvent` 推（见 §6.8）
 - [x] 文档：协议 / 逆向手法 / 打包逻辑 / 调试台 / 引擎调试 / 本总览
 
 ### 待办（按卡点排序）
@@ -433,13 +474,12 @@ logcat 里只有一行 `JS ERROR: TypeError: config is undefined @ equipmentstre
    `{item, innSize, index}`），所以卡在「层的 `_recommendList` 是 0」。
    **不影响战斗**（这个弹窗是可选的好友助战）。
 5. **其余未实现的 route** —— `python script/route_gap.py --static` 能列出全部。
-   当前：客户端静态候选 **161** 条，服务端 **69** 条，缺 **100** 条。按单机价值排：
+   当前：客户端静态候选 **161** 条，服务端 **70** 条，缺 **99** 条。按单机价值排：
 
    | 命名空间 | 缺 | 说明 |
    |---|---|---|
    | `exchange.*` | 6 | 黑市交易所（`checkorder` 已实现）；要抽兑换表 |
    | `detect.*` | 6 | 侦查玩法 |
-   | `favorevent.*` | 1 | 宿舍事件（`FavorEventCenter`）；好感度已经做完，这个是天然续作 |
    | `diary.*` / `sign.*` / `subareaachievement.*` / `convert.*` / `share.*` | 1+1+1+1+1 | 零散领奖类，工作量最小，适合热身 |
    | `boss.*` | 5 | 好友 BOSS（`getbosslist` 已实现并回空表） |
    | `society.*` / `societyclg.*` | 33+6 | 军团——单机价值低、量最大 |
@@ -448,7 +488,8 @@ logcat 里只有一行 `JS ERROR: TypeError: config is undefined @ equipmentstre
    ⚠️ **`rank.*` / `boss.getbosslist` 这类"回空表"不算缺口**：私服没有榜、没有好友，
    回空才是对的（见 `handlers/rank.py` 的论证），别当成没实现去"补"。
 
-   ✅ `equipment.*`(7)、`favor.*`(5)、`player.selecttalent`/`upgradetalent` 已经补完。
+   ✅ `equipment.*`(7)、`favor.*`(5)、`favorevent.*`(1)、
+   `player.selecttalent`/`upgradetalent` 已经补完。
 6. `hashKey` / `hmac64` 还没复刻（登录靠单位元绕过）；自研 DH 的完整算法也没还原。
 
 ---

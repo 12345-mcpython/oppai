@@ -248,6 +248,15 @@ def favor_check(ok: bool) -> bool:
     if dead:
         print(f"  BAD favor 块里还有死键 {dead}（客户端不从 data 读，只会误导）")
         return False
+    fe = (login.get("data") or {}).get("favorevent")
+    if not isinstance(fe, dict):
+        print(f"  BAD data.favorevent 不是 map：{type(fe)}"
+              f"（FavorEventCenter._initData 要往里写 data[eventKey]）")
+        return False
+    ne = (login.get("data") or {}).get("newFavorEvent")
+    if ne is not None and not isinstance(ne, dict):
+        print(f"  BAD data.newFavorEvent 不是 map：{type(ne)}")
+        return False
     r = call("favor.setdescread", {"charKey": acquired[0], "descUnlockMark": 0}, 111)
     if r.get("code") != 200:
         print(f"  BAD favor.setdescread code={r.get('code')} {r}")

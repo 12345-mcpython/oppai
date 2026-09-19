@@ -61,6 +61,9 @@ FavorCenter._initData(data) {
   （`table_char_favor_receive_talk`），跟抚摸无关。空 map 而不是 undefined，
   是因为客户端拿到之后直接 `popupRewardWithItems(returnItems, ...)`，
   给 undefined 更危险。
+* **宿舍事件**（`favorevent`）整块的「触发时机 + 奖励」都是推断的 ——
+  形状是反汇编钉死的，但「什么时候算解锁」「`newFavorEvent` 从哪条路推下去」
+  没有字节码佐证。单独写在下面「宿舍事件」那一段的最前面，实机时先看那段。
 """
 
 from __future__ import annotations
@@ -433,3 +436,160 @@ def birthday_bonus(base: int) -> int:
     """生日额外加的那一份（`birthdayAdd`）。见 FAVOR_BIRTHDAY_MULTIPLE 的说明。"""
     extra = max(0, FAVOR_BIRTHDAY_MULTIPLE - 1)
     return int(base or 0) * extra
+
+
+# ---------------------------------------------------------------------------
+# 宿舍事件（favorevent.*）
+# ---------------------------------------------------------------------------
+# ⚠️⚠️ **这一块是本次适配里推断最多的地方，实机要重点看。**
+#
+# 反汇编能确定的（`FavorEventCenter` / `FavorEvent`）：
+#
+#   1. 登录块 `data.favorevent` 是个 **scratch 对象**，不是事件列表。
+#      `_initData(data)` 干的是（逐条反汇编）：
+#          this._eventsInTable = {};
+#          this._favorEvents   = {};                       // ← 只在**响应推送**里填
+#          for (var i in table_favor_random_event) {
+#              this._eventsInTable[i] = table_favor_random_event[i];
+#              this._eventsInTable[i].table_id = i;
+#              data[i] = new FavorEvent(data[i] || {eventKey: i}, this._eventsInTable[i]);
+#          }
+#      注意最后一行写回的是 **`data[i]`**，而 `_favorEvents` 全程是空的 ——
+#      也就是说**登录块里给什么都不影响界面**，事件只能靠响应键 `newFavorEvent` 推。
+#
+#   2. `cb4ResNewFavorEvent(res)`：`data` 是 **`{eventKey: 行}` 的 map**，
+#      逐条 `this._favorEvents[行.eventKey] = new FavorEvent(行, table[eventKey])`。
+#
+#   3. `submitFesRead(eventKeys)` 的请求体是 **裸数组**（不是 `{eventKeys: [...]}`）：
+#          if (!_.isArray(eventKeys) || eventKeys.length == 0) return;
+#          for (var i in eventKeys) if (!events[eventKeys[i]]) return;   // 有一个不认识就整个不发
+#          server.request("favorevent.seteventsunlock", eventKeys, cb, true);
+#      回调**只打日志、不读 res.data**，所以「读过了」这个状态也得靠响应推回去。
+#
+# 推断的部分（没有字节码佐证，靠表结构反推）：
+#
+#   * **什么时候解锁**：`table_favor_random_event[k].favor_lv` 是该事件要求的
+#     好感度等级（"1"/"3"/"5"...）。所以「好感度升到 N 级 → 解锁该角色 lv<=N 的事件」。
+#   * **读完给奖励**：`reward_favor` 是纯服务端数值（客户端全库 0 命中），
+#     所以服务端在读事件时把这份好感度加上。
+#   * **`newFavorEvent` 从哪来**：客户端只在 `request` 的响应派发里认这个键，
+#     而 `dataManager.isLogin` 那道闸让**首次登录的响应派发不进**（否则
+#     `dataManager.favorCenter` 还是 null，`cb4ResFavor` 会直接抛）。
+#     所以这里**两处都发**（双保险）：
+#        - 登录响应里带一份（万一派发其实是通的）
+#        - 好感度涨了之后（`favor.usegift` / `favor.touchcharasst`）带上新增的那几条
+#     实机验证方法：登录后看 `Object.keys(dataManager.favorEventCenter._favorEvents).length`，
+#     是 0 就说明登录那条路不通、只能靠好感度涨了才推。
+#   * `level_key` 有 getter 但**没人读**，服务端不用管。
+
+
+def _event_table() -> dict:
+    return items.table("table_favor_event")
+
+
+def event_need_lv(event_key) -> int:
+    """这个事件要求的好感度等级。表里是字符串（"1"/"3"），坏值当 1。"""
+    row = _event_table().get(str(event_key)) or {}
+    try:
+        return int(row.get("lv") or 1)
+    except (TypeError, ValueError):
+        return 1
+
+
+def event_reward(event_key) -> int:
+    """读完这个事件给多少好感度（`reward_favor`，纯服务端数值）。"""
+    row = _event_table().get(str(event_key)) or {}
+    try:
+        return int(row.get("rf") or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def event_owner(event_key) -> str:
+    row = _event_table().get(str(event_key)) or {}
+    return str(row.get("ck") or "")
+
+
+def sync_events(player: dict) -> list:
+    """按「拥有的角色 + 当前好感度等级」补该解锁的事件，返回**新增的那些行**。
+
+    ⚠️ 和 `ensure_favors` 不同，这个**每次好感度变了都要调**（送礼/抚摸之后），
+    否则升到 3 级解锁的事件要等下次登录才出现。
+    """
+    table = _event_table()
+    events = store.player_favor_events(player)
+    new_rows = []
+    for char_key, favor_row in store.player_favors(player).items():
+        try:
+            lv = int(favor_row.get("lv") or 1)
+        except (TypeError, ValueError):
+            lv = 1
+        for event_key, cfg in table.items():
+            if str(cfg.get("ck")) != str(char_key):
+                continue
+            if event_key in events:
+                continue
+            if event_need_lv(event_key) > lv:
+                continue
+            row = store.new_favor_event_row(event_key, store.next_favor_event_id(player), lv)
+            events[event_key] = row
+            new_rows.append(row)
+    if new_rows:
+        log.info("玩家 %s 解锁 %d 条宿舍事件", player.get("account"), len(new_rows))
+    return new_rows
+
+
+def event_block(player: dict) -> dict:
+    """登录包里 `favorevent` 那一块。
+
+    ⚠️ 只发已解锁的事件（按 eventKey 索引）。**首次登录时客户端并不会用它** ——
+    见上面「登录块是 scratch 对象」那段；真正的推送靠 `new_favor_event_block()`。
+    之所以还发一份，是因为 `_initData` 会 `data[i] = new FavorEvent(data[i] || ...)`，
+    给了正确的行它构造出来的 `FavorEvent` 就是对的（万一别处要用）。
+    """
+    return dict(store.player_favor_events(player))
+
+
+def new_event_block(rows) -> dict:
+    """响应里的 `newFavorEvent` 块：`{eventKey: 行}`。空列表回空 dict。"""
+    return {str(r.get("eventKey")): r for r in (rows or [])}
+
+
+def update_event_block(rows) -> dict:
+    """响应里的 `favorEvent` 块：`{eventKey: {status, isToBeUnlocked}}`。
+
+    `cb4ResFavorEvent` 接受「map 或数组」，逐条读 `eventKey` / `status`
+    再 `obj[i].update(...)` —— 所以每条都要带 `eventKey`，
+    这里直接把整行推回去最省事（`FavorEvent.update` 只认这几个字段）。
+    """
+    return {str(r.get("eventKey")): r for r in (rows or [])}
+
+
+def read_events(player: dict, event_keys) -> tuple:
+    """把事件标成「已读」并发奖励。返回 (改动过的行, 本次加的好感度)。
+
+    ⚠️ 客户端那边 `submitFesRead` 是**先校验全部存在再整单发**，
+    所以服务端也整单处理：有不认识的 key 就整单拒绝（见 handlers/favorevent.py）。
+
+    ⚠️ 奖励**只发一次**：靠 `status` 从 `ACCEPTABLE(1)` 变 `ACCEPTED(2)` 判断，
+    重复提交同一个 key 不会再给好感度。
+    """
+    changed = []
+    total = 0
+    for key in event_keys or []:
+        row = store.find_favor_event(player, key)
+        if row is None:
+            continue
+        if int(row.get("status") or 0) == store.FAVOR_EVENT_ACCEPTED and not row.get("isToBeUnlocked"):
+            continue                       # 已经读过，幂等
+        row["status"] = store.FAVOR_EVENT_ACCEPTED
+        row["isToBeUnlocked"] = 0
+        reward = event_reward(key)
+        if reward:
+            owner = event_owner(key)
+            favor_row = store.find_favor(player, owner)
+            if favor_row is not None:
+                add_exp(favor_row, reward)
+                total += reward
+        changed.append(row)
+    return changed, total

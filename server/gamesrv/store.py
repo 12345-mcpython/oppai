@@ -518,6 +518,57 @@ def favor_gift_state(player: dict) -> dict:
     return {"usedCount": used, "lastTimeSec": last}
 
 
+# --- 宿舍事件（favorevent.*）------------------------------------------------
+# 客户端的枚举（实机取过 FAVOR_EVENT_STATUS）：
+#     {ACCEPTABLE: 1, ACCEPTED: 2, FINISHED: 3, OVER: 4}
+# 显示上只有两处用到：
+#   `FavorEvent._getIsOver()`  = `_id && _status == OVER`  -> `getUnlockStatus()` 回 LOCKED
+#   `FavorEventCenter.isFavorEventUnlock()` = `status == ACCEPTED`
+# 服务端约定：新建 = ACCEPTABLE + `isToBeUnlocked = 1`（红点），
+# 读过 = ACCEPTED + `isToBeUnlocked = 0`。见 favor.sync_events / favor.read_events。
+FAVOR_EVENT_ACCEPTABLE = 1
+FAVOR_EVENT_ACCEPTED = 2
+
+
+def new_favor_event_row(event_key: str, event_id: int, lv: int) -> dict:
+    """一条宿舍事件。
+
+    字段名对应 `FavorEvent._initData(favorEvent, eventInTable)` 的前半段
+    —— 它读 `id / eventKey / lv / isToBeUnlocked / status / createTimeSec`，
+    后半段（`char_key / level_key / title / desc / type / favor_lv`）
+    是客户端自己从 `table_favor_random_event[eventKey]` 补的，**不用发**。
+    """
+    return {
+        "id": event_id,
+        "eventKey": str(event_key),
+        "lv": int(lv or 1),
+        "status": FAVOR_EVENT_ACCEPTABLE,
+        "isToBeUnlocked": 1,
+        "createTimeSec": int(time.time()),
+    }
+
+
+def player_favor_events(player: dict) -> dict:
+    """玩家的宿舍事件：`{eventKey: 行}`（和 `_favorEvents` 一样按 eventKey 索引）。"""
+    events = player.get("favorEvents")
+    if not isinstance(events, dict):
+        events = {}
+        player["favorEvents"] = events
+    return events
+
+
+def find_favor_event(player: dict, event_key) -> dict | None:
+    return player_favor_events(player).get(str(event_key))
+
+
+def next_favor_event_id(player: dict) -> int:
+    used = {int(r.get("id") or 0) for r in player_favor_events(player).values()}
+    n = 1
+    while n in used:
+        n += 1
+    return n
+
+
 # 新手引导位掩码全 1 = 所有引导都已完成。见 new_player() 里的说明。
 GUIDE_MARK_DONE = 0x7FFFFFFF
 # 玩家「指挥部」初始等级。客户端按等级解锁功能，最靠前的门槛是编成里的
@@ -839,6 +890,9 @@ def new_player(account: str) -> dict:
         # 「玩家实际拥有的角色」补，建号这一刻还没有任何角色获得好感度。
         # 形状见 player_favors() 的注释（map，不是 list）。
         "favors": {},
+        # 宿舍事件（好感度到级解锁的剧情）。空 map：`favor.sync_events()` 按
+        # `table_favor_random_event` + 好感度等级逐个建。形状见 player_favor_events()。
+        "favorEvents": {},
         # 抚摸次数（每小时回 1，上限 5）。见 favor_interact()。
         "favorInteract": {"chance": FAVOR_INTERACT_MAX, "updateTimeSec": now},
         # 送礼计数。客户端 Player.ctor 直接读这两个顶层字段。

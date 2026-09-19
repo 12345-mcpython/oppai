@@ -176,21 +176,27 @@ def use_gift(session: dict, msg: dict, req_id):
     st["lastTimeSec"] = int(time.time())
     player["usedGiftCount"] = st["usedCount"]
     player["lastGiftTimeSec"] = st["lastTimeSec"]
+    # 好感度涨了 → 可能跨过某条宿舍事件的解锁等级，顺带把新解锁的推下去
+    new_events = favor.sync_events(player)
     store.save_player(player)
 
     log.info("favor.usegift %s 礼物 %s 好感 +%d%s（升 %d 级 -> lv%d）",
              char_key, [(k, c) for k, c, _ in plan], total,
              "（生日 +%d）" % bonus if bonus else "", up, row.get("lv"))
 
-    return _ok(
-        charKey=char_key,
-        preference=unit_pref,
-        favorValue=total,
-        birthdayAdd=bonus,
-        returnItems=favor.roll_return_items(char_key, best_pref),
-        useGiftStatus={"usedGiftCount": st["usedCount"], "lastGiftTimeSec": st["lastTimeSec"]},
-        favor=favor.row_block(char_key, row),
-    )
+    data = {
+        "charKey": char_key,
+        "preference": unit_pref,
+        "favorValue": total,
+        "birthdayAdd": bonus,
+        "returnItems": favor.roll_return_items(char_key, best_pref),
+        "useGiftStatus": {"usedGiftCount": st["usedCount"], "lastGiftTimeSec": st["lastTimeSec"]},
+        "favor": favor.row_block(char_key, row),
+    }
+    block = favor.new_event_block(new_events)
+    if block:
+        data["newFavorEvent"] = block
+    return _ok(**data)
 
 
 # ---------------------------------------------------------------------------
@@ -297,17 +303,22 @@ def touch_char_asst(session: dict, msg: dict, req_id):
     if bonus:
         favor.add_exp(row, bonus)
 
+    new_events = favor.sync_events(player)
     store.save_player(player)
     st = store.favor_interact(player)
     log.info("favor.touchcharasst %s 好感 +%d%s（升 %d 级 -> lv%s，剩 %d 次）",
              char_key, add, "（生日 +%d）" % bonus if bonus else "", up, row.get("lv"), left)
 
-    return _ok(
-        charKey=char_key,
-        favorAdd=add,
-        birthdayAdd=bonus,
-        returnItems={},
-        favorInteractChance=st["chance"],
-        favorInteractUpdateTimeSec=st["updateTimeSec"],
-        favor=favor.row_block(char_key, row),
-    )
+    data = {
+        "charKey": char_key,
+        "favorAdd": add,
+        "birthdayAdd": bonus,
+        "returnItems": {},
+        "favorInteractChance": st["chance"],
+        "favorInteractUpdateTimeSec": st["updateTimeSec"],
+        "favor": favor.row_block(char_key, row),
+    }
+    block = favor.new_event_block(new_events)
+    if block:
+        data["newFavorEvent"] = block
+    return _ok(**data)

@@ -423,6 +423,31 @@ ITEM_JS = r"""
 """
 
 
+# 宿舍事件（`favorevent.*`）用的那张表。184 条，key 形如 "410101"。
+#
+#   char_key      这个事件属于哪个角色（charKey，如 hadf）
+#   favor_lv      **好感度到几级才解锁**（字符串 "1"/"3"/"5"...）
+#   reward_favor  读完给多少好感度 —— ⚠️ **客户端全库 0 命中**（jsc_find），
+#                 也就是说纯服务端数值，得服务端自己发
+#   level_key     形如 "310101"；`FavorEvent.levelKey` 有 getter 但**没人读**
+#   title / desc  剧情标题和正文（客户端 `favoreventitemwrapper` 直接显示）
+#
+# ⚠️ 客户端 `FavorEventCenter._initData` 会自己往行里塞 `table_id = eventKey`
+#    （反汇编里是 `this._eventsInTable[i].table_id = i`），所以服务端不用管这个字段。
+FAVOR_EVENT_JS = r"""
+(function () {
+    var out = {};
+    for (var k in table_favor_random_event) {
+        var r = table_favor_random_event[k];
+        if (!r) { continue; }
+        out[k] = {ck: r.char_key, lv: r.favor_lv, rf: r.reward_favor,
+                  lk: r.level_key, n: r.title, d: r.desc, t: r.type};
+    }
+    return JSON.stringify(out);
+})()
+"""
+
+
 def _dump(base: str, js: str, name: str):
     result = eval_remote(base, js, timeout=30.0)
     if not result.get("ok"):
@@ -481,6 +506,7 @@ def main() -> int:
         ("table_favor_gift.json", FAVOR_GIFT_JS),
         ("table_favor_receive.json", FAVOR_RECEIVE_JS),
         ("table_favor_constant.json", FAVOR_CONSTANT_JS),
+        ("table_favor_event.json", FAVOR_EVENT_JS),
         ("table_item.json", ITEM_JS),
     ]
     if args.only:

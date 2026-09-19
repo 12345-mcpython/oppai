@@ -15,7 +15,7 @@
 | `serve.py` | 服务端守护：`run.py` 挂了自动拉起。**推荐用这个起服务端**，别用 `Start-Process python run.py`（会被回收） |
 | `merge_dex.py` | 把 apktool 拆出来的 `smali_classesN` 合并成单个 dex |
 | `selftest_game.py` | 不开游戏也能自测业务协议：自己按客户端格式打包加密请求打服务端，验证「加解密 + 路由 + code=200」。末尾还会走一遍**军士培养链路**（喂材料 → 重登确认等级落盘、材料没复活）和**好感度登录块形状** |
-| `selftest_favor.py` | **好感度（宿舍）公式自测，不需要模拟器、也不需要服务端在跑**：进程内直接调 handler，把「礼物加多少 / 升级结算 / 回礼概率 / 抚摸次数节流」钉死（78 条断言）。存档写到临时目录，不碰真存档 |
+| `selftest_favor.py` | **好感度（宿舍）公式自测，不需要模拟器、也不需要服务端在跑**：进程内直接调 handler，把「礼物加多少 / 升级结算 / 回礼概率 / 抚摸次数节流 / 宿舍事件解锁与奖励」钉死（110 条断言）。存档写到临时目录，不碰真存档 |
 | `check_soldier_calc.py` | **交叉验证**：把服务端 `gamesrv/soldier.py` 的升级计算和客户端 `CharCenter.calcSoldierUpgrade` 在 44 组用例上逐字段比对。改升级公式后必跑（要求游戏在跑 + 探针已加载） |
 | `check_devtools.py` | 调试台自测：前端 id / 接口路径的静态一致性 + 把 `/devtools/api/*` 全打一遍（分「需要游戏」和「不需要」两组）+ 中文往返 + 快照回滚 |
 | `sdk_strip/` | 删掉没用到的第三方 SDK：扫引用 → 生成桩类 → 删 smali → 清 manifest / assets / lib |
