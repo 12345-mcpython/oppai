@@ -26,6 +26,7 @@
 | `jsc_strings.py` | **最好用的一把刀**：只扒 `.jsc` 的 atom（标识符）表，按源码顺序输出「参数/局部变量 → 函数体里用到的属性名」。没源码也能看懂一个函数在干什么 |
 | `jsc_disasm.py` | SM33.1.1 XDR 字节码反汇编器（`_opcodes_gen.py` 是它的操作码表，别删） |
 | `disasm_func.py` | 按函数名反汇编，会自动带上嵌套函数 |
+| **`jsc_decompile.py`** | ★ **jsc → js 反编译器**（栈机模拟 + 结构恢复）：`assets/src/**` **572/575** 能过 `node --check`。见 [`../docs/decompile.md`](../docs/decompile.md) |
 | `csb_dump.py` | 解析 cocostudio 的 `.csb`（FlatBuffers）：列出动画区间和所有帧事件 |
 | `extract_client_tables.py` | **把客户端 `table_*` 抽成服务端 JSON**（`gamesrv/data/table_quest.json` 就是这么来的）。客户端换版本重跑一次 |
 | `gen_opcodes.py` | 从 SpiderMonkey 的 `vm/Opcodes.h` 重新生成 `_opcodes_gen.py`（一般不用跑） |

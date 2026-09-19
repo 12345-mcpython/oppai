@@ -213,48 +213,128 @@ def read_file(path: str) -> Script:
 
 
 def read_const(r: Reader):
-    """XDRScriptConst —— 只要跳过就行。"""
+    """XDRScriptConst -> (tag, value)。
+
+    标签（js/src/jsscript.cpp 的 ScriptConstType）：
+      0 SCRIPT_INT(uint32)  1 SCRIPT_DOUBLE(uint64)  2 SCRIPT_ATOM(atom)
+      3 SCRIPT_TRUE  4 SCRIPT_FALSE  5 SCRIPT_NULL
+      6 SCRIPT_OBJECT(递归，暂时不支持)  7 SCRIPT_VOID  8 SCRIPT_HOLE
+    """
     tag = r.u32()
     if tag == 0:      # SCRIPT_INT
-        r.u32()
-    elif tag == 1:    # SCRIPT_DOUBLE
-        r.u64()
-    elif tag == 2:    # SCRIPT_ATOM
-        r.atom()
-    elif tag == 6:    # SCRIPT_OBJECT
+        return tag, r.u32()
+    if tag == 1:      # SCRIPT_DOUBLE
+        return tag, struct.unpack("<d", struct.pack("<Q", r.u64()))[0]
+    if tag == 2:      # SCRIPT_ATOM
+        return tag, r.atom()
+    if tag == 6:      # SCRIPT_OBJECT
         raise NotImplementedError("const 里出现对象字面量，暂不支持")
-    # 3/4/5/7/8 无负载
-    return tag
+    return tag, None
+
+
+_NAME_CHARS = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_$.<>/-")
+
+
+def _looks_like_function_header(data: bytes, pos: int) -> bool:
+    """`pos` 处看起来是不是一个 CK_JSFunction 对象头？
+
+    形状：`u32 classk=2`、`u32 enclosedIdx`（-1 或很小的数）、
+    `u32 firstword`（bit0 = HasAtom）、后面跟一个像标识符/路径的 atom。
+    """
+    if pos + 16 > len(data):
+        return False
+    if struct.unpack_from("<I", data, pos)[0] != 2:
+        return False
+    enclosed = struct.unpack_from("<I", data, pos + 4)[0]
+    if enclosed != 0xFFFFFFFF and enclosed > 0xFFFF:
+        return False
+    firstword = struct.unpack_from("<I", data, pos + 8)[0]
+    if not (firstword & 0x1):
+        return False
+    try:
+        atom = Reader(data, pos + 12).atom()
+    except Exception:  # noqa: BLE001
+        return False
+    return 1 < len(atom) <= 120 and all(ch in _NAME_CHARS for ch in atom)
+
+
+def resync_object(r: Reader, limit: int = 96):
+    """对象流错位了就往后找一个像函数头的位置，返回跳过的字节数。
+
+    ⚠️ 有 13/798 个 jsc 会对不上（都是带 try/catch + 块级作用域的脚本，
+    比如 `src/util/server.jsc`、`src/lib/md5/md5.min.jsc`）：
+    在 atom 表之后、对象表之前还有一段我们还没搞清楚的字节。
+    与其报错中断，不如**重新同步**、或者在实在找不到时**就地截断**
+    （见下面 `s.truncated`）—— 决策：宁可少解出一部分函数，
+    也不要整个文件读不了。
+    """
+    start = r.pos
+    for back in range(0, limit):
+        pos = start + back
+        if _looks_like_function_header(r.data, pos):
+            r.pos = pos
+            return back
+    return None
 
 
 def parse_sections(r: Reader, s: "Script"):
-    """consts -> objects（递归解析嵌套脚本）-> regexps -> trynotes -> blockscopes"""
+    """consts -> objects（递归解析嵌套脚本）-> regexps -> trynotes -> blockscopes
+
+    ⚠️ regexp 那一段是 **atom + uint32 flag**（`XDRScriptRegExpObject`），
+    早先这里只读了一个 atom，少读 4 字节 —— 只要脚本里有一个正则，
+    后面整条流就错位，表现是「对象类型 classk=xxx 暂不支持」这种莫名其妙的报错。
+    """
+    s.consts = []
     for _ in range(s.nconsts):
-        read_const(r)
+        s.consts.append(read_const(r))
     for _ in range(s.nobjects):
         classk = r.u32()
-        if classk == 2:  # CK_JSFunction
-            r.u32()                      # funEnclosingScopeIndex
-            firstword = r.u32()
-            name = None
-            if firstword & 0x1:          # HasAtom
-                name = r.atom()
-            r.u32()                      # flagsword = (nargs<<16)|flags
-            if firstword & 0x4:          # IsLazy
-                raise NotImplementedError("lazy script")
+        if classk != 2:
+            skipped = resync_object(r)
+            if skipped is None:
+                # 找不到可信的重同步点 —— 就地截断，别再往下啃垃圾数据了
+                s.truncated = True
+                return
+            s.resync_skipped = getattr(s, "resync_skipped", 0) + skipped
+            classk = r.u32()
+            if classk != 2:
+                s.truncated = True
+                return
+        r.u32()                      # funEnclosingScopeIndex
+        firstword = r.u32()
+        name = None
+        if firstword & 0x1:          # HasAtom
+            name = r.atom()
+        r.u32()                      # flagsword = (nargs<<16)|flags
+        if firstword & 0x4:          # IsLazy（lazy 函数在这里没有字节码）
+            s.lazy = getattr(s, "lazy", 0) + 1
+            return
+        try:
             child = parse_script(r)
-            child.children = []
-            child.name = name
-            s.children.append(child)
-            parse_sections(r, child)
-        else:
-            raise NotImplementedError(f"对象类型 classk={classk} 暂不支持")
+        except Exception:  # noqa: BLE001
+            s.truncated = True
+            return
+        child.children = []
+        child.name = name
+        child.offset = r.pos
+        s.children.append(child)
+        parse_sections(r, child)
+    s.regexps = []
     for _ in range(s.nregexps):
-        r.atom()   # 实际上是 XDRScriptRegExpObject（flag+atom），先跳过
+        source = r.atom()
+        flag = r.u32()
+        s.regexps.append((source, flag))
+    s.trynotes = []
     for _ in range(s.ntrynotes):
-        r.u8(); r.u32(); r.u32(); r.u32()
+        kind = r.u8()
+        start = r.u32()
+        length = r.u32()
+        catch_start = r.u32()
+        s.trynotes.append({"kind": kind, "start": start,
+                           "length": length, "catch_start": catch_start})
+    s.blockscopes = []
     for _ in range(s.nblockscopes):
-        r.u32(); r.u32(); r.u32(); r.u32()
+        s.blockscopes.append((r.u32(), r.u32(), r.u32(), r.u32()))
 
 
 def disassemble(s: Script, start: int = 0, end: int = None):
@@ -295,8 +375,16 @@ def disassemble(s: Script, start: int = 0, end: int = None):
         elif fmt == JOF_JUMP:
             off = struct.unpack_from(">i", code, pc + 1)[0]
             text = f"{name} -> {pc + off}"
-        elif fmt == JOF_UINT16 or fmt == JOF_QARG or fmt == JOF_LOCAL:
+        elif fmt == JOF_UINT16 or fmt == JOF_QARG:
             v = struct.unpack_from(">H", code, pc + 1)[0]
+            text = f"{name} {v}"
+        elif fmt == JOF_LOCAL:
+            # ⚠️ `getlocal` / `setlocal` 的操作数是 **3 字节**（uint24）不是 2 字节：
+            # 指令长度是 4（1 opcode + 3 操作数），宏是 JOF_LOCAL，
+            # SpiderMonkey 那边用 `GetLocalNo(pc) = GET_UINT24(pc)` 取。
+            # 早先这里按 u16 读，**所有局部变量的槽号都被解成 0**
+            # （槽 3 = 00 00 03，读前两字节就是 0），反汇编和反编译全错。
+            v = (code[pc + 1] << 16) | (code[pc + 2] << 8) | code[pc + 3]
             text = f"{name} {v}"
         elif fmt == JOF_INT8:
             v = struct.unpack_from(">b", code, pc + 1)[0]
