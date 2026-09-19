@@ -321,6 +321,27 @@ Windows PowerShell 会把**无 BOM** 的 UTF-8 脚本按 ANSI 读（中文系统
 * `build.ps1` 保持带 BOM。改它别用会丢 BOM 的工具；用 Python 时 `encoding="utf-8-sig"` 读写。
 * 临时验证脚本**直接写纯 ASCII 源码**最省心 —— 中文只出现在输出的数据里，不写进源码。
 
+#### ⚠️ 有些编辑器 / AI 工具会**悄悄吞掉 BOM**
+
+实测：**「替换文本」类的编辑操作是按 UTF-8（无 BOM）整份回写的** ——
+改一句注释就能把 BOM 弄丢。丢完之后本机可能还能跑（有的环境会容错），
+换台机器 / 换个 PowerShell 版本就炸，而且**报的是一大片语法错**，看不出根因。
+
+**每次改完 `.ps1` 都验一下**：
+
+```powershell
+$b = [System.IO.File]::ReadAllBytes((Resolve-Path build.ps1))
+if ($b[0] -eq 0xEF -and $b[1] -eq 0xBB -and $b[2] -eq 0xBF) { "BOM 在" }
+else {
+    $t = [System.IO.File]::ReadAllText((Resolve-Path build.ps1))
+    [System.IO.File]::WriteAllText((Resolve-Path build.ps1), $t,
+        (New-Object System.Text.UTF8Encoding($true)))     # $true = 带 BOM
+}
+```
+
+`.gitattributes` 里的 `* text=auto eol=lf` **不会**帮你补 BOM（git 不碰 BOM），
+所以这个只能靠改完自己查。
+
 ### 附带：PowerShell 的别名优先级高于函数
 
 `ps` / `ls` / `cat` / `rm` 都是内置别名（→ `Get-Process` 等），**同名函数盖不过别名**。

@@ -695,6 +695,7 @@ python script\repl.py "jsb.reflection.callStaticMethod('org/cocos2dx/javascript/
 | 文档 | 内容 |
 |---|---|
 | `README.md` | 上手：项目结构、快速开始、补丁清单、协议骨架 |
+| **`../REPRODUCE.md`** | ★ **从零复刻**：环境、要自备的外部资源、逐步操作 + 每步验证点 |
 | **`docs/overview.md`**（本文） | 全景：成果、分层、逆向结论、坑速查、待办 |
 | `docs/devtools.md` | 浏览器调试台：六个面板怎么用、架构取舍、怎么加面板 |
 | `docs/engine-debug.md` | **引擎层调试**：引擎自带的远程 JS 调试器怎么打开、协议、4 个坑、复现清单 |

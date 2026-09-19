@@ -27,6 +27,7 @@ kind 约定：
 from __future__ import annotations
 
 import collections
+import json
 import threading
 import time
 
@@ -57,6 +58,19 @@ KIND_TEXT_LIMIT = {"console": MAX_TEXT_CONSOLE}
 # 数组最多留几项（`traffic` 事件的 `res.data` 里可能有几百项列表）。
 MAX_LIST = 100
 
+# 字典最多留几个 key。
+#
+# ⚠️ 光截字符串和数组**不够**。踩过一次：`traffic.res` 是登录响应那个
+# `res.data`，它是个**上千 key 的 map**（1142 个关卡 × `{starMark,challengeTimes,...}`），
+# 每个值是短字符串/小数字，一条字符串都没超限、一个数组都不长，
+# 合起来照样 **22 万字符** —— 自测 `check_devtools.py` 的「事件字段长度」
+# 那条直接把它抓出来了（上限 4 万）。
+MAX_KEYS = 200
+
+# 单条事件序列化后的总上限。上面几个都是"分项上限"，合起来仍可能很大，
+# 这里是最后一道闸：超了就用更狠的额度再过一遍 `_clip`。
+MAX_EVENT_JSON = 60000
+
 
 def _clip(obj, limit: int = MAX_TEXT):
     """把事件里超长的字符串 / 超长的数组截掉。返回 (截断后的对象, 截了几个)。
@@ -70,10 +84,14 @@ def _clip(obj, limit: int = MAX_TEXT):
         return obj, 0
     if isinstance(obj, dict):
         out, n = {}, 0
-        for k, v in obj.items():
-            nv, c = _clip(v, limit)
+        keys = list(obj.keys())
+        for k in keys[:MAX_KEYS]:
+            nv, c = _clip(obj[k], limit)
             out[k] = nv
             n += c
+        if len(keys) > MAX_KEYS:
+            out["…"] = "(截断，原有 %d 个 key)" % len(keys)
+            n += 1
         return out, n
     if isinstance(obj, (list, tuple)):
         out, n = [], 0
@@ -105,6 +123,15 @@ class _Bus:
         否则一条 131KB 的 `CRYPT ... hex=...` 就够把 devtools 页面卡死。
         """
         clipped, cut = _clip(fields, KIND_TEXT_LIMIT.get(kind, MAX_TEXT))
+        # 分项上限都过了还嫌大？用更狠的额度再过一遍（只留 1/4），
+        # 保证「一条事件最多占多少」有个硬上限。
+        try:
+            if len(json.dumps(clipped, ensure_ascii=False)) > MAX_EVENT_JSON:
+                clipped, cut2 = _clip(clipped, max(200, MAX_TEXT // 4))
+                cut += cut2 + 1
+        except (TypeError, ValueError):
+            clipped = {"_unserializable": True}
+            cut += 1
         with self._cv:
             self._seq += 1
             event = {"seq": self._seq, "ts": time.time(), "kind": kind}

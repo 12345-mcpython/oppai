@@ -81,11 +81,31 @@ if ($Engine) {
     # ⚠️ 直接调 ndk-build，不要走 engine\build\build.ps1：
     # 那个脚本里有 $ErrorActionPreference = "Stop"，而 ndk-build 把编译警告
     # 写 stderr，PowerShell 会当成终止错误直接中断构建。
-    # 引擎源码补丁。这三个都是幂等的（已打过就打印「跳过」），所以每次 -Engine
-    # 都重跑一遍，保证「照着一份干净源码也能一键编出同样的 .so」。
-    # 其余补丁（add_*.py / fix_*.py）是一次性的，结果已经落在 engine\src 里了，
-    # 清单见 engine\README.md。
-    foreach ($fx in @("enable_js_debugger.py", "fix_js_log.py", "fix_null_texture.py")) {
+    #
+    # 引擎源码补丁分两类，**判据是「改的文件在不在仓库里」**：
+    #
+    #   A. 改 engine\build\oppai-engine\**（这个工程**整个在仓库里**）
+    #      —— add_*.py / fix_attach*.py / fix_hdr.py / fix_inc.py / fix_utilsex.py
+    #         / fix_vp_*.py / move_ccs.py / patch_appdelegate.py 等
+    #      **结果已经跟着仓库一起发布了，不用重跑**（重跑多半也匹配不上）。
+    #
+    #   B. 改 engine\src\**（cocos2d-js 第三方源码，**被 .gitignore 挡在外面**）
+    #      —— 下面这几个。别人的 engine\src 是干净的，**必须每次重跑**，
+    #         否则编出来的 .so 会少掉「战斗收尾」「原生崩溃」这些关键修复。
+    #      它们都写成幂等的（已打过就打印「已处理」），重跑安全。
+    #
+    # ⚠️ 这一段以前只列了 3 个，漏了 fix_lastframe_engine（① 战斗收尾卡住）
+    #    和 fix_precedence（② RotationSkewFrame 原生崩溃）—— 照着一份干净源码
+    #    编出来的 .so 会带着这两个 bug。补全见 engine\ENGINE_PATCHES.md 的「顺序」。
+    foreach ($fx in @(
+        "fix_lastframe_engine.py",   # ① 最后一帧回调传动画名（战斗收尾根因）
+        "fix_precedence.py",         # ② RotationSkewFrame 运算符优先级（原生崩溃根因）
+        "patch_scriptingcore.py",    #    JS 异常内容打到 logcat（否则只有 evaluatedOK == JS_FALSE）
+        "fix_js_log.py",             # ⑬ 让引擎自己的 JS log() 在 release 包里也能打
+        "fix_null_texture.py",       #    Sprite::draw 的空贴图崩溃
+        "quiet_engine.py",           # ③ JniHelper 日志降噪
+        "enable_js_debugger.py"      # ⑫ 打开引擎自带的远程 JS 调试器
+    )) {
         $fp = Join-Path (Join-Path $Eng "build") $fx
         if (-not (Test-Path $fp)) { throw "找不到引擎补丁脚本 $fp" }
         & python $fp

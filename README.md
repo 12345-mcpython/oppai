@@ -6,11 +6,17 @@ Kuro Game《战场双马尾》v2.2.0 已停服。这个项目用**纯 Python（�
 > 仅供个人研究 / 存档 / 客户端逆向学习，请勿用于任何商业用途。
 > 本项目**不包含**任何游戏素材或反编译出来的游戏代码。
 
+> ## 🚀 想直接跑起来 → **[`REPRODUCE.md`](REPRODUCE.md)（从零复刻，逐步带验证点）**
+>
+> 那份是**照着做就能跑起来**的操作手册：环境 → 准备外部资源 → 解包 →
+> （可选）重编引擎 → 起服务端 → 打包装机 → 抽客户端表 → 验证。
+> 本文只讲"仓库里有什么"，分工不同。
+
 ---
 
 ## 这个仓库里有什么 / 没有什么
 
-**只放我们自己写的东西**（190 个文件，约 3 MB）：
+**只放我们自己写的东西**（约 220 个文件，3 MB 出头）：
 
 | 路径 | 内容 |
 |---|---|
@@ -25,14 +31,45 @@ Kuro Game《战场双马尾》v2.2.0 已停服。这个项目用**纯 Python（�
 
 | 缺什么 | 体积 | 怎么来 |
 |---|---|---|
-| `game/` | 1.16 GB | 自备 v2.2.0 的 APK，`script\apktool.bat d` 解包。**游戏素材和反编译代码的版权不属于本项目，请勿再分发** |
-| `engine/src/` | 985 MB | cocos2d-js v3.6 源码（含 cocos2d-x 3.6 + SpiderMonkey 33.1.1） |
+| `game/` | 1.16 GB | **自备《战场双马尾》v2.2.0 的 APK**（见下方占位地址），`script\apktool.bat d` 解包。**游戏素材和反编译代码的版权不属于本项目，请勿再分发** |
+| `engine/src/` | 985 MB | cocos2d-js **v3.6** 源码（含 cocos2d-x 3.6 + SpiderMonkey 33.1.1） |
+| `engine/src/.../cocos2d-x/external/` | 70 MB | cocos2d-x **`v3-deps-47`** 第三方预编译库（缺了报 `Cannot find module with tag 'freetype2/prebuilt/android'`） |
 | `engine/ndk/` | 4.4 GB | Android NDK **r10e**（版本必须对，别的版本编不过） |
 | `script/apktool_3.0.3.jar` | 15 MB | apktool 3.0.3（Apache-2.0），放到 `script\` 下即可 |
 | `engine/build/oppai-engine/Classes/{protobuf-lite,runtime}/` | 2.2 MB | 从 cocos2d-js 的 `js-template-runtime`（`frameworks/runtime-src/proj.android`）抄回来 |
-| `engine/ref/libcocos2djs-original.so` | 18 MB | 从原版 APK 的 `lib/armeabi/` 里取出来 |
+| `engine/ref/libcocos2djs-original.so` | 18 MB | 从原版 APK 的 `lib/armeabi/` 里取出来（只作参考） |
 
-凑齐之后 `.\build.ps1 -Engine -Install -Launch` 就能编出可安装的包。
+### 游戏 APK 从哪来（占位）
+
+原版 v2.2.0 APK **不在本仓库里，也不由本项目提供** —— 请自行合法获取：
+
+```
+        ┌────────────────────────────────────────────┐
+        │   游戏 APK 地址（占位，替换成你自己的来源）  │
+        │                                            │
+        │            <GAME_APK_URL>                  │
+        │                                            │
+        └────────────────────────────────────────────┘
+
+  要求：包名 com.cm.zcsmw.baidu / 版本 2.2.0
+        APK 内 lib/armeabi/ 下必须有 libcocos2djs.so
+```
+
+拿到后**先留一份只读备份**（后面的步骤会反复改解包目录）：
+
+```powershell
+mkdir E:\code\zcsmw\game\original -Force
+copy <你的APK> E:\code\zcsmw\game\original\zcsmw.apk
+```
+
+逐步骤的操作流程见 [`REPRODUCE.md`](REPRODUCE.md)。
+
+凑齐之后：
+
+```powershell
+.\build.ps1 -Install -Launch            # 用现成的引擎 .so，约 1.5 分钟
+.\build.ps1 -Engine -Install -Launch    # 先重编引擎再打（要 NDK r10e，几分钟）
+```
 
 ---
 
@@ -183,6 +220,7 @@ python script\serve.py           # 守护进程，run.py 挂了自动拉起（�
 
 | 文档 | 内容 |
 |---|---|
+| **[`REPRODUCE.md`](REPRODUCE.md)** | ★ **从零复刻**：环境、外部资源、逐步操作 + 验证点、排查顺序 |
 | [`server/docs/overview.md`](server/docs/overview.md) | ★ **先看这份**：全景、分层、逆向结论、按症状查原因的坑表、待办 |
 | [`server/docs/differences.md`](server/docs/differences.md) | ★ **与原版的差异总账**：A 不得不改 / B 私服取舍 / C 还没做 / D **数值是猜的** |
 | [`server/docs/protocol.md`](server/docs/protocol.md) | 协议逐项细节 + 反汇编证据 |
