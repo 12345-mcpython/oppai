@@ -122,6 +122,17 @@ Step 3 "调试器 JS 换成明文（不重编引擎就能改调试器）"
 if ($LASTEXITCODE -ne 0) { Warn "patch_js_debugger 失败，继续" } else { Ok "ok" }
 
 # ---------------------------------------------------------------------------
+Step "3b" "Java 层（smali）补丁"
+# AppActivity.exit() 退出确认弹窗的乱码文案修复。幂等，已修过会打印「跳过」。
+# 必须跑在 Step 4 之前 —— apktool 是从 game\smali 编 classes.dex 的。
+# ⚠️ 这一步不能省：官方包的 classes2.dex 里这个弹窗本来就是乱码
+#    （26 个 U+FFFD，是厂商当年发布就带的），重新 apktool d 解包后会回来，
+#    只有跑这个脚本才修得掉。改动的字符串写成 \uXXXX 转义，对编码完全免疫。
+$env:GS_APK_DIR = $Game
+& python (Join-Path $Server "client\patch_smali.py")
+if ($LASTEXITCODE -ne 0) { Warn "patch_smali 失败，继续" } else { Ok "ok" }
+
+# ---------------------------------------------------------------------------
 Step 4 "打包 APK（apktool 完整打包 + zipalign + 签名）"
 $buildArgs = @((Join-Path $Script "build_apk.py"))
 if ($NoProbe) { $buildArgs += "--no-probe" }
