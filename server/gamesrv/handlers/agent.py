@@ -117,7 +117,13 @@ def _module_stubs(player: dict | None = None) -> dict:
         "chat": {"channels": [], "panels": []},
         "detect": {"completeCount": 0, "allDetect": [], "dropInfo": {}, "speedCount": {}},
         "medal": {"medals": [], "clothes": [], "bgs": [], "heads": []},
-        "equipment": {"equipments": [], "suits": {}},
+        # 装备。形状见 store.equipment_block() —— 是 maxEquipmentCount / equipments /
+        # equipmentGroups 三个键。以前这里是 `{equipments: [], suits: {}}`，两个问题：
+        #   1. 少了 maxEquipmentCount 和 equipmentGroups（客户端 ctor 要读）
+        #   2. `suits` 客户端**压根不读**（我在 equipmentcenter.jsc 里搜过）
+        # 另外每条装备的 firstAttrKeys / secondAttrKeys 必须是数组，否则
+        # initEquipment() 读 .length 时 TypeError。
+        "equipment": store.equipment_block(player),
         "share": {"shareCount": 0, "isCanShare": 0},
         "subareaachievement": {"achievements": []},
         "consumeactivity": {"activityInfo": {}},

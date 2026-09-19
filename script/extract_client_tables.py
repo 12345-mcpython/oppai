@@ -252,6 +252,40 @@ TALENT_UPGRADE_JS = r"""
 """
 
 
+# 装备三张表。`EquipmentCenter` 的登录块和 7 条 equipment.* 路由全靠它们：
+#
+#   table_equipment_constant   槽位上限 / 每组上限 / 升级材料 key / 各品质等级上限
+#   table_equipment_level      "<quality>#<lv>" -> {upgrade_money, upgrade_material,
+#                                                   decompose_money, decomposes_material, ...}
+#   table_equipment            3121 件装备。**只留服务端要用的字段**：
+#                              n=name t=type q=quality m=max_lv f=first_attr_group
+#                              o=outfit_attr_key
+#
+#   `name / type / quality / suitKey` 客户端自己从它那份全表里补
+#   （`initEquipment(eq)` 就干这个），服务端要 `f` 是因为**装备的属性 key 得服务端算**：
+#   `firstAttrKeys = [f + %02d(lv) + "01"]`（见 store.equipment_attr_key）。
+EQUIPMENT_CONSTANT_JS = r"""
+(function () { return JSON.stringify(table_equipment_constant); })()
+"""
+
+EQUIPMENT_LEVEL_JS = r"""
+(function () { return JSON.stringify(table_equipment_level); })()
+"""
+
+EQUIPMENT_JS = r"""
+(function () {
+    var out = {};
+    for (var k in table_equipment) {
+        var r = table_equipment[k];
+        if (!r) { continue; }
+        out[k] = {n: r.name, t: r.type, q: r.quality, m: r.max_lv,
+                  f: r.first_attr_group, o: r.outfit_attr_key};
+    }
+    return JSON.stringify(out);
+})()
+"""
+
+
 def _dump(base: str, js: str, name: str):
     result = eval_remote(base, js, timeout=30.0)
     if not result.get("ok"):
@@ -302,6 +336,12 @@ def main() -> int:
     if _dump(base, TALENT_MASTER_JS, "table_talent_master.json") is None:
         return 1
     if _dump(base, TALENT_UPGRADE_JS, "table_talent_upgrade.json") is None:
+        return 1
+    if _dump(base, EQUIPMENT_CONSTANT_JS, "table_equipment_constant.json") is None:
+        return 1
+    if _dump(base, EQUIPMENT_LEVEL_JS, "table_equipment_level.json") is None:
+        return 1
+    if _dump(base, EQUIPMENT_JS, "table_equipment.json") is None:
         return 1
     return 0
 

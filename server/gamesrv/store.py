@@ -179,6 +179,211 @@ def top_up_talent_materials(items: dict) -> None:
         items[key] = max(int(items.get(key) or 0), TALENT_MATERIAL_STOCK)
 
 
+# ---------------------------------------------------------------------------
+# 装备
+# ---------------------------------------------------------------------------
+# 常量取自客户端 `table_equipment_constant`（服务端抄了一份在 data/ 下）。
+EQUIPMENT_SLOT_TOTAL = 1000            # equipment_slot_total
+EQUIPMENT_MAX_GROUP = 1                # equipment_max_group
+EQUIPMENT_UPGRADE_ITEM = "100401"      # equipment_level_up_key —— 升级用的材料
+EQUIPMENT_MAX_LV = 15                  # max_equipment_lv_1..5 都是 15
+
+# 升级材料的初始存量。原版靠**分解装备**攒
+# （`table_equipment_level["<quality>#<lv>"].decomposes_material`，quality1 每件给 10），
+# 私服直接发一份 —— 不然第一次点「升级」必然提示材料不足。
+EQUIPMENT_MATERIAL_STOCK = 500
+# 见 _migrate：一次性补货的版本号（同样**不能**写进 new_player()）
+EQUIPMENT_STOCK_VERSION = 1
+
+# 初始装备：quality=1 的四个 type 各一件。挑 quality=1 是因为升级消耗最小
+# （`1#0` 只要 130 萌钞 + 2 材料），好试。key 必须存在于客户端 table_equipment。
+EQUIPMENT_START_KEYS = (
+    "eq10101010101",   # type 1  R-LSMK手枪
+    "eq10101010201",   # type 2  R-夜行军面罩
+    "eq10101010301",   # type 3  R-战术水壶
+    "eq10101010401",   # type 4  R-萌军狗牌
+)
+
+
+def equipment_attr_key(group, lv: int, index: int = 1) -> str:
+    """`table_equipment_attr` 的 key 规则（从表里读出来的，不是猜的）：
+
+        <5 位 attr group> + %02d(lv) + %02d(index)
+
+        10101 + 00 + 01 = 101010001   # 组 10101 的 lv0/index1 = 生命值 hp 210
+        10101 + 15 + 01 = 101011501   # lv15
+        20131 + 00 + 02 = 201310002   # 第二属性组同一个规则
+
+    ⚠️ **这个 key 必须有值**：客户端 `equipmentManager.addEquipmentAttrByKeys(keys)` 是
+
+        while (true) { var attr = table_equipment_attr[keys[i]];
+                       ... attr.attr_key ...                 // ← 空数组时 keys[0]=undefined → 崩
+                       if (!(i < keys.length)) break; }      // ← 长度判断在取值**之后**
+
+    **先取值再判长度**，所以空数组也会 `attr.attr_key` 抛 TypeError。
+    表现：「强化」点了没反应（`EquipmentStrengeLayer` 构造抛异常被吞掉），
+    logcat 里只有一行 `JS ERROR: TypeError: config is undefined`。
+    """
+    if not group:
+        return ""
+    return "%s%02d%02d" % (group, int(lv), int(index))
+
+
+def _equipment_first_group(key) -> str:
+    """`table_equipment[key].first_attr_group`。
+
+    局部 import 是为了避开循环依赖：items 依赖 store，store 不能在模块级 import items。
+    """
+    from . import items
+
+    row = items.table("table_equipment").get(str(key)) or {}
+    return str(row.get("f") or "")
+
+
+def _pick_attr_key(group, lv: int) -> str:
+    """挑一个**真实存在**的第一属性 key。
+
+    优先 `<group>%02d(lv)01`；表里没有就退到「同前缀、同等级」的第一个 key。
+
+    ⚠️ 为什么必须回退：**不是所有 `first_attr_group` 都在表里**。实测初始四件装备里
+    `10102` / `10104` 这两组在 `table_equipment_attr` 里**不存在**
+    （该表的第一属性只有 10101 / 10103 / 10131~10139 这些族）。
+    照拼的话客户端 `table_equipment_attr[keys[0]]` 又是 undefined → 强化界面照样崩。
+    """
+    from . import items
+
+    table = items.table("table_equipment_attr")
+    if not table:
+        return ""
+    lv = int(lv)
+    if group:
+        preferred = equipment_attr_key(group, lv, 1)
+        if preferred in table:
+            return preferred
+        prefix = str(group)[:3]
+        same = sorted(k for k, r in table.items()
+                      if int((r or {}).get("lv") or 0) == lv and k.startswith(prefix))
+        if same:
+            return same[0]
+    same_lv = sorted(k for k, r in table.items() if int((r or {}).get("lv") or 0) == lv)
+    return same_lv[0] if same_lv else ""
+
+
+def _fill_equipment_attrs(rows: list) -> bool:
+    """按当前等级重算每件装备的属性 key。返回是否改动过。"""
+    changed = False
+    for row in rows:
+        lv = int(row.get("lv") or 0)
+        want = [k for k in (_pick_attr_key(_equipment_first_group(row.get("key")), lv),) if k]
+        if list(row.get("firstAttrKeys") or []) != want:
+            row["firstAttrKeys"] = want
+            changed = True
+        if not isinstance(row.get("secondAttrKeys"), list):
+            row["secondAttrKeys"] = []
+            changed = True
+    return changed
+
+
+def refresh_equipment_attrs(player: dict) -> bool:
+    """给玩家所有装备重算属性 key。
+
+    `firstAttrKeys` 是**随等级变**的：同一组里 lv0~lv15 各一行（16 行），
+    所以升级之后必须重算，否则属性面板不更新、还会查到不存在的 key。
+
+    `secondAttrKeys` 暂时留空：quality1 装备的 `second_attr_group_1..5` 是 "20101"，
+    而 `table_equipment_attr` 里第二属性的组是 `20131`~`20541` —— **"20101" 不存在**。
+    原版也是升到 lv10 之后（`table_equipment_level.second_attr_add_limit` 由 0 变 3/4）
+    才加第二属性。要补的话得先弄清那个组是怎么选的。
+    """
+    return _fill_equipment_attrs(player_equipments(player))
+
+
+def new_equipments() -> list:
+    """初始装备。
+
+    每条实例的字段是**反汇编 `EquipmentCenter` + `initEquipment(eq)` 定的**：
+
+        id / key / soldierId / isLock / isNew / lv / firstAttrKeys / secondAttrKeys
+
+    ⚠️ `firstAttrKeys` / `secondAttrKeys` **必须是数组，而且 `firstAttrKeys` 不能为空** ——
+    见 `equipment_attr_key()` 的说明，空数组会让客户端在 `addEquipmentAttrByKeys`
+    里 `attr.attr_key` 抛 TypeError。
+
+    `name / type / quality / suitKey` **不用发** —— `initEquipment()` 自己从
+    `table_equipment[eq.key]` 里补（`eq.key` 是唯一必须对的字段）。
+    """
+    out = []
+    for i, key in enumerate(EQUIPMENT_START_KEYS, start=1):
+        out.append({
+            "id": i,
+            "key": key,
+            "soldierId": "",      # 空串 = 没装在任何军士身上
+            "isLock": 0,
+            "isNew": 1,
+            "lv": 0,
+            "firstAttrKeys": [],
+            "secondAttrKeys": [],
+        })
+    _fill_equipment_attrs(out)
+    return out
+
+
+def new_equipment_groups() -> list:
+    """装备编组。客户端 `_initGroupEquipments` 按 `index` 索引，每组 `{index, equipments}`。"""
+    return [{"index": i, "equipments": {}} for i in range(1, EQUIPMENT_MAX_GROUP + 1)]
+
+
+def player_equipments(player: dict) -> list:
+    """玩家装备列表。缺失/坏掉就补一份默认的（客户端直接迭代它）。"""
+    rows = player.get("equipments")
+    if not isinstance(rows, list):
+        rows = new_equipments()
+        player["equipments"] = rows
+    return rows
+
+
+def player_equipment_groups(player: dict) -> list:
+    groups = player.get("equipmentGroups")
+    if not isinstance(groups, list):
+        groups = new_equipment_groups()
+        player["equipmentGroups"] = groups
+    return groups
+
+
+def equipment_block(player: dict) -> dict:
+    """登录包里 `equipment` 那块。形状见 `EquipmentCenter.ctor(data)`。
+
+    ⚠️ 是 `maxEquipmentCount / equipments / equipmentGroups` 三个键，
+    **不是**以前那种 `{equipments, suits}` —— `suits` 客户端压根不读。
+    """
+    return {
+        "maxEquipmentCount": EQUIPMENT_SLOT_TOTAL,
+        "equipments": player_equipments(player),
+        "equipmentGroups": player_equipment_groups(player),
+    }
+
+
+def find_equipment(player: dict, equipment_id):
+    for row in player_equipments(player):
+        if str(row.get("id")) == str(equipment_id):
+            return row
+    return None
+
+
+def next_equipment_id(player: dict) -> int:
+    used = {int(r.get("id") or 0) for r in player_equipments(player)}
+    n = 1
+    while n in used:
+        n += 1
+    return n
+
+
+def top_up_equipment_material(items: dict) -> None:
+    """把装备升级材料补到 EQUIPMENT_MATERIAL_STOCK（只加不减）。"""
+    items[EQUIPMENT_UPGRADE_ITEM] = max(int(items.get(EQUIPMENT_UPGRADE_ITEM) or 0),
+                                        EQUIPMENT_MATERIAL_STOCK)
+
+
 # 新手引导位掩码全 1 = 所有引导都已完成。见 new_player() 里的说明。
 GUIDE_MARK_DONE = 0x7FFFFFFF
 
@@ -401,6 +606,7 @@ def new_player(account: str) -> dict:
     now = int(time.time())
     items = default_items()
     top_up_talent_materials(items)
+    top_up_equipment_material(items)
     return {
         "id": 1,
         "account": account,
@@ -422,6 +628,9 @@ def new_player(account: str) -> dict:
         "items": items,
         # 天赋（培养）。形状见 new_talents() 的注释 —— 必须是 {curTalentKey, lv} 对象。
         "talents": new_talents(),
+        # 装备。字段形状见 new_equipments() 的注释（attr 两个数组不能缺）。
+        "equipments": new_equipments(),
+        "equipmentGroups": new_equipment_groups(),
         # ⚠️ 这里**故意不写** `talentStockVersion`：它由 _migrate 独家维护，
         #    否则「按 key 补字段」那一圈会先把版本号补上，把一次性补货门闩顶开。见上面的注释。
         # 军士（18 个初始军士）。**建号时就发**，不是等第一次登录现生成 ——
@@ -514,6 +723,23 @@ def _migrate(player: dict) -> bool:
                      len(TALENT_MATERIAL_KEYS), TALENT_MATERIAL_STOCK)
         player["talentStockVersion"] = TALENT_STOCK_VERSION
         changed = True
+    # 装备升级材料补货。同样的道理：老存档的 `items` 已经存在，「按 key 补字段」救不到，
+    # 而且必须靠版本号做成一次性的（否则花掉的材料会被立刻补回来）。
+    if int(player.get("equipmentStockVersion") or 0) != EQUIPMENT_STOCK_VERSION:
+        items = player.get("items")
+        if isinstance(items, dict):
+            top_up_equipment_material(items)
+            log.info("玩家 %s 补装备升级材料 %s（v%s，%d 个）",
+                     player.get("account"), EQUIPMENT_UPGRADE_ITEM,
+                     EQUIPMENT_STOCK_VERSION, EQUIPMENT_MATERIAL_STOCK)
+        player["equipmentStockVersion"] = EQUIPMENT_STOCK_VERSION
+        changed = True
+    # 装备的属性 key。早期发出去的装备行 `firstAttrKeys` 是空数组，而客户端
+    # `addEquipmentAttrByKeys` 是**先取值后判长度** → 空数组也崩（强化界面打不开）。
+    # 无条件重算一遍，顺带兼容「升级后 key 要跟着等级走」（见 equipment_attr_key）。
+    if refresh_equipment_attrs(player):
+        changed = True
+        log.info("玩家 %s 重算了装备属性 key", player.get("account"))
     return changed
 
 
