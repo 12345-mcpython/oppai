@@ -23,16 +23,20 @@ import subprocess
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-BASE_DIR = _paths.SERVER
-APK_DIR = os.environ.get("GS_APK_DIR", r"E:\code\zcsmw\game")
 
 # --- 路径自举（项目已重排：脚本在 script/、服务端在 server/）---
+# ⚠️ 自举必须排在**任何 `_paths.X` 使用之前**。早先 `BASE_DIR = _paths.SERVER`
+# 写在这一段上面，于是本脚本从任何目录跑都是
+# `NameError: name '_paths' is not defined`。
 # 从自己往上找带 _paths.py 的那一层，把它和 server/ 都塞进 sys.path。
 _d = os.path.dirname(os.path.abspath(__file__))
 while _d != os.path.dirname(_d) and not os.path.isfile(os.path.join(_d, "_paths.py")):
     _d = os.path.dirname(_d)
 sys.path.insert(0, _d)
 import _paths  # noqa: F401,E402
+
+BASE_DIR = _paths.SERVER
+APK_DIR = os.environ.get("GS_APK_DIR", r"E:\code\zcsmw\game")
 
 sys.path.insert(0, HERE)
 from analyze import STRIP_PREFIXES  # noqa: E402

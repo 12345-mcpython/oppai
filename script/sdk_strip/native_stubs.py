@@ -24,6 +24,7 @@ from __future__ import annotations
 
 from typing import Dict, List, Tuple
 import os
+import sys
 # --- 路径自举（项目已重排：脚本在 script/、服务端在 server/）---
 # 从自己往上找带 _paths.py 的那一层，把它和 server/ 都塞进 sys.path。
 _d = os.path.dirname(os.path.abspath(__file__))
