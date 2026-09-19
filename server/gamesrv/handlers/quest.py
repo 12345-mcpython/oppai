@@ -73,6 +73,27 @@ def mark_char_state(session: dict, msg: dict, req_id):
     return {"code": CODE_OK, "msg": "", "data": {}}
 
 
+# ---------------------------------------------------------------------------
+# ⚠️ 命名空间坑：新手任务客户端走的是 **`novicequest.`**，不是 `quest.`
+#
+# 客户端 src/data/novicequestcenter.jsc 里四个方法打的全是 novicequest.*：
+#     requestMarkFirstAni  -> 'novicequest.markfirstani'  {isOpened: 1}
+#     requestMarkEnterAni  -> 'novicequest.markfirstani'  {isEntered: 1}
+#     requestMarkReceiveKey-> 'novicequest.markreceivekey'
+#     requestMarkChar      -> 'novicequest.markcharstate'
+#
+# 而这里原来只注册了 `quest.markcharstate` / `quest.markfirstani` /
+# `quest.markreceivekey` —— 于是客户端那 4 个请求全部落进「未实现的 route」，
+# 拿回一个空 data 的 200。客户端以为成功、实际什么都没记
+# （`noviceQuest.isOpened` 这类状态永远不更新）。
+#
+# 而 `quest.markfirstani` **也确实有人调**（就在同一个 novicequestcenter.jsc 里），
+# 所以两个名字都必须留着 —— 用别名把同一个函数注册两遍（见文件末尾 `_alias`）。
+
+
+
+
+
 @route("quest.markfirstani")
 def mark_first_ani(session: dict, msg: dict, req_id):
     """新手任务：首次动画标记。"""
@@ -118,3 +139,17 @@ def sync_up_client(session: dict, msg: dict, req_id):
         log.info("sync.syncupclient 推送 quest（客户端 %s != 服务端 %s）",
                  client_time, quests.update_time(player))
     return {"code": CODE_OK, "msg": "", "data": data}
+
+# ---------------------------------------------------------------------------
+# 别名注册（必须放在所有 handler 定义**之后**）
+# ---------------------------------------------------------------------------
+def _alias(fn, *names):
+    """把同一个 handler 注册到多个 route 名下。"""
+    for n in names:
+        route(n)(fn)
+    return fn
+
+
+_alias(mark_char_state, "novicequest.markcharstate")
+_alias(mark_first_ani, "novicequest.markfirstani")
+_alias(mark_receive_key, "novicequest.markreceivekey")

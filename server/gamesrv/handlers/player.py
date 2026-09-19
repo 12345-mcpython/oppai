@@ -59,6 +59,36 @@ def update_guide_mark(session: dict, msg: dict, req_id):
     return {"code": CODE_OK, "msg": "", "data": {"mark": mark}}
 
 
+@route("player.setmoduleopenmark")
+def set_module_open_mark(session: dict, msg: dict, req_id):
+    """功能模块开启标记。
+
+    请求体是一个**数组**：`[1, 2, 3, 4, 5, 8, 9, 10, 12, ...]`（客户端每次登录打一次）。
+
+    反汇编 `src/data/player.jsc`：`server.request('player.setmoduleopenmark', ...)`
+    之后紧接着就是 `Player<.initTeams` —— 调用点**没读响应**，是发完不管的。
+
+    所以这里两件事：
+      1. 把客户端报上来的这批编号记到存档里（`moduleOpenMark`），以后要用有得用；
+      2. 回一个**带 `player` 块**的响应 —— `player` 在客户端的 responseConfig 里，
+         带上它客户端会顺手 `Player.updateByServer(player)`，
+         把 `moduleState` 这种权威状态再对齐一次。
+         （`moduleState` 缺失会让主界面 `_initModuleButtons` 死在
+          `TypeError: modules is undefined`，见 store.py 里的注释。）
+
+    ⚠️ **不要**拿这批编号去改 `moduleState`：`moduleState` 的 key 是
+    `store.MODULE_KEYS`（100001…100032），而这里收到的是 1…32，
+    两套编号不是一回事，硬套会把 32 个模块的开启状态全抹掉。
+    """
+    account = _account(session)
+    marks = msg if isinstance(msg, list) else (msg or {}).get("marks") or []
+    player = store.get_or_create_player(account)
+    player["moduleOpenMark"] = list(marks)
+    store.save_player(player)
+    log.info("player.setmoduleopenmark account=%s 收到 %d 个编号", account, len(marks))
+    return {"code": CODE_OK, "msg": "", "data": {"player": player}}
+
+
 @route("player.updateteams")
 def update_teams(session: dict, msg: dict, req_id):
     """编成保存。
