@@ -184,6 +184,7 @@ python script\serve.py           # 守护进程，run.py 挂了自动拉起（�
 | 文档 | 内容 |
 |---|---|
 | [`server/docs/overview.md`](server/docs/overview.md) | ★ **先看这份**：全景、分层、逆向结论、按症状查原因的坑表、待办 |
+| [`server/docs/differences.md`](server/docs/differences.md) | ★ **与原版的差异总账**：A 不得不改 / B 私服取舍 / C 还没做 / D **数值是猜的** |
 | [`server/docs/protocol.md`](server/docs/protocol.md) | 协议逐项细节 + 反汇编证据 |
 | [`server/docs/reverse-engineering.md`](server/docs/reverse-engineering.md) | jsc 反汇编器原理、运行时探测手法 |
 | [`server/docs/decompile.md`](server/docs/decompile.md) | jsc → js 反编译器：怎么做、三个关键字节码形状、已知问题 |

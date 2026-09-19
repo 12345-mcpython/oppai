@@ -25,6 +25,11 @@
 //      视频播完后回调会因为 _videoPlayer 已为 null 而抛异常；而且 Android 侧
 //      残留的 VideoView 会一直盖在画面上（表现为画面停在视频最后一帧）。
 //
+//   6. 宿舍「互动（抚摸）」判定框放大
+//      ⚠️ **这条不是修 bug，是私服体验改动**（原版能玩，只是反人类：
+//      判定框 100×100、不可见、在角色右边，还得在 1 秒内开始搓）。
+//      原因和实测见文件末尾那段。要还原原版手感就把那一段整块删掉。
+//
 // 探针/诊断部分在 probe.js —— release 可以不打包那个文件。
 // 两个文件互相独立，这个文件不依赖 probe.js 的任何东西。
 // ===========================================================================
@@ -903,6 +908,96 @@
                 if (patch()) {
                     clearInterval(window.__oppaiInitGuardTimer);
                     window.__oppaiInitGuardTimer = null;
+                }
+            }, 500);
+        }
+    })();
+
+
+    // ------------------------------------------------------------------
+    // 宿舍「互动（抚摸）」判定框放大 —— **私服体验改动，不是修 bug**
+    //
+    // 玩法本身是两步手势，反汇编 `FavorLayer.newTouchEffect` + `CharAsstLayer`：
+    //   ① 点/搓角色的头或胸口 -> `eachTalkCb` -> `touchEffect.showView()` 爱心出现
+    //   ② 在**那个爱心上**按住来回搓 -> `pgState=1`，`percent += dt*60`（松手 -40）
+    //   ③ 填满 100 -> `toucuFullCb` -> `favor.touchcharasst` -> 加好感度
+    //
+    // 卡点在 ②：那个判定框是 `favortoucheffect.csb` 里的 `touchpanel`，
+    // **只有 100×100**，中心在世界坐标 (434,400) —— 在角色右边、屏幕上那颗爱心附近，
+    // **不在角色身上**，而且**完全不可见**。不反汇编根本猜不到要搓哪。
+    // 再加上 `showView` 之后 `PG_SHOW_STAY_TIME = 1000`：1 秒内不开始搓就自动收起。
+    //
+    // 实测（把框临时放大到 900×700 覆盖角色）：一次按住来回搓就能连续触发 3 次，
+    // 服务端日志 `favor.touchcharasst hadf 好感 +22` 应声而来 —— 机制没问题，
+    // 纯粹是「要搓对地方」这件事反人类。
+    //
+    // 所以这里把判定框放大到覆盖角色的两个触摸区（头/脸 + 胸口），
+    // **不动 1 秒窗口**（那个常量 `PG_SHOW_STAY_TIME` 是 `newTouchEffect` 的闭包变量，
+    // 从外面够不着；放大之后手感已经够了，没必要再自己发明行为）。
+    //
+    // 位置是相对 `favortoucheffectcase` 的（那个 case 落在屏幕中心偏右），
+    // 所以用偏移量，换分辨率也不会跑偏。
+    // ------------------------------------------------------------------
+    (function installFavorTouchQoL() {
+        var BOX_W = 560;        // 覆盖角色两个触摸区（世界 x 173~375, y 248~600）
+        var BOX_H = 560;
+        var OFF_X = -154;       // 相对 favortoucheffectcase 的偏移
+        var OFF_Y = 20;
+
+        function fix(layer) {
+            var te = layer && layer.touchEffect;
+            if (!te || te.__oppaiTouchBox) {
+                return !!te;
+            }
+            te.__oppaiTouchBox = true;
+            var kids = te.getChildren();
+            for (var i = 0; i < kids.length; i++) {
+                var child = kids[i];
+                if (child && child.getName && child.getName() === "touchpanel") {
+                    child.setContentSize(cc.size(BOX_W, BOX_H));
+                    child.setPosition(cc.p(OFF_X, OFF_Y));
+                    emit("FAVOR-TOUCH 互动判定框放大到 " + BOX_W + "x" + BOX_H +
+                         "（原版是 100x100，在角色右边且不可见）");
+                }
+            }
+            return true;
+        }
+
+        function patch() {
+            if (typeof window.FavorLayer === "undefined" || !window.FavorLayer.prototype) {
+                return false;
+            }
+            var proto = window.FavorLayer.prototype;
+            if (proto.__oppaiTouchBoxPatched) {
+                return true;
+            }
+            var orig = proto._initMainUi;
+            if (typeof orig !== "function") {
+                return false;
+            }
+            // touchEffect 是在 _initMainUi 里建出来的，所以得包一层再回来处理
+            proto._initMainUi = function () {
+                var ret = orig.apply(this, arguments);
+                try {
+                    fix(this);
+                } catch (e) {
+                    emit("FAVOR-TOUCH 放大判定框失败: " + e);
+                }
+                return ret;
+            };
+            proto.__oppaiTouchBoxPatched = true;
+            emit("FAVOR-TOUCH 互动判定框补丁已安装");
+            return true;
+        }
+
+        if (patch()) {
+            return;
+        }
+        if (!window.__oppaiFavorTouchTimer) {
+            window.__oppaiFavorTouchTimer = setInterval(function () {
+                if (patch()) {
+                    clearInterval(window.__oppaiFavorTouchTimer);
+                    window.__oppaiFavorTouchTimer = null;
                 }
             }, 500);
         }

@@ -86,6 +86,7 @@ server/                        （= E:\code\zcsmw\server）
 │   └── patch_smali.py         打 Java 层登录补丁
 └── docs/
     ├── overview.md            ★ 全景总览（先看这份）
+    ├── differences.md         ★ 与原版的差异总账（哪些是私服改的、哪些是猜的）
     ├── devtools.md            浏览器调试台（面板说明 + 架构取舍 + 怎么扩展）
     ├── engine-debug.md        ★ 引擎层调试：自带远程 JS 调试器怎么打开、协议、4 个坑
     ├── build.md               打包逻辑（为什么这么做）

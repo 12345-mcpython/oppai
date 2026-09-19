@@ -456,6 +456,46 @@ logcat 里只有一行 `JS ERROR: TypeError: config is undefined @ equipmentstre
 `check_devtools.py` 里加了条**不变量**：剔掉注释后 `setInterval(` 全文只能出现一次
 （就是 `poll()` 里那次）。这样以后谁再直接 `setInterval(asyncFn)` 会被自测拦下来。
 
+### 6.10 「点了/搓了没反应」——先确认那是**几步**手势
+
+宿舍的「互动（抚摸）」我查了很久，最后发现**代码一直是对的**，是我在错的地方搓。
+它的真身是**两步手势**（反汇编 `FavorLayer.newTouchEffect` + `CharAsstLayer`）：
+
+    ① 点/搓角色的头或胸口  -> eachTalkCb -> touchEffect.showView()  爱心出现
+    ② 在**那颗爱心上**按住来回搓 -> pgState=1，percent += dt*60（松手 -40）
+    ③ 填满 100 -> toucuFullCb -> favor.touchcharasst
+
+坑在 ②：判定框是 `favortoucheffect.csb` 里的 `touchpanel`，**只有 100×100、
+完全不可见**、中心在世界坐标 (434,400)——在角色**右边**，不在角色身上。
+而且 `showView` 之后 `PG_SHOW_STAY_TIME = 1000`：**1 秒**内不开始搓就自动收起。
+
+`curMode` 也是陷阱：`touchEffect.showView()` 的条件是
+`curMode == DETAIL && decorateMode == SHOW && interActivePanel.getCount() > 0`，
+而这两项在**列表模式和详情模式下都成立**，光看它判断不出你在哪一屏。
+
+**排查顺序**（我绕了好几圈才走对）：
+
+1. **先看服务端有没有收到请求**（存档里的 `curExp` / 次数有没有动）——
+   收到了就是客户端表现问题，没收到才是链路问题
+2. 再逐层挂探针：触摸监听器 -> 领域判定 -> 回调 -> 进度
+3. **别凭"这个日志刷屏了"就去认领它当根因** —— 我一开始把
+   `createExpSprite error, clothes item not found` 当成触摸失败的原因，
+   其实那是 `CharAsstLayer.talk`（立绘说话表情），两条路互不相干。
+   查法：`jsc_find.py createExpSpriteEx` 看**调用点**，只有两个，都不在触摸路径上
+
+**挂探针本身也有坑**：`cc.EventListener.create(config)` 会把 **`config.event` 删掉**，
+真正的监听器是它**复制出来的另一个对象**。所以
+
+    layer.asstLayer.touchListener.onTouchBegan = 我的包装   // ← 永远不会被调用
+
+现象是「探针装上了、`__probed` 也是 true，但一条日志都没有」。
+两个特征可以认出这件事：`touchListener.constructor.name === "Object"`（不是
+`EventListenerTouchOneByOne`）、`touchListener.event === undefined`。
+要挂就得**先把 `event` 补回去、包好、再 `disableFavorTouch()` + `enableFavorTouch()` 重新注册**。
+
+**这条已经改成私服体验改动了**（判定框放大到覆盖角色），见
+[`differences.md`](differences.md) 和 `server/client/patch.js` 末尾那段。
+
 ---
 
 
@@ -658,6 +698,7 @@ python script\repl.py "jsb.reflection.callStaticMethod('org/cocos2dx/javascript/
 | `docs/devtools.md` | 浏览器调试台：六个面板怎么用、架构取舍、怎么加面板 |
 | `docs/engine-debug.md` | **引擎层调试**：引擎自带的远程 JS 调试器怎么打开、协议、4 个坑、复现清单 |
 | `docs/protocol.md` | 协议逐项细节 + 反汇编证据（含 quest 协议、session 前缀） |
+| **`docs/differences.md`** | ★ **与原版的差异总账**：A 不得不改 / B 私服取舍 / C 还没做 / D **数值是猜的** |
 | `docs/reverse-engineering.md` | jsc 反汇编器原理、运行时探测手法、排障套路 |
 | `docs/build.md` | 打包逻辑（为什么这么做） |
 | `script/README.md` | 工具索引（哪个脚本干什么、加新模块的推荐流程） |
