@@ -70,6 +70,29 @@ ITEM_GEM = "100001"
 ITEM_MONEY = "100002"
 ITEM_ACTION_POINT = "100003"
 
+
+def default_items() -> dict:
+    """新号的初始背包。登录包里 `item` 那个块就是这个形状（`{key: count}`）。
+
+    放在 store 而不是 items.py，是为了避免循环 import：
+    items.py 要用 store（建军士、读常量），store 不该反过来依赖 items。
+    """
+    return {
+        ITEM_GEM: 100000,
+        ITEM_MONEY: 10000000,
+        ITEM_ACTION_POINT: 999,
+    }
+
+
+def player_items(player: dict) -> dict:
+    """玩家背包。缺失/坏掉就补一份默认的（客户端直接读属性，缺了会抛异常）。"""
+    items = player.get("items")
+    if not isinstance(items, dict):
+        items = default_items()
+        player["items"] = items
+    return items
+
+
 # 新手引导位掩码全 1 = 所有引导都已完成。见 new_player() 里的说明。
 GUIDE_MARK_DONE = 0x7FFFFFFF
 
@@ -306,6 +329,9 @@ def new_player(account: str) -> dict:
         "medalBgId": 0,
         "curTeamIdx": 0,
         "moduleState": new_module_state(),
+        # 背包。登录包的 `item` 块直接用它，买东西/领奖励也改它。
+        # 平铺的 `{itemKey: count}` —— 客户端 Bag.ctor 拿它 + table_item 建对象。
+        "items": default_items(),
         # 军士（18 个初始军士）。**建号时就发**，不是等第一次登录现生成 ——
         # `ensure_soldiers` 只在内存里补，登录接口不写盘，所以「现生成」的版本
         # 每次都可能是新的，军士升级/突破的结果会莫名其妙回退。

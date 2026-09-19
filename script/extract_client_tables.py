@@ -110,6 +110,37 @@ NPC_JS = r"""
 })()
 """
 
+# 商店货架（商品）。
+#
+# 客户端自带这张表（2049 条），`Shop.judgeBuyGood` 用 shelfKey 查它做**客户端侧**
+# 校验（等级 / 公会等级 / 限购次数 / 消耗够不够 / 背包满没满），但真正成交
+# 必须服务端说了算 —— 服务端要按 shelfKey 扣钱发货，就得知道每个货架卖什么、
+# 要多少、限购几次。
+#
+# 行形如：
+#   100101 = {shop_key:"1001", good_type:"i", good_key:"100038", good_count:1,
+#             consume_key_1:"100019", consume_count_1:200, cycle_times_limit:1}
+SHELF_JS = r"""
+(function () {
+    var out = {};
+    for (var k in table_shelf) {
+        out[k] = table_shelf[k];
+    }
+    return JSON.stringify(out);
+})()
+"""
+
+# 商店本身（名字 / 类型 / 刷新时间表 / 拿什么货架）。
+SHOP_JS = r"""
+(function () {
+    var out = {};
+    for (var k in table_shop) {
+        out[k] = table_shop[k];
+    }
+    return JSON.stringify(out);
+})()
+"""
+
 # 关卡通关奖励。
 #
 # 战斗结算面板上「获得物资」那一栏是空的，就是因为服务端没回奖励。
@@ -236,6 +267,10 @@ def main() -> int:
     if _dump(base, LEVEL_JS, "table_level_reward.json") is None:
         return 1
     if _dump(base, SOLDIER_JS, "table_soldier.json") is None:
+        return 1
+    if _dump(base, SHELF_JS, "table_shelf.json") is None:
+        return 1
+    if _dump(base, SHOP_JS, "table_shop.json") is None:
         return 1
     return 0
 

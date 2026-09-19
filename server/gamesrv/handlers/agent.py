@@ -50,11 +50,9 @@ def _module_stubs(player: dict | None = None) -> dict:
         # 早先按 `{items:{...}, package:{}, limitTimeItems:[]}` 给，items[key] 全是 undefined，
         # 结果就是所有道具都是 0（表现：进关卡弹「没有甜甜圈了 是否需要补充行动力」）。
         #   100001 钻石 / 100002 萌钞 / 100003 行动力（"甜甜圈"）
-        "item": {
-            store.ITEM_GEM: 100000,
-            store.ITEM_MONEY: 10000000,
-            store.ITEM_ACTION_POINT: 999,
-        },
+        # 背包。以前是写死的 {GEM:100000, MONEY:10000000, AP:999}，
+        # 现在读存档 —— 不然买了东西一发一扣，重登又变回去了。
+        "item": store.player_items(player),
         "char": {
             "heros": [store.new_hero()],
             # ⚠️ 军士存在玩家存档里（升级过就不能每次登录现生成，否则升级会回退）
