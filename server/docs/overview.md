@@ -275,7 +275,45 @@ python -c "import sys; sys.path.insert(0,'server'); from gamesrv import handlers
 # 修之前 -> list 0     修之后 -> dict 1142
 ```
 
+### 6.3 客户端表：**空数组也会崩**（长度判断写在取值之后）
+
+装备的 `firstAttrKeys` / `secondAttrKeys` 一开始给的是空数组，结果「强化」点了没反应。
+logcat 里只有一行 `JS ERROR: TypeError: config is undefined @ equipmentstrengelayer.js:129`。
+
+根因在 `equipmentManager.addEquipmentAttrByKeys(keys)`：
+
+    while (true) {
+        var attr = table_equipment_attr[keys[i]];      // ← keys 为空时 keys[0] = undefined
+        if (resultAttr[attr.attr_key] == null) ...     // ← attr.attr_key → TypeError
+        i++;
+        if (!(i < keys.length)) break;                 // ← 长度判断在取值**之后**！
+    }
+
+**它是先取值、后判长度**，所以"空数组"根本不安全（我们习惯的 `for (i=0;i<n;i++)` 思维会踩）。
+
+教训：**客户端要的数组字段，先确认它是不是"至少得有一个元素"**。这类字段宁可给一个
+合法的默认值，也不要给空数组。
+
+### 6.4 `hidden` 属性只是 UA 样式，作者样式能盖掉
+
+```css
+[hidden] { display: none }        /* UA 样式，优先级最低 */
+.chk    { display: inline-flex }  /* 作者样式 —— 盖掉上面那条 */
+```
+
+于是 `<label class="chk" hidden>` **照样显示**，而同一批操作里 `<button hidden>` 藏得掉
+（button 没写显式 display）—— 表现就是"有的藏了有的没藏"，看着自相矛盾。
+
+`devtools.css` 里加了兜底（**任何用 JS 切显隐的地方都受益**）：
+
+```css
+[hidden] { display: none !important; }
+```
+
+同类坑还有：`display: flex` 的容器里，子元素的 `hidden` 也常常失效。
+
 ---
+
 
 
 ## 7. 现状与待办
@@ -304,6 +342,14 @@ python -c "import sys; sys.path.insert(0,'server'); from gamesrv import handlers
       落盘、升级真扣材料（`table_talent_upgrade` 的三张表进了 `gamesrv/data/`）。
       顺带修掉「登录包 `instance` 被桩覆盖」—— 那个 bug **把整个关卡进度吞掉了**，
       不只是天赋，见 §6.2
+- [x] **装备系统**（`equipment.*` 7 条，路由 57→64）：登录块按 `EquipmentCenter.ctor`
+      的形状给，7 条路由全实现（穿/脱/升级/分解/锁定/标记已读/编组）。
+      ⚠️ 属性 key `firstAttrKeys` **必须由服务端算**（`<first_attr_group>+%02d(lv)+%02d(index)`）
+      且**不能为空** —— 客户端 `addEquipmentAttrByKeys` 先取值后判长度，空数组也崩；
+      而且不是所有 `first_attr_group` 都在属性表里，所以加了校验+回退。见 §6.3
+- [x] **调试台**：日志分级（debug/info/warning/error/fatal，服务端按行首判级）、
+      页签记忆、toast 自动关闭、控制台/日志/流量自动滚动、数据面板三个视图都能翻页、
+      表浏览一行省略+点开展开、`[hidden]` 兜底（见 §6.4）
 - [x] 文档：协议 / 逆向手法 / 打包逻辑 / 调试台 / 引擎调试 / 本总览
 
 ### 待办（按卡点排序）
@@ -330,20 +376,22 @@ python -c "import sys; sys.path.insert(0,'server'); from gamesrv import handlers
    `{item, innSize, index}`），所以卡在「层的 `_recommendList` 是 0」。
    **不影响战斗**（这个弹窗是可选的好友助战）。
 5. **其余未实现的 route** —— `python script/route_gap.py --static` 能列出全部。
-   当前：客户端静态候选 **161** 条，服务端 **57** 条，缺 **114** 条。按单机价值排：
+   当前：客户端静态候选 **161** 条，服务端 **64** 条，缺 **105** 条。按单机价值排：
 
    | 命名空间 | 缺 | 说明 |
    |---|---|---|
-   | `equipment.*` | 7 | 装备（穿脱/升级/分解），完全没有；能复用 `items` 层 |
-   | `favor.*` | 5 | 宿舍好感度（送礼/换装/换背景） |
-   | `exchange.*` | 6 | 黑市交易所（`checkorder` 已实现） |
-   | `detect.*` | 6 | 侦查 |
-   | `diary.*` / `sign.*` / `subareaachievement.*` | 1+1+1 | 零散领奖类，工作量小 |
+   | `favor.*` | 5 | 宿舍好感度（送礼/换装/换背景/触摸），主菜单「宿舍」入口 |
+   | `exchange.*` | 6 | 黑市交易所（`checkorder` 已实现）；要抽兑换表 |
+   | `detect.*` | 6 | 侦查玩法 |
+   | `diary.*` / `sign.*` / `subareaachievement.*` / `convert.*` / `share.*` | 1+1+1+1+1 | 零散领奖类，工作量最小，适合热身 |
+   | `boss.*` | 5 | 好友 BOSS（`getbosslist` 已实现并回空表） |
    | `society.*` / `societyclg.*` | 33+6 | 军团——单机价值低、量最大 |
    | `friend.*` / `medal.*` / `arena.*` | 9+9+4 | 社交类，同上 |
 
    ⚠️ **`rank.*` / `boss.getbosslist` 这类"回空表"不算缺口**：私服没有榜、没有好友，
    回空才是对的（见 `handlers/rank.py` 的论证），别当成没实现去"补"。
+
+   ✅ `equipment.*`(7) 和 `player.selecttalent`/`upgradetalent` 已经补完，不在上面了。
 6. `hashKey` / `hmac64` 还没复刻（登录靠单位元绕过）；自研 DH 的完整算法也没还原。
 
 ---
