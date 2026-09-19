@@ -106,6 +106,29 @@ def static_checks() -> int:
         bad += 1
     else:
         print(f"✓ 前端接口路径都有对应路由（{len(paths)} 个）")
+
+    # 后台轮询：`setInterval(asyncFn)` 是个陷阱 —— setInterval 不管返回值，
+    # async 函数一 reject（服务端重启时 fetch 必然 reject）就是一个
+    # **unhandledrejection**，会往页顶那条兜底红条里一直追加。
+    # 约定：只能通过 `poll()` 包一层，所以代码里 `setInterval(` 只该出现一次。
+    # ⚠️ 注释里提到 setInterval 不算 —— 先剔掉行注释和块注释再数。
+    stripped = re.sub(r"/\*.*?\*/", "", js, flags=re.S)
+    stripped = "\n".join(ln for ln in stripped.split("\n")
+                         if not ln.lstrip().startswith(("//", "*")))
+    n_interval = len(re.findall(r"\bsetInterval\s*\(", stripped))
+    if n_interval == 1:
+        print("✓ setInterval 只在 poll() 里出现一次（后台轮询不会漏成 unhandledrejection）")
+    else:
+        print(f"✗ setInterval 出现了 {n_interval} 次（应该只有 poll() 里那一次）"
+              f" —— 直接用 setInterval(asyncFn) 会漏 unhandledrejection")
+        bad += 1
+
+    # 兜底红条必须关得掉、有上限 —— 否则它会一直挂在页顶挡着工具栏
+    if "FATAL_MAX" in js and "关闭" in js:
+        print("✓ 兜底红条可关闭、有行数上限")
+    else:
+        print("✗ 兜底红条没有关闭按钮 / 行数上限（会一直挂在页顶）")
+        bad += 1
     return bad
 
 

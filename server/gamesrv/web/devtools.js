@@ -13,19 +13,56 @@
 // 这个页面是拿来排障的，它自己坏了必须能一眼看出来。
 // 用最原始的 DOM 操作画一条红条（不依赖下面任何代码），
 // 并且把 id 引用错误之类的问题直接说清楚。
+//
+// ⚠️⚠️ **红条必须能关掉、必须有上限、同一条不能重复堆**。踩过一次：
+// 它是 `position:fixed;top:0;z-index:999` 而且**只有 `textContent += `**，
+// 于是服务端重启期间每 5 秒一次的 fetch 失败（见文件末尾 `poll()` 的说明）
+// 把页顶那条红条越堆越长 —— **一直挂在最上面挡着工具栏，而且关不掉**。
+// 现在：右上角有「关闭 ✕」，最多留 FATAL_MAX 行，同一条只累加次数。
 (function () {
+  var FATAL_MAX = 6;
+  var lines = [];              // [{text, n}]
+  var box = null;
+  var out = null;
+
+  function ensure() {
+    if (box && box.isConnected) return;
+    box = document.createElement('div');
+    box.id = 'fatal';
+    box.style.cssText = 'position:fixed;left:0;right:0;top:0;z-index:999;' +
+      'background:#5a2329;border-bottom:2px solid #e06c75;color:#ffd8d8;' +
+      'padding:8px 74px 8px 14px;font:12px/1.6 Consolas,monospace';
+    out = document.createElement('div');
+    out.style.cssText = 'white-space:pre-wrap';
+    var btn = document.createElement('button');
+    btn.type = 'button';
+    btn.textContent = '关闭 ✕';
+    btn.style.cssText = 'position:absolute;right:10px;top:6px;cursor:pointer;' +
+      'background:transparent;border:1px solid #e06c75;color:#ffd8d8;border-radius:4px;' +
+      'font:11px/1.4 Consolas,monospace;padding:2px 8px';
+    btn.onclick = function () {
+      if (box) box.remove();
+      box = null; out = null; lines = [];
+    };
+    box.appendChild(out);
+    box.appendChild(btn);
+    document.body.appendChild(box);
+  }
+
   function banner(title, detail) {
     try {
-      var box = document.getElementById('fatal');
-      if (!box) {
-        box = document.createElement('div');
-        box.id = 'fatal';
-        box.style.cssText = 'position:fixed;left:0;right:0;top:0;z-index:999;' +
-          'background:#5a2329;border-bottom:2px solid #e06c75;color:#ffd8d8;' +
-          'padding:8px 14px;font:12px/1.6 Consolas,monospace;white-space:pre-wrap';
-        document.body.appendChild(box);
+      var text = title + ' :: ' + detail;
+      var hit = null;
+      for (var i = 0; i < lines.length; i++) {
+        if (lines[i].text === text) { hit = lines[i]; break; }
       }
-      box.textContent += (box.textContent ? '\n' : '') + title + ' :: ' + detail;
+      if (hit) hit.n += 1;
+      else lines.push({ text: text, n: 1 });
+      while (lines.length > FATAL_MAX) lines.shift();
+      ensure();
+      out.textContent = lines.map(function (l) {
+        return l.text + (l.n > 1 ? '   （重复 ' + l.n + ' 次）' : '');
+      }).join('\n');
     } catch (e) { /* 连这个都挂了就真没辙了 */ }
   }
   window.addEventListener('error', function (e) {
@@ -1145,14 +1182,29 @@ async function init() {
     }
   } catch (e) { /* 忽略：下面的轮询会重试 */ }
 
-  await refreshOverview();
-  await loadBackups();
-  setInterval(refreshOverview, 5000);
-  setInterval(() => {
+  // 这两个是「拉一下试试」，服务端没起来不该算 fatal
+  try { await refreshOverview(); } catch (e) { /* 下面的轮询会重试 */ }
+  try { await loadBackups(); } catch (e) { /* 同上 */ }
+  // ⚠️⚠️ **后台轮询一律走 poll()，不要直接 setInterval(asyncFn)**。
+  // `setInterval(refreshOverview, 5000)` 里 refreshOverview 是 async 的，
+  // 服务端一重启 fetch 就 reject —— setInterval 不管返回值，于是每次都是一个
+  // **unhandledrejection**，被上面那个兜底 banner 记成"fatal"，
+  // 每 5 秒往页顶那条红条里追加一行，一直挂在那儿关不掉。
+  poll(refreshOverview, 5000);
+  poll(() => {
     // 只在「调试器」页签打开时才轮询，免得平时也一直打服务端
-    if ($('tab-jsd').classList.contains('on')) jsdStatus();
+    if ($('tab-jsd').classList.contains('on')) return jsdStatus();
   }, 1000);
   pump();
+}
+
+/** 后台轮询：出错吞掉就行 —— 服务端重启时 fetch reject 是**预期内**的，不是 fatal。 */
+function poll(fn, ms) {
+  const tick = async () => {
+    try { await fn(); } catch (e) { /* 下一轮会重试 */ }
+  };
+  tick();
+  return setInterval(tick, ms);
 }
 
 init();

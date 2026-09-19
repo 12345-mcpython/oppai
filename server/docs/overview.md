@@ -440,6 +440,22 @@ logcat 里只有一行 `JS ERROR: TypeError: config is undefined @ equipmentstre
 （都是"页面不动了"）。所以它也必须有自测 —— 见
 `script/check_devtools.py` 的 `event_stream_checks()`（超前游标 / 字段长度 / favicon）。
 
+**④ `setInterval(asyncFn)` + 只增不减的兜底红条 = 页顶挂一条关不掉的红条。**
+页面顶上有个兜底报错条 `#fatal`（`position:fixed; top:0; z-index:999`），
+原本是 `box.textContent += ...`、**没有关闭按钮、没有行数上限**。而初始化时写的是
+
+    setInterval(refreshOverview, 5000);      // refreshOverview 是 async 的
+
+`setInterval` **不管返回值** —— 服务端一重启，`fetch` 每次都 reject，
+于是每 5 秒产生一个 **unhandledrejection**，被 `window.addEventListener('unhandledrejection')`
+记进那条红条。结果就是页顶一条红条越堆越长、**一直挂着挡工具栏，还关不掉**。
+
+两条一起修：后台轮询一律走 `poll(fn, ms)`（内部 try/catch，reject 是预期内的，
+不当 fatal）；兜底红条可关闭、最多留 `FATAL_MAX` 行、同一条只累加次数。
+
+`check_devtools.py` 里加了条**不变量**：剔掉注释后 `setInterval(` 全文只能出现一次
+（就是 `poll()` 里那次）。这样以后谁再直接 `setInterval(asyncFn)` 会被自测拦下来。
+
 ---
 
 
