@@ -639,6 +639,19 @@
             gm.checkGuide = function () { return true; };
             gm.checkGuideFit = function () { return true; };
             gm.isCanEnterGuide = function () { return false; };
+            // ⚠️ 这个**必须带上**，而且**必须忽略参数**。
+            //
+            // 客户端是 `guideManager.isGuideComplete(guideId)`，按引导步骤问
+            // 「这一步做完了吗」；`Player._getName` 就是拿它问「新兵起名
+            // （GUIDE_NAME.GN_NEW_NAME = 2）做完了吗」，没做完就显示占位名
+            // **「废材」**（table_dictionary 里那个词条）。
+            //
+            // 我们把引导整个跳过了，那一步永远不会真的完成，于是主界面上
+            // 名字一直显示「废材」——真名其实好好地在 `player._name` 里
+            // （服务端存档也是对的），只是取值器不给。
+            //
+            // 一开始漏了这条，症状特别容易误判成「名字被改了」。
+            gm.isGuideComplete = function () { return true; };
             emit("GUIDE-SKIP guideManager 已改成「引导全部结束」");
             return true;
         }
