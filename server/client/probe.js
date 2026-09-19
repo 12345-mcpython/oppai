@@ -36,7 +36,7 @@
 
     // 是否自动代替玩家点「开始游戏」。
     // 关掉之后登录界面完全手动操作；点「开始游戏」/「登录」后照样秒登录进游戏。
-    var AUTO_CLICK_START = false;
+    var AUTO_CLICK_START = true;
 
     if (window.__oppaiHook__) {
         return;

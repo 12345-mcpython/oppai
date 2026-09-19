@@ -60,6 +60,181 @@ unknown/                    apktool 的「未知文件」目录
 `lib/` 下没用的 `.so` 已经由 `sdk_strip/strip.py` 删过了。
 依据是跑起来之后 `/proc/<pid>/maps` 里**只有 `libcocos2djs.so` 被加载**。
 
+### 2a-2. 删掉 `res/` 下的 SDK 资源（`DROP_RES_PREFIXES`）
+
+渠道 SDK 的 Java 类早被 `strip.py` 删光了，`res/` 里还剩 **906 个文件 / 1613 KB**
+的布局和图，永远 inflate 不到。前缀就是渠道名：
+
+```
+bdp_ 百度支付   dk_ 多酷   wallet_ 百度钱包   ebpay_ 易宝支付
+bd_  百度杂项   qk_ QuickSDK
+```
+
+效果：**APK −1.58 MB**（res 条目 921 → 48）。这是整个精简里最大的一块。
+
+#### ⚠️ 坑 1：不能「带前缀就删」
+
+`res/values/*.xml`（不能整文件删，游戏和 SDK 的条目混在一起）里有 **46 处**
+引用着 `@anim/wallet_base_slide_from_right` 这类 SDK 资源。直接删，aapt 会报
+`resource anim/wallet_base_slide_from_right not found`。
+
+所以要做**引用闭包**：
+
+```
+根 = 非 SDK 前缀的文件 + res/values*/** + AndroidManifest.xml
+边 = XML 里的 @type/name
+保留 = 闭包里的全部；删除 = 带 SDK 前缀且不在闭包里的
+```
+
+结果：删 873 个（1594 KB），留 33 个（19 KB，被 values 引用着的那批 + 它们的依赖）。
+
+#### ⚠️ 坑 2：九图的名字要多剥一层
+
+`bd_wallet_single_item_bg.9.png` 的资源名是 `bd_wallet_single_item_bg`，
+而 `os.path.splitext()` 只给到 `bd_wallet_single_item_bg.9` —— 拿它比
+public.xml / XML 引用永远对不上，于是「文件删了、public.xml 条目留着」，
+aapt 报 `no definition for declared symbol`。见 `_res_name()`。
+
+#### ⚠️ 坑 3（最隐蔽）：apktool 的 `build/apk/` 缓存
+
+`build/apk/` 是 apktool 的**增量缓存，打包时原样塞进 APK**。
+删掉 `game/res` 下某个资源后，缓存里编译好的那份还在 → **删了等于没删**。
+
+实测：删 873 个资源后 APK 只小了 90 KB，一查包内还有 906 个 SDK 资源原封不动。
+（`resources.arsc` 和 `classes.dex` 都会重新生成，看着一切正常，**只有 `res/`
+是增量的** —— 这个坑非常容易漏。）
+
+`classes.dex` 那边早有 `prune_stale_dex()`，`res` 一直没人管；现在补了
+`prune_stale_build_res()`，做法是整个删掉 `build/apk/res/` 让它全量重编。
+
+#### 收尾：aapt 是最后一道保险
+
+删完仍然由 aapt 兜底：只要还有**保留的**文件引用被删资源，打包会直接**报错**，
+不会出静默失效的包。真报错就把 `out/removed-res/` 里对应文件拿回来。
+
+### 2b. 删掉死代码 smali（`DROP_SMALI`）
+
+```
+smali/android/support   1124 个文件 / 7.5 MB smali
+smali/android/net       20 个文件（android.net.http.* + WebAddress）
+```
+
+判据是「整个工程一处引用都没有」：
+
+* `android/support/**` —— `smali/com`、`smali/org`、`AndroidManifest.xml`、
+  `assets/` 下的 js/jsc **全部零引用**。唯一的引用方是 `res/layout` 里百度钱包 /
+  多酷的三个布局（`bd_wallet_sign_channel_list.xml`、`dk_dialog_back.xml`、
+  `dk_downloadmanager_activity.xml`），而那几个 SDK 的类早被 `strip.py` 删干净了，
+  这些布局永远 inflate 不到。
+* MultiDex 没人用，Application 链是
+  `org.cocos2dx.javascript.GameApplication` → `com.quicksdk.QuickSdkApplication`
+  → `android.app.Application`，没有 `MultiDexApplication`；
+  而且只有**一个** `classes.dex`，本来就不需要 multidex。
+* `android/net/**` 是 **framework 类**（真正的 `android.net.Uri` /
+  `WifiManager` 在 `/system/framework` 里）。app dex 里的同名类永远被
+  boot classpath 挡住，放进来纯属白占地方。
+
+效果：`classes.dex` **1,508,336 → 371,340 字节（−75%）**。
+
+> ⚠️ 但**别用 smali 的字节数估 APK 的收益**：dex 在包里是 DEFLATE 的，
+> 压缩比约 3:1，所以 APK 上只少了 **0.44 MB**（580,377,326 → 579,918,574）。
+> 想看真实数字就 `python script\apk_report.py`。
+
+### 2b-2. 按「可达性」删单类（`DROP_SMALI_GROUPS`）
+
+`android/support` 那批是「整包没人要」，这批是**散落的死类**。判据不能靠 grep，
+要靠可达性：`script/smali_reach.py` 从真正的入口做闭包——
+
+```
+根 = AndroidManifest 声明的组件
+   ∪ lib/*.so 里出现的类名（JNI 的 FindClass / jsb.reflection 的目标）
+   ∪ assets 下的 js/js c 里出现的类名
+```
+
+算出来 6 组不可达，删掉 **1347 KB** smali：
+
+| 组 | 大小 | 为什么是死的 |
+|---|---|---|
+| `com/cm/zcsmw/baidu/R*` | 1269 KB | 见下面那段 |
+| `org/json/alipay/*` | 46 KB | 支付宝 SDK 自带的一份 `org.json`（和框架那个不是一回事） |
+| `org/cocos2dx/lib/GameController*` | 20 KB | `Cocos2dxActivity` 并没 `implements GameControllerDelegate`，8 个文件只自引用 |
+| `com/tendcloud/tenddata/TDGA*` | 5 KB | TalkingData 的数据类（主类留着，这几个没人调） |
+| `wxapi/WXEntryActivity` + `mm/sdk/openapi/BaseResp` | 5 KB | 微信回调 Activity，**清单里压根没声明** |
+| `org/cocos2dx/lib/Cocos2dxLuaJavaBridge` | 0.6 KB | Lua 桥——这游戏是 cocos2d-js，根本不走 Lua |
+
+#### `R` 为什么是死代码（别以为是误删）
+
+`R$*.smali` 不是普通常量表：字段全是**只声明不给值**
+（`.field public static final dk_float_big_bubble_in:I`），值在 `<clinit>` 里调
+`Lcom/quicksdk/apiadapter/baidu/ActivityAdapter;->getResId(名字, 类型)I` 现查现填
+—— 百度/多酷那套加固手法。而 `ActivityAdapter` 是**我们自己写的桩**
+（用 `Resources.getIdentifier` 顶替）。
+
+所以 R 是「给已经被 `strip.py` 删掉的百度渠道 SDK 用的资源表」。SDK 没了就没人读
+它的字段：三个清单组件、所有 quicksdk 桩、两个 `.so`、**13861 个 asset** 全搜过，
+零引用。两个 `.so` 和 asset 里 `zcsmw` 只出现在编译器塞进去的源码路径
+（`E:/code/zcsmw/engine/src/...`），拼不出 `com.cm.zcsmw.baidu.R$*` 这种名字。
+
+**但 `ActivityAdapter` 故意留着**：就 1.2 KB，是那个渠道适配的说明性代码，
+哪天把 R 从原版包解回来它还接着用。
+
+#### 判定要按「组」而不是按文件
+
+`R$anim.smali` 的注解里就写着 `value = Lcom/cm/zcsmw/baidu/R;`，按文件判会自己把
+自己当成引用方，于是永远不敢删。所以 `DROP_SMALI_GROUPS` 每组是 `((glob…), 说明)`，
+判定时用**组里所有类的名字**扫**组外**的文件。
+
+删之前一律 `smali_reach` 式复查（`smali_users_of_classes()`），有人引用就 warn + 整组保留。
+
+### 2b-3. 累计效果
+
+| | 最初 | 现在 |
+|---|---|---|
+| smali | 1331 个 / 9.63 MB | **151 个 / 0.75 MB** |
+| `classes.dex` | 1,508,336 B | **144,424 B（−90%）** |
+| APK | 580,377,326 B | **579,857,134 B（−0.52 MB）** |
+
+**smali 到头了。** `classes.dex` 压缩后才 63,777 B，全删也就 0.06 MB。
+再想瘦包只能动 `assets/res`（`sound/jp` 98.7 MB 是最大的一块，
+但它是**默认语音语言**，删了变中文语音）——那部分现在是红线，别碰。
+
+删错了都能回来：原版包在 `game/original/zcsmw-original.apk`
+（它的 `classes.dex` 2,983,976 B，上面每一个类都在里面），重新 `apktool d` 即可。
+
+删错了也不要紧：原版包在 `game/original/zcsmw-original.apk`，
+`out/removed-smali/` 里也留了一份现成的。
+
+**但这条删法和「装桩删 SDK」是绑在一起的**：`android/support` 之所以是死代码，
+是因为用它的那几个 SDK 已经被 `strip.py` 删了。哪天把百度钱包 / 多酷的 smali
+加回来，就必须把 `DROP_SMALI` 里对应的那条一起去掉。
+
+所以删之前会**再查一遍**（`smali_users_of()`）：smali 里只要还有一处
+`Landroid/support/...` 的描述符，就打印 warn 并**保留不删** ——
+宁可出一个大一点的包，也不要出一个跑起来才崩的包。
+
+```
+[build][warn] smali/android/support 现在还有 1 处引用，**保留不删**：
+[build][warn]     smali\com\cm\FakeRef.smali
+[build][warn]     这是新加回来的 SDK 依赖？那就把 DROP_SMALI 里对应那条去掉。
+```
+
+> ⚠️ 判定前缀**不能拿目录名去拼**。`smali/android/net` 要是拿 `android/net`
+> 当前缀，会把满地的 `Landroid/net/Uri;`、`Landroid/net/wifi/WifiManager;`
+> （框架类，在 `/system/framework` 里）全算成命中，于是永远不敢删。
+> 所以 `DROP_SMALI` 每条是 `(目录, 前缀元组)`，`android/net` 只查它实际带的
+> `android/net/http` 和 `android/net/compatibility`。
+
+### 2c. 那 3 个引用 `android.support` 的布局不用管
+
+`res/layout/` 里只有三个布局用到 `android.support.v4.view.ViewPager`：
+`bd_wallet_sign_channel_list.xml`、`dk_dialog_back.xml`、
+`dk_downloadmanager_activity.xml`。它们**在我删 `android/support` 之前就已经
+inflate 不了了** —— 同一批布局还引用着 `com.baidu.wallet.base.widget.BdActionBar`
+和 `com.duoku.platform.view.NewSegmentedLayout`，而这两个包早被 `strip.py` 删光了。
+
+而且这 3 个布局的 R id 在 `R$layout` / `R$drawable` 里只是常量定义，
+**R 类之外一处都没有被读**（搜过），所以没有任何代码会去 inflate 它们。
+
 ### 3. 剪掉 `apktool.yml` 里失效的 `doNotCompress`
 
 apktool 把原版的压缩设置记在 `doNotCompress` 里。文件删了但条目还在时，
