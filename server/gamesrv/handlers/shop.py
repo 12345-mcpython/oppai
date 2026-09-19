@@ -36,27 +36,31 @@
 
 `shop` **不在**客户端的 responseConfig 里，所以不能靠自动派发，得让回调自己读。
 
-## ⚠️ 没做完：`shop.getshop` 的响应形状还没对上
+## `shop.getshop` 的响应形状：**按 key 那条路走不通，得先走列表那条**
 
-实测（2026-09-19）：
+实测（2026-09-19，全部在客户端里试出来的）：
 
-* **`shop.buygood` 已经完全打通** —— 走客户端传输层调
-  `server.request('shop.buygood', {shelfKey:'600101', times:1})`，
-  存档里 钻石 100000→99950、金币 10000000→10044000、`shopBuyRecord['600101'].times=1`，
-  扣钱发货记账全部正确。
-* **`shop.getshop` 客户端收下了但不存** —— `Shop._shopObj` 一直是空，
-  `getShopList('1001')` 返回 0。服务端这边算得没错（日志里
-  「货架 6 个」），是**回包的字段名不对**：客户端 `updateShop` 的回调
-  只留了 `shopList` 这个名字，说明它要的大概率是
-  `data.data.shopList`（货架对象数组）而不是我们给的
-  `{shopKey, todayUpdateTimes, shelfList}`。
+1. **字段名必须叫 `shelfObjList`，条目必须是对象**：
+   `_shopObj[key]` 里放 `{shelfObjList:[{key:"100101"}, …]}` 时
+   `getShelfObjList(key)` 返回 15 个货架；换成 `shelfList` / 字符串数组 /
+   裸数组 全是 0。（`checkShelf` 里是按 `.key` 取的。）
+2. **但按 key 调根本进不去**：`updateShop('1001')` 会被
+   `checkActivityShop` 拦住 —— `cc.error: checkActivityShop error: unknown shop key = 1001`，
+   回调压根不执行，`_shopObj` 一直是空。
+   `checkShop()` 的原子是
+   `shopKey shop now ok _shopObj cc error … openTimeSec closeTimeSec`，
+   也就是它**要求这个商店已经在 `_shopObj` 里** —— 鸡生蛋。
+3. **播种只能靠列表那条路**：
+   `Shop.updateActivityShopList()` → `server.request('shop.getshop', {type: SHOP_TYPE.TIME_LIMIT})`
+   → 回调 `_updateActivityShopList(data.data)`，原子是
+   `list key shop _shopObj type SHOP_TYPE TIME_LIMIT`
+   —— 它拿一个**商店列表**往 `_shopObj` 里铺。
 
-另外客户端对 key 有白名单：调 `updateShop('6001')` 会报
-`cc.error: checkActivityShop error: unknown shop key = 6001` ——
-6001 这种不在它的「活动商店」列表里，得用它在 `table_shop` 里认得的 key（如 1001）。
+**所以下一步**：让 `{type: …}` 那个分支回一套**商店列表**（每个带 `key` +
+`shelfObjList`），先把 `_shopObj` 种上，再验证按 key 的 `updateShop` 和
+`buyGood` 能不能走通。现在这个 handler 只回了单个商店块，所以客户端不认。
 
-**下一步**：把 `Shop.updateShop` 的回调反汇编出来（`script/jsc_funcs.py shop.jsc updateShop`），
-确定 `_shopObj[key]` 到底存的是哪个字段，再改 `_shop_payload()`。
+（`buygood` 不受影响，已经实测打通 —— 见下。）
 """
 
 from __future__ import annotations
@@ -99,12 +103,34 @@ def _shelves_of(shop_key) -> list:
 
 
 def _shop_payload(player: dict, shop_key) -> dict:
-    """回给客户端的一个商店块。`_shopObj[key]` 直接就是它。"""
+    """回给客户端的一个商店块。`_shopObj[key]` 直接就是它。
+
+    ⚠️ 字段名是**实测**出来的（在客户端里塞各种形状试 `getShelfObjList`）：
+
+        {shelfObjList:[{key}]}  -> 15 个货架   ✅
+        {shelfList:[{key}]}     -> 0
+        {shelfList:["100101"]}  -> 0          （一开始就是这个，所以商店是空的）
+        [{key}] / {list:…} / {shelves:…}  -> 0
+
+    * 名字必须叫 `shelfObjList`（客户端 `getShelfObjList` / `checkShelf`
+      都按这个名字取，`checkShelf` 里还按 `.key` 取，所以条目得是**对象**）。
+    * 货架对象里至少要 `key`；其余显示字段客户端自己拿 `table_shelf` 补
+      （`getShelfInfo` 会拼 goodKey/goodCount/consume/remainTimes…）。
+    """
     state = _shop_state(player, shop_key)
+    record = _buy_record(player)
+    shelves = []
+    for key in _shelves_of(shop_key):
+        item = {"key": key}
+        bought = record.get(key)
+        if bought:
+            # 买了多少件，客户端 `getRemainTimes` 会拿 cycle_times_limit 减它
+            item["times"] = int(bought.get("times") or 0)
+        shelves.append(item)
     return {
         "shopKey": str(shop_key),
         "todayUpdateTimes": int(state.get("todayUpdateTimes") or 0),
-        "shelfList": _shelves_of(shop_key),
+        "shelfObjList": shelves,
     }
 
 
