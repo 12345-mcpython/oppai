@@ -6,9 +6,9 @@ r"""不开游戏也能自测业务协议：自己按客户端格式打包一个�
 所以不需要客户端参与就能验证 加解密 + 路由 + code=200。
 
 ⚠️ **这个脚本会改真存档**（它跑的就是默认账号）：
-   * 军士链路会**吃掉 2 个军士当材料**，而且不会还回来 —— 每跑一次少 2 个。
-     初始名单只有 18 个，跑几轮就没了。要恢复：把 `store.py` 的
-     `ROSTER_VERSION` +1（`_migrate` 会整个重发名单，**代价是军士等级重置**）。
+   * 军士链路会**吃掉 2 个军士当材料**，但结尾有 `restore_roster()` 把它们补回来
+     （`store.replenish_soldiers` 只补缺的、不动等级），所以可以反复跑。
+     万一中途崩了留下缺口，再跑一次就补上了。
    * 好感度那段只读 + 花一次抚摸次数，不破坏数据。
 """
 
@@ -139,6 +139,79 @@ def roster_check(ok: bool) -> bool:
     return ok
 
 
+def replenish_check(ok: bool) -> bool:
+    """军士名单「补齐」必须**保住已有的等级**。
+
+    背景：`selftest_game.py` 自己的军士链路每跑一次吃掉 2 个军士当材料，
+    把默认账号从 18 个啃到 4 个。而当时的恢复手段是 `ROSTER_VERSION` 一变就
+    `player["soldiers"] = new_soldiers()` —— **整个重发，练过的等级全归零**。
+    改成 `store.replenish_soldiers()`（缺的补、已有的原样留）之后，
+    这条就是它的回归测试：纯内存，不需要服务端。
+    """
+    from gamesrv import store
+
+    keys = [k for k, _p, _q in store.SOLDIER_KEYS]
+    fake = {
+        "account": "__replenish_test__",
+        "rosterVersion": 0,
+        "soldiers": [
+            store.new_soldier(14, keys[13], 3, 4, lv=28, star=3),
+            store.new_soldier(16, keys[15], 3, 4),
+            # 已经不在名单里的旧 key（早期误收的敌方单位）应该被删掉
+            store.new_soldier(99, "sfog", 1, 2),
+            # 同一个 key 出现两次 —— 只留一个
+            store.new_soldier(98, keys[15], 3, 4),
+        ],
+        "teams": [{"soldierKeys": [14, 99], "soldierCount": 2}],
+    }
+    added, dropped = store.replenish_soldiers(fake)
+    rows = fake["soldiers"]
+    got = [r.get("key") for r in rows]
+    if len(rows) != len(keys):
+        print(f"  BAD 补齐后应该是 {len(keys)} 个，实际 {len(rows)} 个")
+        return False
+    if sorted(got) != sorted(keys):
+        print("  BAD 补齐后的 key 集合和 SOLDIER_KEYS 对不上")
+        return False
+    if len(set(got)) != len(got):
+        print(f"  BAD 补齐后还有重复 key：{got}")
+        return False
+    keep = next((r for r in rows if r.get("key") == keys[13]), None)
+    if not keep or keep.get("lv") != 28 or keep.get("star") != 3:
+        print(f"  BAD 已有的军士等级被重置了：{keep}")
+        return False
+    if any(r.get("key") == "sfog" for r in rows):
+        print("  BAD 旧 key 没被删掉")
+        return False
+    ids = [r.get("id") for r in rows]
+    if len(set(ids)) != len(ids):
+        print(f"  BAD 补齐后 id 有重复：{ids}")
+        return False
+    if 99 in (fake["teams"][0].get("soldierKeys") or []):
+        print("  BAD 队伍里还留着被删掉的军士 id")
+        return False
+    print(f"  OK  军士补齐：补 {added} 个、删 {dropped} 个 -> {len(rows)} 个，"
+          f"已有的 {keys[13]} 仍是 lv{keep.get('lv')}")
+    return ok
+
+
+def restore_roster() -> None:
+    """把军士链路吃掉的军士补回来。
+
+    `store.replenish_soldiers()` **只补缺的、不动已有的**（等级/星级/技能都留着），
+    所以这一步是安全的，也是这个脚本能反复跑的前提 ——
+    以前没有它，跑 7 轮就把默认账号从 18 个军士啃到 4 个。
+    """
+    from gamesrv import config, store
+
+    player = store.get_or_create_player(config.DEFAULT_ACCOUNT)
+    added, dropped = store.replenish_soldiers(player)
+    if added or dropped:
+        store.save_player(player)
+        print(f"  ..  收尾：把测试吃掉的军士补回来 {added} 个"
+              f"（现在 {len(player.get('soldiers') or [])} 个，已有等级没动）")
+
+
 def favor_check(ok: bool) -> bool:
     """好感度（宿舍）登录块的形状。
 
@@ -224,10 +297,21 @@ def main():
 
     print()
     try:
+        ok = replenish_check(ok)
+    except Exception as exc:  # noqa: BLE001
+        print(f"  BAD 军士补齐自检异常: {exc}")
+        ok = False
+
+    print()
+    try:
         ok = soldier_flow(ok)
     except Exception as exc:  # noqa: BLE001
         print(f"  BAD 军士链路异常: {exc}")
         ok = False
+    try:
+        restore_roster()
+    except Exception as exc:  # noqa: BLE001
+        print(f"  ..  收尾补军士失败（不影响结论）: {exc}")
 
     print()
     try:
