@@ -497,6 +497,39 @@ logcat 里只有一行 `JS ERROR: TypeError: config is undefined @ equipmentstre
 **这条已经改成私服体验改动了**（判定框放大到覆盖角色），见
 [`differences.md`](differences.md) 和 `server/client/patch.js` 末尾那段。
 
+### 6.11 「拖不动」不一定是拖的问题 —— 触摸**传播**断了
+
+宿舍的 RoomList（`FavorListLayer` + `ccui.ScrollView`）**在角色条目上按住拖动完全没反应**，
+只在条目之间的空隙起手才能滚。条目自己的点击是好的。
+
+**排查路径**（一路从 JS 查到 C++，每一步都有实机数字）：
+
+1. **先量 ScrollView 本身**：`getInnerContainerSize()` 2435 vs 视口 465、19 个条目、
+   `isTouchEnabled()=true`、方向 `VERTICAL`、命中矩形 `(603,21)-(1150,486)`
+   —— **ScrollView 一切正常，就是收不到事件**
+2. 给它 `addEventListener` 挂探针，**一条事件都没有** → 不是"滚到头了"
+3. 排掉几个嫌疑：`touchSwallower`（`visible=false`）、`shieldPanel`（`visible=false`）
+   —— 注意 `Widget::onTouchBegan` **是判 `isVisible()` 的**（vanilla 3.6 源码
+   `UIWidget.cpp:749`），所以"不可见的挡板在吞触摸"这个直觉是**错的**，
+   别顺着它查下去
+4. 看条目：`items[0].constructor.name === "Node"` —— **裸 Node**！
+5. 回 C++：`Widget::getWidgetParent()` 是 `dynamic_cast<Widget*>(getParent())`，
+   **只看直接父节点**；`propagateTouchEvent` 拿它当唯一一跳。
+   裸 Node 让这一跳返回 `nullptr` → **传播到此为止** → ScrollView 永远收不到
+   BEGAN/MOVED → 拖动被条目自己的 `_touchListener`（`swallowTouches=true`）吃掉
+
+**修法是引擎补丁**（`engine/build/fix_scrollview_propagate.py`）：`propagateTouchEvent`
+改成沿裸父链往上找第一个 Widget。它是**严格超集** —— 直接父节点是 Widget 时找到的还是
+同一个，而 `Widget::interceptTouchEvent` 本来就会逐层递归。
+
+**教训**：
+* **「子控件的触摸会往上传播给父滚动容器」是 cocos 的设计**，但它走的是
+  `dynamic_cast<Widget*>`，**普通 `Node` 会把它切断**。游戏用 `csb` 拼 UI 时
+  很容易在中间夹一层裸 Node。
+* 排查这类问题要**先量容器自己的尺寸/命中区**，别一上来就怀疑坐标或方向 ——
+  这次两者的数字都是对的，问题在"事件根本没传过来"。
+* 又一次印证 §6 的老话：**引擎与游戏的约定不一致，单看 JS 或单看 C++ 都发现不了。**
+
 ---
 
 

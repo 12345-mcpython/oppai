@@ -104,6 +104,7 @@ if ($Engine) {
         "fix_js_log.py",             # ⑬ 让引擎自己的 JS log() 在 release 包里也能打
         "fix_null_texture.py",       #    Sprite::draw 的空贴图崩溃
         "quiet_engine.py",           # ③ JniHelper 日志降噪
+        "fix_scrollview_propagate.py",  # 触摸传播穿不过裸 Node（列表条目上拖不动）
         "enable_js_debugger.py"      # ⑫ 打开引擎自带的远程 JS 调试器
     )) {
         $fp = Join-Path (Join-Path $Eng "build") $fx
@@ -118,11 +119,26 @@ if ($Engine) {
         # 命令行上传的 APP_* 会覆盖 Application.mk 里的同名设置。
         $ld  = if ($a -eq "armeabi") { "-latomic" } else { "" }
         $log = Join-Path $Out "engine-build-$a.log"
-        & "$ndk\ndk-build.cmd" -j24 -C $app NDK_TOOLCHAIN_VERSION=4.8 NDK_DEBUG=0 APP_ABI=$a "APP_LDFLAGS=$ld" *> $log
-        if ($LASTEXITCODE -ne 0) {
+        # ⚠️⚠️ **必须临时把 $ErrorActionPreference 降回 Continue**。
+        # ndk-build 把**编译警告**写 stderr，而本脚本开头设了
+        # `$ErrorActionPreference = "Stop"` —— PowerShell 5.1 会把原生命令的
+        # stderr 当成终止错误（NativeCommandError）**当场抛出来**，
+        # 于是 ndk-build 还在跑就被掐死：日志停在中途、一条 `error:` 都没有，
+        # 看着像"编译失败"，其实是脚本自己崩了（产物时间戳都没变）。
+        # docs/build.md 记过这个坑，但只说"直接用 ndk-build.cmd 更省事"，
+        # 没修脚本本身 —— 这里补上。
+        $eap = $ErrorActionPreference
+        $ErrorActionPreference = "Continue"
+        try {
+            & "$ndk\ndk-build.cmd" -j24 -C $app NDK_TOOLCHAIN_VERSION=4.8 NDK_DEBUG=0 APP_ABI=$a "APP_LDFLAGS=$ld" *> $log
+            $code = $LASTEXITCODE
+        } finally {
+            $ErrorActionPreference = $eap
+        }
+        if ($code -ne 0) {
             Warn "编译失败，看 $log 的最后 30 行："
             Get-Content $log -Tail 30 | ForEach-Object { Write-Host "      $_" }
-            throw "ndk-build($a) 退出码 $LASTEXITCODE"
+            throw "ndk-build($a) 退出码 $code"
         }
         $so = Join-Path $app "libs\$a\libcocos2djs.so"
         if (-not (Test-Path $so)) { throw "编译完没找到 $so" }

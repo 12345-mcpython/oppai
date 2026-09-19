@@ -21,7 +21,15 @@ python move_ccs.py                  # ⑩ ActionTimelineCache（并入 utilsex.c
 python add_ccs.py                   # ⑪ 注册进 Android.mk / AppDelegate
 python enable_js_debugger.py        # ⑫ 打开引擎自带的远程 JS 调试器
 python fix_js_log.py                # ⑬ 让引擎自己的 JS log() 在 release 包里也能打出来
+python fix_null_texture.py          # ⑭ Sprite::draw 空贴图崩溃
+python patch_scriptingcore.py       # ⑮ JS 异常内容打到 logcat
+python fix_scrollview_propagate.py  # ⑯ 触摸传播穿不过裸 Node（列表条目上拖不动）
 ```
+
+> ⚠️ **只要目标文件在 `engine/src/`（第三方源码、被 .gitignore 挡着）的补丁，
+> 每次重编都得重跑** —— 别人的 `src/` 是干净的。`build.ps1 -Engine` 会自动重跑
+> 上面这 8 个（① ② ③ ⑫ ⑬ ⑭ ⑮ ⑯，都写成幂等的）。
+> 改 `engine/build/oppai-engine/**` 的那些（④~⑪）结果**已经跟着仓库发布了**，不用重跑。
 
 > ⚠️ `build.ps1` **必须是 UTF-8 带 BOM**。Windows PowerShell 5.1 会把无 BOM 的
 > UTF-8 脚本按 ANSI（中文系统上就是 GBK）读，中文注释直接把脚本读崩，
@@ -29,6 +37,51 @@ python fix_js_log.py                # ⑬ 让引擎自己的 JS log() 在 releas
 > （一层），写成两层会指到 `E:\code\zcsmw`。
 > `ndk-build` 的输出走 stderr，脚本里的 `$ErrorActionPreference = "Stop"` 会把它
 > 当终止错误 —— 直接用 `ndk-build.cmd` 调更省事，见 `docs/engine-debug.md` 第 6 节。
+
+---
+
+## ⑯ 触摸传播穿不过裸 Node —— 列表条目上拖不动
+
+**现象**：宿舍「RoomList」只能从条目之间的**空隙**起手才能滚动，
+**在角色条目上按住拖动完全没反应**（条目自己的点击照旧好使）。
+
+**根因**（cocos2d-x 3.6 `cocos/ui/UIWidget.cpp`）：
+
+```cpp
+Widget* Widget::getWidgetParent() { return dynamic_cast<Widget*>(getParent()); }  // 只看**直接**父节点
+
+void Widget::propagateTouchEvent(...)
+{
+    Widget* widgetParent = getWidgetParent();
+    if (widgetParent) widgetParent->interceptTouchEvent(event, sender, touch);
+}
+```
+
+而游戏的列表条目是 `favorlistitemlayer.csb` 出来的**裸 `cc.Node`**
+（实测 `items[0].constructor.name === "Node"`）。于是：
+
+```
+条目里的按钮(Widget) -> propagateTouchEvent
+  -> getWidgetParent() = dynamic_cast<Widget*>(裸 Node) = nullptr
+  -> 传播到此为止
+```
+
+`ScrollView::interceptTouchEvent` 永远收不到 BEGAN/MOVED，
+`_isInterceptTouch` / `handleMoveLogic` 都不跑 —— 拖动被条目自己的
+`_touchListener`（`Widget::addTouchEventListener` 里写死的 `setSwallowTouches(true)`）吃掉。
+
+**改法**：`propagateTouchEvent` 改成**沿裸父链往上找第一个 Widget**。
+
+**为什么是严格超集（改动面可控）**：
+* 直接父节点就是 Widget 时，找到的还是**同一个** Widget，后面
+  `Widget::interceptTouchEvent`（UIWidget.cpp:981）本来就会**逐层往上递归**，
+  所以这条路径**和原来一模一样**
+* 只有「中间隔了一层裸 Node」这种情况以前是断的，现在接上了
+* `ScrollView::interceptTouchEvent` 在 ENDED 里**不会**再往上递归，
+  所以不会出现两个 ScrollView 同时滚
+
+**验证**：宿舍列表在条目上直接拖动就能滚；条目点击照旧。
+排查手法见 `server/docs/overview.md` §6.11。
 
 ---
 
