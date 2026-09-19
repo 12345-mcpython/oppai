@@ -123,14 +123,23 @@ def count_of(player: dict, key) -> int:
 
 def add_item(player: dict, key, count: int) -> None:
     """加道具。客户端 `Bag._addCount` 会按 `table_item.limit_count` 截断，
-    服务端这里也照做，免得存进去一个客户端不认的数。"""
+    服务端这里也照做，免得存进去一个客户端不认的数。
+
+    ⚠️ **只夹「往上加」这一侧，绝不因为已超上限就把玩家的存量缩回去**。
+    `table_item.json` 是后补的，补上之前 `_item_limit()` 一律返回 0（不限），
+    存档里可能已经躺着超上限的数（比如行动力道具 `100003` 上限 300、
+    而初始背包发的是 999）。不判断的话，玩家打一关领奖励会把 999 直接削到 300。
+    """
     items = items_of(player)
     k = str(key)
     cur = int(items.get(k) or 0)
     limit = _item_limit(k)
     new = cur + int(count)
     if limit > 0:
-        new = min(new, limit)
+        if cur > limit:
+            log.warning("道具 %s 存量 %d 已超上限 %d，本次只加不夹", k, cur, limit)
+        else:
+            new = min(new, limit)
     items[k] = new
     if new != cur:
         log.info("发道具 %s: %d -> %d", k, cur, new)
@@ -242,9 +251,13 @@ def table(name: str) -> dict:
 
 
 def _item_limit(key: str) -> int:
-    """`table_item[key].limit_count`。表里没有就当不限。"""
+    """`table_item[key].limit_count`。表里没有就当不限。
+
+    ⚠️ 抽出来的那份表字段是压缩过的（`lc` = limit_count，见
+    `script/extract_client_tables.py` 的 ITEM_JS），这里两种名字都认。
+    """
     row = table("table_item").get(str(key)) or {}
     try:
-        return int(row.get("limit_count") or 0)
+        return int(row.get("lc", row.get("limit_count")) or 0)
     except (TypeError, ValueError):
         return 0

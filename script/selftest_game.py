@@ -4,6 +4,12 @@ r"""不开游戏也能自测业务协议：自己按客户端格式打包一个�
 
 用的是 DH 单位元当共享密钥（和服务端一致），
 所以不需要客户端参与就能验证 加解密 + 路由 + code=200。
+
+⚠️ **这个脚本会改真存档**（它跑的就是默认账号）：
+   * 军士链路会**吃掉 2 个军士当材料**，而且不会还回来 —— 每跑一次少 2 个。
+     初始名单只有 18 个，跑几轮就没了。要恢复：把 `store.py` 的
+     `ROSTER_VERSION` +1（`_migrate` 会整个重发名单，**代价是军士等级重置**）。
+   * 好感度那段只读 + 花一次抚摸次数，不破坏数据。
 """
 
 from __future__ import annotations
@@ -63,17 +69,30 @@ def soldier_flow(ok: bool) -> bool:
         print("  BAD 军士链路：军士太少，没法测培养")
         return False
 
-    # 挑品质 4 的目标 + 两个材料（挑同品质的，方便按经验表核对）
-    target = soldiers[0]
-    mats = [s["id"] for s in soldiers[1:3]]
+    # ⚠️ **别直接拿 soldiers[0]**：这个脚本每跑一次就吃掉 2 个军士当材料，
+    # 跑几轮之后第一个军士早就顶到 1 星的等级上限（`table_soldier_lv_limit[1]` = 30），
+    # 于是「升级没落盘」这条会误报。挑等级最低的那个。
+    from gamesrv import soldier as soldier_calc
+
+    target = min(soldiers, key=lambda s: int(s.get("lv") or 1))
+    cap = soldier_calc.max_lv(int(target.get("quality") or 1), int(target.get("star") or 1))
+    mats = [s["id"] for s in soldiers if s["id"] != target["id"]][:2]
+    if not mats:
+        print("  BAD 军士链路：找不出材料")
+        return False
+
     res = call("char.upgradesoldierlv",
                {"id": target["id"], "key": target["key"], "materials": mats}, 101)
     code = res.get("code")
+    new_lv = ((res.get("data") or {}).get("soldier") or {}).get("lv")
     flag = "OK " if code == 200 else "BAD"
     print(f"  {flag} char.upgradesoldierlv         code={code}  "
-          f"lv {target.get('lv')} -> {((res.get('data') or {}).get('soldier') or {}).get('lv')}")
+          f"lv {target.get('lv')} -> {new_lv}（上限 {cap}）")
     if code != 200:
         return False
+    if target.get("lv") == cap:
+        print(f"  ..  目标已经在 {cap} 级上限，没得升 —— 跳过落盘核对")
+        return ok
 
     after = call("agent.getlogindata", {}, 102)
     got = ((after.get("data") or {}).get("char") or {}).get("soldiers") or []
@@ -120,6 +139,59 @@ def roster_check(ok: bool) -> bool:
     return ok
 
 
+def favor_check(ok: bool) -> bool:
+    """好感度（宿舍）登录块的形状。
+
+    这条只查「客户端构造 `FavorCenter` 时会不会炸 / 会不会全空」，不碰数值
+    （数值在 `selftest_favor.py` 里，那个不用起服务端）：
+
+    * `data.favor.favors` 必须是 **map**，key 是 charKey ——
+      客户端 `FavorCenter._initData` 是 `favorsData[charKey]`，给数组就是全「未获得」
+    * 每个有 `id` 的行才算「已获得」（`Favor._isAcquired = typeof id != "undefined"`）
+    * `favorInteractChance` / `favorInteractUpdateTimeSec` 缺一个，互动次数就是 NaN
+    """
+    login = call("agent.getlogindata", {}, 110)
+    block = ((login.get("data") or {}).get("favor")) or {}
+    if not isinstance(block.get("favors"), dict):
+        print(f"  BAD favor.favors 不是 map：{type(block.get('favors'))}")
+        return False
+    rows = block["favors"]
+    if not rows:
+        print("  BAD favor.favors 是空的 —— 一个角色都没获得")
+        return False
+    acquired = [k for k, v in rows.items() if isinstance(v, dict) and "id" in v]
+    if not acquired:
+        print("  BAD favor.favors 里没有任何一行带 id（客户端会全部当成未获得）")
+        return False
+    for key, row in rows.items():
+        if not isinstance(row, dict) or row.get("charKey") != key:
+            print(f"  BAD favor.favors[{key}] 的 charKey 对不上：{row!r}")
+            return False
+    missing = [k for k in ("favorInteractChance", "favorInteractUpdateTimeSec") if k not in block]
+    if missing:
+        print(f"  BAD favor 块缺字段 {missing}（互动次数会变 NaN）")
+        return False
+    dead = [k for k in ("isNeedAsstEff", "favorExpAdd") if k in block]
+    if dead:
+        print(f"  BAD favor 块里还有死键 {dead}（客户端不从 data 读，只会误导）")
+        return False
+    r = call("favor.setdescread", {"charKey": acquired[0], "descUnlockMark": 0}, 111)
+    if r.get("code") != 200:
+        print(f"  BAD favor.setdescread code={r.get('code')} {r}")
+        return False
+    r = call("favor.touchcharasst", {"charKey": acquired[0]}, 112)
+    data = r.get("data") or {}
+    if r.get("code") != 200:
+        # 次数用完是正常业务拒绝，不算失败
+        print(f"  ..  favor.touchcharasst 被拒（多半是互动次数用完了）：{r.get('msg')}")
+    elif "favorInteractChance" not in data or "favorAdd" not in data or "favor" not in data:
+        print(f"  BAD favor.touchcharasst 响应缺字段：{sorted(data)}")
+        return False
+    print(f"  OK  好感度登录块：{len(rows)} 个角色（{len(acquired)} 个已获得），"
+          f"互动次数 {block['favorInteractChance']}")
+    return ok
+
+
 def main():
     cases = [
         ("agent.getlogindata", {}),
@@ -155,6 +227,13 @@ def main():
         ok = soldier_flow(ok)
     except Exception as exc:  # noqa: BLE001
         print(f"  BAD 军士链路异常: {exc}")
+        ok = False
+
+    print()
+    try:
+        ok = favor_check(ok)
+    except Exception as exc:  # noqa: BLE001
+        print(f"  BAD 好感度自检异常: {exc}")
         ok = False
 
     print("\n全部通过 ✅" if ok else "\n有路由没回 200 ❌")

@@ -14,7 +14,7 @@ Kuro Game《战场双马尾》v2.2.0 已停服。这个项目用**纯 Python（�
 
 | 路径 | 内容 |
 |---|---|
-| `server/` | Python 服务端（纯标准库，无依赖），51 条业务路由 + 浏览器调试台 + 引擎调试桥 |
+| `server/` | Python 服务端（纯标准库，无依赖），69 条业务路由 + 浏览器调试台 + 引擎调试桥 |
 | `script/` | 实用脚本：jsc 反编译 / 反汇编 / 按函数切原子表、抽客户端表、apktool 打包、APK 体积体检、smali 可达性分析、路由缺口分析… |
 | `engine/build/` | 引擎补丁脚本（30 个，每个都幂等可重跑）+ `oppai-engine/{Classes,jni}`：我们自己写的 `jsb_oppai_*` 绑定和 `Android.mk` |
 | `build.ps1` | 一键构建 |
@@ -131,6 +131,7 @@ python script\serve.py           # 守护进程，run.py 挂了自动拉起（�
 | `build_apk.py` | 打包 APK（`build.ps1` 第 4 步调的就是它） |
 | `patch_js_debugger.py` | 调试器自己的 JS 换成明文（不用重编引擎就能改调试器） |
 | `selftest_game.py` | 不开游戏自测：加解密 + 路由 + code=200 + 军士培养链路 |
+| `selftest_favor.py` | 好感度公式自测（进程内，不需要模拟器也不需要服务端） |
 | `check_devtools.py` | 调试台自测（静态一致性 + 接口全打一遍） |
 
 **逆向**
@@ -140,7 +141,8 @@ python script\serve.py           # 守护进程，run.py 挂了自动拉起（�
 | `jsc_strings.py` | ★ 只扒 `.jsc` 的 atom 表 —— 没源码也能看懂一个函数在干什么，**最快的一把刀** |
 | `jsc_disasm.py` / `disasm_func.py` | SM33.1.1 字节码反汇编 |
 | **`jsc_decompile.py`** | ★ **jsc → js 反编译器**，`assets/src/**` 572/575 能过 `node --check` |
-| `extract_client_tables.py` | 把客户端 `table_*` 抽成服务端 JSON |
+| `jsc_find.py` | ★ 按原子反查：这个 key / route / 方法名在哪个 `.jsc` 的哪个函数里用过 |
+| `extract_client_tables.py` | 把客户端 `table_*` 抽成服务端 JSON（补新表加 `--only`，别整轮全抽） |
 | `csb_dump.py` | 解析 cocostudio 的 `.csb`（动画区间 / 帧事件） |
 
 **运行时调试**
@@ -172,8 +174,8 @@ python script\serve.py           # 守护进程，run.py 挂了自动拉起（�
 [调试]   浏览器调试台 + 引擎级断点调试 + jsc 反编译                       ✅
 ```
 
-扭蛋 / 天赋 / 日常成就任务 / 排行榜这些还没做（路由回空 stub），清单见
-[`server/docs/overview.md`](server/docs/overview.md)。
+扭蛋 / 日常成就任务 / 黑市交易所 / 侦查这些还没做（路由回空 stub），清单见
+[`server/docs/overview.md`](server/docs/overview.md) §7。
 
 ---
 

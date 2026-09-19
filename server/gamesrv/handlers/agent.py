@@ -9,7 +9,7 @@ route 名字来自客户端 src/manager/datamanager.js：
 from __future__ import annotations
 
 from ..gameproto import CODE_OK
-from .. import config, instance, logx, quests, store
+from .. import config, favor, instance, logx, quests, store
 from . import route
 
 log = logx.get("handler.agent")
@@ -81,7 +81,16 @@ def _module_stubs(player: dict | None = None) -> dict:
         # 形状必须和 quest.getnewquest 回的一致，客户端走的是同一套
         # responseConfig -> QuestCenter.updateByServer()。
         "actquest": {"activites": [], "updateTime": t, "updateList": []},
-        "favor": {"favors": [], "isNeedAsstEff": 0, "favorExpAdd": 0},
+        # 好感度（宿舍）。形状（`{favors: {charKey: 行}, favorInteractChance,
+        # favorInteractUpdateTimeSec}`）和那三个坑见 gamesrv/favor.py 的模块 docstring。
+        # 以前这里是 `{"favors": [], "isNeedAsstEff": 0, "favorExpAdd": 0}`：
+        #   1. `favors` 得是 **map** —— 客户端拿 charKey 去索引（`favorsData[charKey]`），
+        #      给数组的话 63 个角色全部退化成「未获得」
+        #   2. 少了 favorInteractChance / favorInteractUpdateTimeSec →
+        #      `updateFavorInteract()` 里 undefined + add = NaN，互动次数显示 NaN
+        #   3. isNeedAsstEff / favorExpAdd 是**死键**：`FavorCenter._initData` 把这两个
+        #      写死成 false / 0，压根不从 data 读
+        "favor": favor.favor_block(player),
         "favorevent": {"favorEvents": [], "events": [], "removedFeEventKeys": []},
         "friend": {"friendMapList": [], "recommendationList": [], "isNeedShowTip": 0},
         "exchange": {},
@@ -175,6 +184,11 @@ def get_login_data(session: dict, msg: dict, req_id):
         log.info("账号 %s 还没有角色，服务端自动建号", account)
 
     player = store.get_or_create_player(account)
+    # 好感度行是「按玩家真的拥有的角色」生成的，拥有关系随时会变（抽卡 / 领奖发军士），
+    # 所以放在登录时补，而不是像军士名单那样建号时一次定死。补了就要写盘，
+    # 不然 `get_or_create_player()` 每次重新 load，id 每次都是新的。
+    if favor.ensure_favors(player):
+        store.save_player(player)
     t = store.time_obj()
     log.info("agent.getlogindata account=%s playerId=%s", account, player["id"])
     data = {
@@ -198,6 +212,8 @@ def create_player(session: dict, msg: dict, req_id):
     active_code = (msg or {}).get("activeCode", "")
     log.info("agent.createplayer account=%s activeCode=%s", account, active_code)
     player = store.get_or_create_player(account)
+    if favor.ensure_favors(player):
+        store.save_player(player)
 
     t = store.time_obj()
     data = {

@@ -384,9 +384,142 @@ def top_up_equipment_material(items: dict) -> None:
                                         EQUIPMENT_MATERIAL_STOCK)
 
 
+# ---------------------------------------------------------------------------
+# 好感度（宿舍 / favor.*）
+# ---------------------------------------------------------------------------
+# ⚠️ 这里**只是存储层**（形状 + 读写）。凡是需要查客户端表的逻辑
+# （谁能有好感度、礼物加多少、回礼掉什么）一律在 `gamesrv/favor.py` 里 ——
+# 因为查表要走 `items.table()`，而 items.py 反过来 import store，
+# 在 store 里 import 它就是循环依赖（store.py 顶部那段注释说的是同一件事）。
+
+# 默认值抄自客户端 `table_favor_constant`。表抽出来之后以表为准（见 favor.py）。
+FAVOR_INTERACT_MAX = 5              # max_favor_interact_times
+FAVOR_INTERACT_COOLDOWN = 3600      # favor_interact_cooldown_time（秒）
+FAVOR_DEFAULT_BG_KEY = "500001"     # default_favor_bg_item_key
+
+# `Favor.ctor` 里未获得角色的默认值：
+#     this._descUnlockMark = favorData.id ? (favorData.descUnlockMark || 0)
+#                                        : FAVOR_DESC_ALL_UNLOCKED_MARK;
+# 全 1（= -1）表示「全部台词都已读」—— 没获得的角色不该有未读红点。
+FAVOR_DESC_ALL_UNLOCKED_MARK = -1
+
+
+def new_favor_row(char_key: str, favor_id: int) -> dict:
+    """一个角色的好感度行。
+
+    ⚠️ 字段名要**去掉下划线**：`Favor.update(info)` 是
+        for (var i in data) { this["_" + i] = data[i]; }
+    也就是说服务端给的 key 必须是 `lv / curExp / curClothes / newBgList / descUnlockMark`
+    这些，客户端自己加 `_` 前缀。给错名字不会报错，只会静默不生效。
+
+    ⚠️ **`id` 的存在与否就是「是否已获得」**：
+        this._isAcquired = typeof favorData.id != "undefined";
+    所以没获得的角色**不能**有 `id` —— 那种行压根不用发，客户端会自己
+    用 `{charKey: charKey}` 兜底（见 favor.py 的 ensure_favors）。
+    """
+    return {
+        "charKey": char_key,
+        "id": favor_id,
+        "lv": 1,
+        "curExp": 0,
+        "curClothes": "",
+        # 新衣服 / 新背景：客户端 `getHaveNewClothes()` 是 `for (var k in _newClothes) return true`，
+        # 所以形状是**集合**（`{itemKey: 1}`），不是数组。
+        "newClothes": {},
+        "curBg": FAVOR_DEFAULT_BG_KEY,
+        "newBgList": {},
+        "descUnlockMark": 0,
+    }
+
+
+def player_favors(player: dict) -> dict:
+    """玩家好感度表：`{charKey: 行}`。
+
+    ⚠️ **是 map 不是 list**。反汇编 `FavorCenter._initData`：
+        var favorsData = data.favors;
+        for (var i in favorsData) existedKeys.push(favorsData[i].charKey);
+        ...
+        var favorData = existedKeys.indexOf(charKey) === -1 ? {charKey: charKey}
+                                                           : favorsData[charKey];
+    它拿 **charKey 当 key** 去索引 —— 回数组的话 `favorsData["sasm"]` 恒为
+    undefined，所有角色都会退化成「未获得」。
+    以前登录包里写的就是 `"favors": []`，表现是宿舍里 63 个角色全是灰的。
+    """
+    favors = player.get("favors")
+    if not isinstance(favors, dict):
+        favors = {}
+        player["favors"] = favors
+    return favors
+
+
+def find_favor(player: dict, char_key) -> dict | None:
+    return player_favors(player).get(str(char_key))
+
+
+def next_favor_id(player: dict) -> int:
+    used = {int(r.get("id") or 0) for r in player_favors(player).values()}
+    n = 1
+    while n in used:
+        n += 1
+    return n
+
+
+def favor_interact(player: dict) -> dict:
+    """抚摸（互动）次数状态 → `{chance, updateTimeSec}`。
+
+    客户端 `FavorCenter.updateFavorInteract()`：
+        if (this._favorInteractChance >= table_constant.max_favor_interact_times) { 夹到上限; return; }
+        var add = Math.floor((util.time() / 1000 - this._favorInteractUpdateTimeSec)
+                             / table_constant.favor_interact_cooldown_time);
+        this._favorInteractChance += add;
+
+    所以 `updateTimeSec` 是 **epoch 秒**，而且客户端**自己不会推进它** ——
+    每次回满的时刻由服务端在响应里给（`setFavorInteract(res.data)`）。
+    """
+    st = player.get("favorInteract")
+    if not isinstance(st, dict):
+        st = {}
+        player["favorInteract"] = st
+    try:
+        chance = int(st.get("chance"))
+    except (TypeError, ValueError):
+        chance = FAVOR_INTERACT_MAX
+    try:
+        base = int(st.get("updateTimeSec"))
+    except (TypeError, ValueError):
+        base = int(time.time())
+    st["chance"] = max(0, min(chance, FAVOR_INTERACT_MAX))
+    st["updateTimeSec"] = base
+    return st
+
+
+def new_favor_gift_state() -> dict:
+    return {"usedCount": 0, "lastTimeSec": 0}
+
+
+def favor_gift_state(player: dict) -> dict:
+    """送礼物计数。
+
+    ⚠️ 用的是 **player 顶层的 `usedGiftCount` / `lastGiftTimeSec`**，
+    不是另起一个嵌套块 —— 因为客户端 `Player.ctor` 就是从登录包的 player 对象里
+    直接读这两个名字，响应那边的键 `useGiftStatus` 走 `Player.cb4UseGiftStatus`，
+    读的也是 `data.usedGiftCount` / `data.lastGiftTimeSec`。放两份迟早对不上。
+    """
+    try:
+        used = int(player.get("usedGiftCount") or 0)
+    except (TypeError, ValueError):
+        used = 0
+    try:
+        last = int(player.get("lastGiftTimeSec") or 0)
+    except (TypeError, ValueError):
+        last = 0
+    player["usedGiftCount"] = used
+    player["lastGiftTimeSec"] = last
+    return {"usedCount": used, "lastTimeSec": last}
+
+
 # 新手引导位掩码全 1 = 所有引导都已完成。见 new_player() 里的说明。
 GUIDE_MARK_DONE = 0x7FFFFFFF
-
 # 玩家「指挥部」初始等级。客户端按等级解锁功能，最靠前的门槛是编成里的
 # 「培养 / 升级军士」= 6 级，所以默认给 30 一步到位（顺带过了 25 级那批）。
 MIN_PLAYER_LV = 30
@@ -631,6 +764,15 @@ def new_player(account: str) -> dict:
         # 装备。字段形状见 new_equipments() 的注释（attr 两个数组不能缺）。
         "equipments": new_equipments(),
         "equipmentGroups": new_equipment_groups(),
+        # 好感度（宿舍）。**这里给空 map**：行由 `favor.ensure_favors()` 按
+        # 「玩家实际拥有的角色」补，建号这一刻还没有任何角色获得好感度。
+        # 形状见 player_favors() 的注释（map，不是 list）。
+        "favors": {},
+        # 抚摸次数（每小时回 1，上限 5）。见 favor_interact()。
+        "favorInteract": {"chance": FAVOR_INTERACT_MAX, "updateTimeSec": now},
+        # 送礼计数。客户端 Player.ctor 直接读这两个顶层字段。
+        "usedGiftCount": 0,
+        "lastGiftTimeSec": 0,
         # ⚠️ 这里**故意不写** `talentStockVersion`：它由 _migrate 独家维护，
         #    否则「按 key 补字段」那一圈会先把版本号补上，把一次性补货门闩顶开。见上面的注释。
         # 军士（18 个初始军士）。**建号时就发**，不是等第一次登录现生成 ——

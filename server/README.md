@@ -73,8 +73,9 @@ server/                        （= E:\code\zcsmw\server）
 │   ├── jsdlink.py             引擎远程 JS 调试器的连接层（Firefox 远程调试协议）
 │   ├── web/devtools.*         调试台前端（明文 html/css/js，改完刷新即可）
 │   ├── crypto/des.py          标准 DES（已用客户端真实密文对拍验证）
-│   ├── handlers/              业务路由（agent.* / char.* / instance.* / player.* / quest.*，共 34 条）
-│   ├── data/table_*.json      从客户端抽出来的表（任务 / 关卡奖励 / 军士养成 / 助战 NPC）
+│   ├── handlers/              业务路由（agent.* / char.* / player.* / quest.* / equipment.* / favor.*，共 69 条）
+│   ├── favor.py               好感度（宿舍）的业务逻辑：加经验 / 升级 / 礼物偏好 / 回礼
+│   ├── data/table_*.json      从客户端抽出来的表（任务 / 关卡奖励 / 军士养成 / 助战 NPC / 天赋 / 装备 / 好感度 / 道具）
 │   └── apps.py                cdn / gate / login / game 四个端口的实现
 ├── client/                    客户端补丁（全部在这里）
 │   ├── patch.js               ★ 必须的适配：polyfill / 引导跳过 / 响应派发 / 各种兜底
@@ -706,30 +707,27 @@ python script\disasm_func.py <file.jsc> cb4AfterLogin
 - [x] **主线任务**（12 条窗口 + 领奖 + 窗口推进 + 刷新）
 - [x] **浏览器调试台**（`/devtools`：流量 / 控制台 / 存档编辑+作弊 / 日志流 / 表查询 / 引擎调试器）
 - [x] **引擎层 JS 调试器**（断点 / 单步 / 调用栈 / 暂停时求值，游戏真的会停住）
+- [x] **天赋（培养）** + **装备系统**（`equipment.*` 7 条）+ **好感度（宿舍，`favor.*` 5 条）**
 - [x] 文档：`docs/overview.md`（全景）/ `protocol.md` / `reverse-engineering.md` / `build.md` / `devtools.md` / `engine-debug.md`
 
 ### 待办
 
+> ⚠️ **这份清单和 [`docs/overview.md`](docs/overview.md) §7 有重复，以那份为准** ——
+> 它会跟着 `script/route_gap.py --static` 的数字更新，这里只留个大概。
+
 按「卡不卡住玩法」排序：
 
-1. [ ] **副本 / 关卡（`instance`）** —— 主线任务的条件全是「通关 N 次」，
-       没有关卡就没法自然完成。关卡表同样可以抽（`table_level` / `table_chapter`），
-       做法见 `script/extract_client_tables.py`。
-2. [ ] **扭蛋 / 抽卡** —— 缺 `gachaMasterList` 这类运营配置（客户端表里也没有），
+1. [ ] **扭蛋 / 抽卡** —— 缺 `gachaMasterList` 这类运营配置（客户端表里也没有），
        现在只靠空壳兜底保证不崩。`GUIDE_GACHA_KEY = 1002`（`GACHA_KEYS.GEM`）。
-3. [ ] **培养（天赋）** —— `TalentCenter` 构造抛 `this._talentTypes[v.type] is undefined`。
-       已试过 7~8 种数据形状都没在 REPL 里复现（手动 `new TalentCenter(data.talents)` 是好的），
-       怀疑 `initUserData` 传进去的不是 `data.talents`；下一步是在探针里把构造参数打出来再登一次。
-4. [ ] **日常 / 成就任务** —— 只做了主线（`QUEST_TYPE.NORMAL = "2"`），
+2. [ ] **战果报告的「获得物资」还是空的** —— 服务端已经算出了掉落，但客户端
+       `LevelWinBase._init(args)` 读的 `args.rewards` 没人填，见 overview §7.3。
+3. [ ] **日常 / 成就任务** —— 只做了主线（`QUEST_TYPE.NORMAL = "2"`），
        日常（`1`，246 条）/ 成就（`3`，91 条）还没接。
-5. [ ] **其余 stub 路由** —— `rank.*` / `exchange.*` / `boss.*` / `shop.*` / `mail.*` 等只回空 data。
-   补法：看对应模块的 `updateByServer` / `*Cb` 读哪些 key：
-
-   ```powershell
-   python script\disasm_func.py <assets>\src\data\rank.jsc updateByServer
-   python script\jsc_strings.py <assets>\src\data\rank.jsc | findstr /i update
-   python script\disasm_func.py <assets>\src\manager\datamanager.jsc --list
-   ```
+4. [ ] **宿舍事件（`favorevent.seteventsunlock`）** —— 好感度已经做完，这个是天然续作。
+5. [ ] **其余 stub 路由** —— `exchange.*` / `detect.*` / `society.*` 等。
+   `rank.*` / `boss.getbosslist` 回空表是**故意的**（私服没有榜也没有好友），别去"补"。
+   补法：先 `python script\jsc_find.py <响应 key> --func` 找到客户端那个 callback，
+   再看它读了哪些字段。
 
 6. [ ] `hashKey` / `hmac64` 还没复刻（登录靠单位元绕过；要校验 `etoken` 才需要）
 7. [ ] 自研 DH (`dhExchange`/`dhSecret`) 的完整算法也可以直接反汇编还原

@@ -286,6 +286,143 @@ EQUIPMENT_JS = r"""
 """
 
 
+# 好感度（宿舍 / favor.*）六张表 + 一份常量。
+#
+# 服务端要复刻的东西全在这儿：
+#
+#   table_favor_upgrade["<lv>"]           15 行，key 是 "1".."15"
+#       favor             升到 lv+1 需要的经验；最后一档是 -1（= MAX_FAVOR_LV，
+#                         见 favorconfig.js 里 `if (row.favor == -1) MAX_FAVOR_LV = k`）
+#       touch_favor       \
+#       touch_favor_add   / 抚摸给的加值。**客户端从来不读这两个字段**
+#                         （jsc_find 全库 0 命中），是纯服务端数值。
+#                         表里两列恒等（每级都是 22），所以取哪个都一样。
+#       max_daemon_lv     这一级开放的「守护灵」等级，只影响客户端提示
+#   table_favor_common["<lv>"]            {enable_set_asst, enable_cast, quality_up_probability}
+#   table_favor_gift_type["<charKey>"]    {love_type:"5,6", hate_type:"4"} —— 逗号分隔的 gift_type
+#   table_char_desc["<charKey>"]          is_favor_char / birthday（"4.1" = 4 月 1 日）
+#   table_item 里 type==30(ITEM_TYPE.GIFT) 的 47 件礼物
+#
+# ⚠️ 礼物加好感度的公式是**服务端才算**的（客户端只负责播动画）。
+#    客户端唯一暴露线索的是 `favorManager.getPreferenceWithSendGift(favor, item)`，
+#    实机问过它，返回的是「偏好档位」而不是数值：
+#        giftType ∈ love_type -> 2      giftType ∈ hate_type -> 4      其余 -> 3
+#    所以服务端按同一套偏好选 gift 的三个数值字段：
+#        favor        基础值（普通礼物）
+#        favor_love   喜欢时的值
+#        favor_hate   讨厌时的值（47 件里只有 308401/308402 非 0）
+FAVOR_UPGRADE_JS = r"""
+(function () { return JSON.stringify(table_favor_upgrade); })()
+"""
+
+FAVOR_COMMON_JS = r"""
+(function () { return JSON.stringify(table_favor_common); })()
+"""
+
+FAVOR_GIFT_TYPE_JS = r"""
+(function () { return JSON.stringify(table_favor_gift_type); })()
+"""
+
+# ⚠️ 只留服务端要用的字段。整行带着 desc_1 / desc_2 的话单是这两段角色小传
+# 就有几万字，`/control/eval` 的返回值要走一遍 base64 + DES 再回传，
+# 是上一轮把模拟器压卡的元凶之一。
+FAVOR_CHAR_DESC_JS = r"""
+(function () {
+    var out = {};
+    for (var k in table_char_desc) {
+        var r = table_char_desc[k];
+        if (!r) { continue; }
+        var row = {};
+        for (var f in r) {
+            if (f === "desc_1" || f === "desc_2") { continue; }
+            row[f] = r[f];
+        }
+        out[k] = row;
+    }
+    return JSON.stringify(out);
+})()
+"""
+
+# 礼物。**在客户端就把表压扁**，只回服务端要的字段 —— 见上面 FAVOR_CHAR_DESC_JS 的说明。
+FAVOR_GIFT_JS = r"""
+(function () {
+    var out = {};
+    for (var k in table_item) {
+        var r = table_item[k];
+        if (!r || r.type !== 30) { continue; }
+        out[k] = {n: r.name, q: r.quality, gt: r.gift_type, f: r.favor || 0,
+                  fl: r.favor_love || 0, fh: r.favor_hate || 0,
+                  lv: r.favor_lv || 0, il: r.intimac_lv || 0};
+    }
+    return JSON.stringify(out);
+})()
+"""
+
+# 回礼（用礼物/抚摸之后角色回赠的东西）。
+# 每个角色一行，按 preference（2=喜欢 / 3=普通 / 4=讨厌）分成四条，各自两档掉落：
+#     return_item_id_N / return_item_count_N（"最小值,最大值"）/ return_item_pr_N
+FAVOR_RECEIVE_JS = r"""
+(function () {
+    var out = {};
+    for (var k in table_char_favor_receive_talk) {
+        var rows = table_char_favor_receive_talk[k] || [];
+        var arr = [];
+        for (var i = 0; i < rows.length; i++) {
+            var r = rows[i];
+            arr.push({p: r.preference,
+                      id1: r.return_item_id_1, c1: r.return_item_count_1, pr1: r.return_item_pr_1,
+                      id2: r.return_item_id_2, c2: r.return_item_count_2, pr2: r.return_item_pr_2});
+        }
+        out[k] = arr;
+    }
+    return JSON.stringify(out);
+})()
+"""
+
+# 只有服务端读的那几个 table_constant。
+FAVOR_CONSTANT_JS = r"""
+(function () {
+    return JSON.stringify({
+        max_favor_interact_times: table_constant.max_favor_interact_times,
+        favor_interact_cooldown_time: table_constant.favor_interact_cooldown_time,
+        default_favor_bg_item_key: table_constant.default_favor_bg_item_key,
+        daemon_need_favor_lv: table_constant.daemon_need_favor_lv,
+        favor_asst_favor_value: table_constant.favor_asst_favor_value,
+        favor_asst_interval_sec: table_constant.favor_asst_interval_sec,
+        favor_asst_max_multiple: table_constant.favor_asst_max_multiple,
+        use_gift_lv_10: table_constant.use_gift_lv_10,
+        use_gift_lv_20: table_constant.use_gift_lv_20,
+        use_gift_lv_30: table_constant.use_gift_lv_30,
+        use_gift_lv_40: table_constant.use_gift_lv_40
+    });
+})()
+"""
+
+
+# `table_item`（全部 3912 件道具）。
+#
+# 为什么服务端一直没抽它、现在又要抽：**服务端只有两处真的需要整张道具表** ——
+#   1. `items._item_limit()`：`Bag._addCount` 会按 `table_item[key].limit_count` 截断，
+#      服务端要按同一个上限发，不然客户端拿到超上限的堆叠会自己夹掉（数量对不上）
+#   2. 换装 / 换背景要判断 `table_item[itemKey].type`
+#      （CLOTHES=40 / BG_IMG=50），否则随便编个 key 就能换上去
+#
+# ⚠️ 只留这四个字段。整表 3912 行全字段几十万字，`/control/eval` 的返回值要
+# base64 + DES 走一遍 HTTP，抽的时候会把模拟器压到卡（已验证过一次）。
+ITEM_JS = r"""
+(function () {
+    var out = {};
+    for (var k in table_item) {
+        var r = table_item[k];
+        if (!r) { continue; }
+        out[k] = {n: r.name, t: r.type, q: r.quality,
+                  lc: r.limit_count || 0, ck: r.char_key || ""};
+    }
+    return JSON.stringify(out);
+})()
+"""
+
+
 def _dump(base: str, js: str, name: str):
     result = eval_remote(base, js, timeout=30.0)
     if not result.get("ok"):
@@ -308,41 +445,60 @@ def _dump(base: str, js: str, name: str):
 
 
 def main() -> int:
+    import argparse
+
     from gamesrv import config
+
+    ap = argparse.ArgumentParser(description="从运行中的客户端抽 table_* 到 gamesrv/data/")
+    ap.add_argument("--only", default=None,
+                    help="只抽文件名含这个子串的表（例：--only favor）。"
+                         "**只补新表时务必用它** —— 每张表都是一次 /control/eval，"
+                         "而 eval 跑在游戏主线程上、返回值还要 base64+DES 回传，"
+                         "整轮全抽（含 table_soldier / table_equipment 这种几十万字的）"
+                         "会把模拟器压到卡死。")
+    args = ap.parse_args()
 
     os.makedirs(DATA_DIR, exist_ok=True)
     base = f"http://127.0.0.1:{config.CDN_PORT}"
 
-    table = _dump(base, QUEST_JS, "table_quest.json")
-    if table is None:
-        return 1
-    kinds: dict[str, int] = {}
-    for row in table.values():
-        kinds[row["type"]] = kinds.get(row["type"], 0) + 1
-    print(f"[extract] 按 type 统计: {kinds}")
+    jobs = [
+        ("table_quest.json", QUEST_JS),
+        ("table_friend_support_npc.json", NPC_JS),
+        ("table_level_reward.json", LEVEL_JS),
+        ("table_soldier.json", SOLDIER_JS),
+        ("table_shelf.json", SHELF_JS),
+        ("table_shop.json", SHOP_JS),
+        ("table_talent_type.json", TALENT_TYPE_JS),
+        ("table_talent_master.json", TALENT_MASTER_JS),
+        ("table_talent_upgrade.json", TALENT_UPGRADE_JS),
+        ("table_equipment_constant.json", EQUIPMENT_CONSTANT_JS),
+        ("table_equipment_level.json", EQUIPMENT_LEVEL_JS),
+        ("table_equipment.json", EQUIPMENT_JS),
+        ("table_favor_upgrade.json", FAVOR_UPGRADE_JS),
+        ("table_favor_common.json", FAVOR_COMMON_JS),
+        ("table_favor_gift_type.json", FAVOR_GIFT_TYPE_JS),
+        ("table_char_desc.json", FAVOR_CHAR_DESC_JS),
+        ("table_favor_gift.json", FAVOR_GIFT_JS),
+        ("table_favor_receive.json", FAVOR_RECEIVE_JS),
+        ("table_favor_constant.json", FAVOR_CONSTANT_JS),
+        ("table_item.json", ITEM_JS),
+    ]
+    if args.only:
+        jobs = [j for j in jobs if args.only in j[0]]
+        if not jobs:
+            print(f"!! --only {args.only} 没匹配到任何表", file=sys.stderr)
+            return 2
+        print(f"[extract] 只抽 {len(jobs)} 张：{[j[0] for j in jobs]}")
 
-    if _dump(base, NPC_JS, "table_friend_support_npc.json") is None:
-        return 1
-    if _dump(base, LEVEL_JS, "table_level_reward.json") is None:
-        return 1
-    if _dump(base, SOLDIER_JS, "table_soldier.json") is None:
-        return 1
-    if _dump(base, SHELF_JS, "table_shelf.json") is None:
-        return 1
-    if _dump(base, SHOP_JS, "table_shop.json") is None:
-        return 1
-    if _dump(base, TALENT_TYPE_JS, "table_talent_type.json") is None:
-        return 1
-    if _dump(base, TALENT_MASTER_JS, "table_talent_master.json") is None:
-        return 1
-    if _dump(base, TALENT_UPGRADE_JS, "table_talent_upgrade.json") is None:
-        return 1
-    if _dump(base, EQUIPMENT_CONSTANT_JS, "table_equipment_constant.json") is None:
-        return 1
-    if _dump(base, EQUIPMENT_LEVEL_JS, "table_equipment_level.json") is None:
-        return 1
-    if _dump(base, EQUIPMENT_JS, "table_equipment.json") is None:
-        return 1
+    for name, js in jobs:
+        table = _dump(base, js, name)
+        if table is None:
+            return 1
+        if name == "table_quest.json":
+            kinds: dict[str, int] = {}
+            for row in table.values():
+                kinds[row["type"]] = kinds.get(row["type"], 0) + 1
+            print(f"[extract] 按 type 统计: {kinds}")
     return 0
 
 

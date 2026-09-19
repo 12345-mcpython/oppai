@@ -312,6 +312,58 @@ logcat 里只有一行 `JS ERROR: TypeError: config is undefined @ equipmentstre
 
 同类坑还有：`display: flex` 的容器里，子元素的 `hidden` 也常常失效。
 
+### 6.5 登录包里「客户端压根不读」的死键
+
+`favor` 块以前写的是 `{"favors": [], "isNeedAsstEff": 0, "favorExpAdd": 0}`，
+其中**后两个键客户端从来不读**。反汇编 `FavorCenter._initData`：
+
+    this._isNeedAsstEff = false;   // ← 写死
+    this._favorExpAdd   = 0;       // ← 写死，**不是** data.xxx
+
+它们只由响应键 `favorAsstRefreshed`（`cb4ResFavorAsstRefreshed`）驱动。
+也就是说登录包里挂那两个字段纯属自己骗自己 —— 写错了、写少了都不会报错，
+排查时却会让你以为"这里已经处理过了"。**已经删掉。**
+
+同类死键还有一批，判据是「这个 key 在 `dataManager.initUserData` / 各模块 ctor 里
+到底有没有被读」：
+
+    # 查某个 key 有没有被读（.jsc 是二进制，裸 grep 搜不到，必须走原子表）
+    python script\jsc_find.py isNeedAsstEff --func
+
+教训：**登录包的字段不能凭"名字看着合理"往里塞**。要么反汇编确认读取点，
+要么用 `jsc_find.py` 全库搜一遍；搜不到就是没人读。
+
+### 6.6 登录块里最容易错的两种形状：map vs list
+
+`favor` 块真正的形状是 `{favors: {charKey: 行}, favorInteractChance, favorInteractUpdateTimeSec}`
+—— `favors` 是 **map**，不是数组。判断依据在 `FavorCenter._initData`：
+
+    var favorsData = data.favors;
+    for (var i in favorsData) existedKeys.push(favorsData[i].charKey);
+    ...
+    var favorData = existedKeys.indexOf(charKey) === -1 ? {charKey: charKey}
+                                                       : favorsData[charKey];   // ← 直接拿 charKey 索引
+
+回数组的话 `favorsData["sasm"]` 恒为 undefined，**63 个角色全部退化成「未获得」**，
+而且不报任何错 —— 表现只是宿舍里一片灰。
+
+同类：军士用 `char_key`（`sasm`）索引，不是 `table_soldier` 的 key（`sasm010104`）；
+`id` 的有无就是客户端的 `isAcquired`（`typeof favorData.id != "undefined"`），
+所以没获得的角色**不能**带 `id`。
+
+### 6.7 数值算错不会报错，只会「数字不对」—— 这类逻辑必须钉自测
+
+好感度这套东西，加多少经验、升不升级、回不回礼、抚摸次数怎么回，
+**全在服务端**（客户端只拿 `favorValue` / `favorAdd` 去播动画）。
+算错了界面上不会抛异常，只是数字不对 —— 靠看画面基本发现不了。
+
+所以 `script/selftest_favor.py` 在**进程内**把公式钉死（78 条断言，不需要模拟器、
+不需要服务端在跑），`script/selftest_game.py` 那边只补形状和落盘。
+
+⚠️ 写这类自测时注意：handler 内部是 `store.get_or_create_player()`，
+**每次都从盘上重新 load**；直接改内存里的 player 是没用的，必须
+`save_player` 之后再由 handler 重新读，否则测出来的是假的。
+
 ---
 
 
@@ -350,6 +402,11 @@ logcat 里只有一行 `JS ERROR: TypeError: config is undefined @ equipmentstre
 - [x] **调试台**：日志分级（debug/info/warning/error/fatal，服务端按行首判级）、
       页签记忆、toast 自动关闭、控制台/日志/流量自动滚动、数据面板三个视图都能翻页、
       表浏览一行省略+点开展开、`[hidden]` 兜底（见 §6.4）
+- [x] **好感度（宿舍）**（`favor.*` 5 条，路由 64→69）：登录块按 `FavorCenter._initData`
+      的形状给（`favors` 是 **map**、`id` 的有无 = 已获得、缺不得 `favorInteractChance`），
+      送礼 / 换装 / 换背景 / 抚摸 / 资料已读全实现。数值表 7 张进 `gamesrv/data/`。
+      ⚠️ 三条坑各成一节：死键（§6.5）、map vs list（§6.6）、
+      「算错不报错所以要自测」（§6.7）。**尚未做**：`favorevent.seteventsunlock`
 - [x] 文档：协议 / 逆向手法 / 打包逻辑 / 调试台 / 引擎调试 / 本总览
 
 ### 待办（按卡点排序）
@@ -376,13 +433,13 @@ logcat 里只有一行 `JS ERROR: TypeError: config is undefined @ equipmentstre
    `{item, innSize, index}`），所以卡在「层的 `_recommendList` 是 0」。
    **不影响战斗**（这个弹窗是可选的好友助战）。
 5. **其余未实现的 route** —— `python script/route_gap.py --static` 能列出全部。
-   当前：客户端静态候选 **161** 条，服务端 **64** 条，缺 **105** 条。按单机价值排：
+   当前：客户端静态候选 **161** 条，服务端 **69** 条，缺 **100** 条。按单机价值排：
 
    | 命名空间 | 缺 | 说明 |
    |---|---|---|
-   | `favor.*` | 5 | 宿舍好感度（送礼/换装/换背景/触摸），主菜单「宿舍」入口 |
    | `exchange.*` | 6 | 黑市交易所（`checkorder` 已实现）；要抽兑换表 |
    | `detect.*` | 6 | 侦查玩法 |
+   | `favorevent.*` | 1 | 宿舍事件（`FavorEventCenter`）；好感度已经做完，这个是天然续作 |
    | `diary.*` / `sign.*` / `subareaachievement.*` / `convert.*` / `share.*` | 1+1+1+1+1 | 零散领奖类，工作量最小，适合热身 |
    | `boss.*` | 5 | 好友 BOSS（`getbosslist` 已实现并回空表） |
    | `society.*` / `societyclg.*` | 33+6 | 军团——单机价值低、量最大 |
@@ -391,7 +448,7 @@ logcat 里只有一行 `JS ERROR: TypeError: config is undefined @ equipmentstre
    ⚠️ **`rank.*` / `boss.getbosslist` 这类"回空表"不算缺口**：私服没有榜、没有好友，
    回空才是对的（见 `handlers/rank.py` 的论证），别当成没实现去"补"。
 
-   ✅ `equipment.*`(7) 和 `player.selecttalent`/`upgradetalent` 已经补完，不在上面了。
+   ✅ `equipment.*`(7)、`favor.*`(5)、`player.selecttalent`/`upgradetalent` 已经补完。
 6. `hashKey` / `hmac64` 还没复刻（登录靠单位元绕过）；自研 DH 的完整算法也没还原。
 
 ---
@@ -432,12 +489,24 @@ python script\serve.py
 # 在游戏进程里执行任意 JS（前提：probe 版本 + 服务端在跑）
 python script\repl.py "dataManager.player._moduleState ? Object.keys(dataManager.player._moduleState).length : 'none'"
 
-# 抽客户端表
-python script\extract_client_tables.py
+# 抽客户端表。**只补新表时务必加 --only**：每张表都是一次 /control/eval，
+# eval 跑在游戏主线程上、返回值还要 base64+DES 回传，整轮全抽（含 table_soldier /
+# table_equipment 那种几十万字的）会把模拟器压到卡死
+python script\extract_client_tables.py --only favor
+python script\extract_client_tables.py --only char_desc
 
 # 反汇编
 python script\jsc_strings.py  <assets>\src\ui\main\mainlayer.jsc _initModuleButtons
 python script\disasm_func.py  <assets>\src\data\questcenter.jsc _createQuest
+
+# 反查：这个 key / route / 方法名在哪个 .jsc 的哪个函数里用过
+#（.jsc 是二进制，裸 grep 搜不到，必须走原子表）
+python script\jsc_find.py useGiftStatus --func
+python script\jsc_find.py "favor\..*" --regex
+
+# 自测
+python script\selftest_favor.py    # 好感度公式，**不需要模拟器也不需要服务端**
+python script\selftest_game.py     # 走 HTTP 的协议/路由/落盘冒烟（要服务端在跑）
 ```
 
 **排障顺序**（按复用性排序）：
