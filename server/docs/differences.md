@@ -25,7 +25,7 @@
 | A2 | **重建 `libcocos2djs.so`** | 原版 `.so` 是用**改过的** cocos2d-js 3.6 编的，仓库里那版对不上。按 v3.6 重建 + 13 个补丁 | `engine/`、[`engine-debug.md`](engine-debug.md) |
 | A3 | **客户端适配 7 条**（`patch.js`） | 引擎换了，几个绑定名对不上，不改直接黑屏；另外引擎里 `responseConfig` 不派发、少了几个绑定 | `server/client/patch.js` 头部 |
 | A3b | **响应派发自己补一层** | 原版靠 `src/util/server.js` 的 `responseConfig` 把响应里的模块块推给各中心，这套引擎上**一次都没跑**（实测 `Favor.prototype.update` 调用 0 次）。`patch.js` 的 RESP-DISPATCH 照它的三类写法补齐才生效 | [protocol.md §5.2](protocol.md) |
-| A3c | **地址改成运行时改写**（`URL-REWRITE`） | jsc 里的地址只能等长替换（`<host>:18080` 必须 19 字节 → **LAN IP 必须 13 字符**），而且那几个文件是就地改写的，换 IP 时替换逻辑找不到旧串会**静默跳过**、整包作废。现在 jsc 保留原始地址，改由 `patch.js` 在运行时改写 XHR / WebSocket；`project.manifest` 按 JSON 重写（它走原生 curl，拦不到） | [`REPRODUCE.md`](../../REPRODUCE.md) Step 4b、`script/build_apk.py --no-url-patch` |
+| A3c | **地址改成运行时改写**（`URL-REWRITE`，默认行为） | jsc 里的地址只能等长替换（`<host>:18080` 必须 19 字节 → **host 必须 13 字符**），而且那几个文件是就地改写的，换地址时替换逻辑找不到旧串会**静默跳过**、整包作废。现在 jsc 保留原始地址，改由 `patch.js` 在运行时改写 XHR / WebSocket；`project.manifest` 按 JSON 重写（它走原生 curl，拦不到）。代价：包内仍带官方地址 | [`REPRODUCE.md`](../../REPRODUCE.md) Step 4b、`script/build_apk.py`（老路子 `--patch-jsc-urls`） |
 | A4 | **Java 层绕开渠道登录** | 原版走 QuickSDK→百度登录，那两个服务器早下线了，弹窗永远登不进去。改成原生直接回调「登录成功」 | `server/client/patch_smali.py`、`ServerLoginRunnable.smali` |
 | A5 | **删掉第三方 SDK（46.6MB）** | 统计/推送/广告/渠道全下线了，留着只是体积 | `script/sdk_strip/` |
 | A6 | **登录不走真实 DH** | 原版握手用自研 DH + `hashKey`/`hmac64`，算法没还原。私服用 **DH 单位元**当共享密钥 | [`protocol.md`](protocol.md) |

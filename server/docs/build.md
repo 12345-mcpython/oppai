@@ -256,24 +256,30 @@ apktool 会照样按「不压缩」处理，有时还会把原版 APK 里的 unk
 
 ---
 
-## 关键约束：URL 必须「等长替换」
+## URL 怎么进客户端：默认**运行时改写**，老路子才是「等长替换」
 
 `.jsc` 里的字符串是 **长度前缀**存储的（像 Pascal 字符串），
 改长度会让后面的字节码整体错位 → 引擎直接崩。
 
-所以新地址的**字节数必须和旧地址完全一致**：
+所以**老路子**（`--patch-jsc-urls` / `build.ps1 -JscUrlPatch`）只能等长替换：
 
-| 旧 | 长度 | 新 | 长度 |
+| 旧 | 长度 | 新（例） | 长度 |
 |---|---|---|---|
 | `cdn.shuangmawei.net` | 19 | `10.110.29.230:18080` | 19 ✅ |
 | `http://114.55.66.97:16840` | 25 | `http://10.110.29.230:8080` | 25 ✅ |
 
-**这就倒推出了端口位数的硬约束**：
+**这就倒推出了老路子的硬约束**：host 必须 **13 个字符**、CDN 端口 **5 位**、
+登录端口 **4 位**。长度不匹配时脚本直接报错退出，不会产出坏包。
+⚠️ 还有个更阴的坑：那几个文件是**就地改写**的，换地址时替换逻辑
+「找不到旧串」会**静默跳过** —— 表现是新包还带着旧地址（实测踩过：DHCP 换了 IP）。
 
-* CDN 端口**必须 5 位**（`cdn.shuangmawei.net` 是 19 字节）
-* 登录端口**必须 4 位**（旧的是 `http://` + IP + 5 位端口 = 25 字节）
+**默认（现在的做法）完全不碰 jsc**：打包时先按 `game/original/zcsmw-original.apk`
+把带地址的文件恢复成原始串，地址交给 `patch.js` 的 `URL-REWRITE` 在运行时改写
+（拦 `cc.loader.getXMLHttpRequest()` 与 `window.WebSocket`）。
+于是没有长度约束（`127.0.0.1` 也行）、打包幂等、换服务器只要重打包 assets。
 
-长度不匹配时脚本直接报错退出，不会产出坏包。
+`project.manifest` 是**纯文本 JSON**，两种路子下都按 JSON 重写（只换 host、
+路径原样保留）—— 它走原生 curl，JS 层拦不到，必须在打包时改对。
 
 ---
 
@@ -425,7 +431,10 @@ adb install -r -d E:\code\zcsmw\out\zcsmw-mod-signed.apk
 
 | 参数 | 说明 |
 |---|---|
-| `--host` / `--port` / `--login-port` | 服务端地址（端口位数有硬约束） |
+| `--host` / `--port` / `--login-port` | 服务端地址。`--host` 留空 = 读服务端配置（`gamesrv/config.py` 的 `PUBLIC_HOST`） |
+| `--print-host` | 只打印上面那个默认地址然后退出（`build.ps1` 用它，保证只有一处配置） |
+| `--patch-jsc-urls` | 【老路子，默认关】等长替换 jsc；开了才有 13 字符/端口位数那套约束 |
+| `--no-probe` | 正式包：不带 probe.js |
 | `--skip-prepare` | 跳过改 assets，只重新打包 |
 | `--keep-intermediate` | 保留 `zcsmw-mod.apk` / `-aligned.apk` 中间产物 |
 | `--out` | 输出路径 |

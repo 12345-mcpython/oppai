@@ -31,14 +31,20 @@ param(
     [switch]$Launch,
     [switch]$NoProbe,
     [string[]]$Abi = @("armeabi", "x86"),
-    # 打包用的对外地址。默认沿用老值（模拟器 + 局域网 IP）。
-    #   -HostName 127.0.0.1 -RuntimeUrlRewrite  → 配合 adb reverse，真机插 USB 就能跑
-    #                                             （不需要局域网/防火墙/root/hosts）
+    # 打包用的对外地址。**留空 = 读服务端配置**（gamesrv/config.py 的 PUBLIC_HOST，
+    # 也就是 GS_PUBLIC_HOST，默认 127.0.0.1），这样只有一处要设。
+    #   （默认 127.0.0.1 = adb reverse 工作流：真机插 USB 就能跑，不需要局域网/
+    #     防火墙/root/hosts，而且和 PC 的 IP 无关）
+    #   要局域网直连：$env:GS_PUBLIC_HOST='192.168.1.100' 或 -HostName 192.168.1.100
     # ⚠️ 参数名不能叫 -Host：那会盖掉 PowerShell 的自动变量 $Host。
-    [string]$HostName = "10.110.29.230",
+    [string]$HostName = "",
     [int]$Port = 18080,
     [int]$LoginPort = 8080,
-    # 地址交给 patch.js 在运行时改写：jsc 保持原始地址，-HostName 不再受 19/25 字节约束
+    # 【老路子，一般不用】把地址**等长**替换进 jsc 而不是运行时改写。
+    # 代价：host 必须 13 字符、端口位数固定，且换地址会「找不到旧串」静默跳过。
+    # 好处：包里不留官方地址（正式分发场景才需要）。
+    [switch]$JscUrlPatch,
+    # 已默认开启，保留只为兼容老命令
     [switch]$RuntimeUrlRewrite,
     # 安装目标（真机：-Serial <手机序列号>，或环境变量 GS_ADB_SERIAL）
     [string]$Serial = ""
@@ -65,6 +71,10 @@ function Warn($msg)     { Write-Host "    $msg" -ForegroundColor Yellow }
 
 # 用 python 的路径自举来解析各个目录，免得两边各写一份
 $env:PYTHONIOENCODING = "utf-8"
+
+if ($RuntimeUrlRewrite) {
+    Warn "-RuntimeUrlRewrite 已经是默认行为（jsc 保持原始地址、运行时改写），不用再带了"
+}
 
 if (-not (Test-Path $Game))   { throw "找不到游戏包目录: $Game" }
 if (-not (Test-Path $Script)) { throw "找不到脚本目录: $Script" }
@@ -183,9 +193,14 @@ if ($LASTEXITCODE -ne 0) { Warn "patch_smali 失败，继续" } else { Ok "ok" }
 # ---------------------------------------------------------------------------
 Step 4 "打包 APK（apktool 完整打包 + zipalign + 签名）"
 $buildArgs = @((Join-Path $Script "build_apk.py"))
+if (-not $HostName) {
+    # 空 = 跟服务端同一处配置（只有一处要设）
+    $HostName = (& python (Join-Path $Script "build_apk.py") --print-host | Select-Object -Last 1).Trim()
+    Ok "对外地址取自服务端配置：$HostName"
+}
 $buildArgs += @("--host", $HostName, "--port", "$Port", "--login-port", "$LoginPort")
 if ($NoProbe) { $buildArgs += "--no-probe" }
-if ($RuntimeUrlRewrite) { $buildArgs += "--no-url-patch" }
+if ($JscUrlPatch) { $buildArgs += "--patch-jsc-urls" }
 & python @buildArgs
 if ($LASTEXITCODE -ne 0) { throw "build_apk.py 退出码 $LASTEXITCODE" }
 $apk = Join-Path $Out "zcsmw-mod-signed.apk"
@@ -204,8 +219,27 @@ if ($NoProbe) {
 }
 
 # ---------------------------------------------------------------------------
+# 对外地址是 127.0.0.1（默认）时，装之前先把四个端口反向转发掉 ——
+# 手机/模拟器上的 127.0.0.1:<port> 会被转发到本机，于是不需要局域网/防火墙/root。
+# ⚠️ adb 重连、设备重插之后这条会丢，所以要重跑（本步骤每次都会重设）。
+if ($HostName -eq "127.0.0.1") {
+    Step "4b" "adb reverse（127.0.0.1 工作流）"
+    & $Adb connect $Serial 2>&1 | Out-Null
+    $revOk = $true
+    foreach ($p in 18080, 8080, 10001, 10003) {
+        & $Adb -s $Serial reverse "tcp:$p" "tcp:$p" 2>&1 | Out-Null
+        if ($LASTEXITCODE -ne 0) { $revOk = $false }
+    }
+    if ($revOk) {
+        Ok "已转发 18080 / 8080 / 10001 / 10003 -> 本机（$Serial）"
+    } else {
+        Warn "adb reverse 失败 —— 设备没连上？真机/USB 断了这条就不生效"
+    }
+}
+
+# ---------------------------------------------------------------------------
 if ($Install) {
-    Step 5 "安装到模拟器"
+    Step 5 "安装到设备"
     & $Adb connect $Serial | Out-Null
     & $Adb install -r -d $apk
     if ($LASTEXITCODE -ne 0) { throw "adb install 失败" }

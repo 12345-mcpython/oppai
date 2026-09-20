@@ -244,8 +244,11 @@ python script\serve.py           # 守护进程，run.py 挂了自动拉起（�
 | adb | `GS_ADB` / `GS_ADB_SERIAL`，默认 `127.0.0.1:21503` |
 | NDK r10e | 只有 `-Engine` 才用，在 `engine\ndk\` 里 |
 
-模拟器：MuMu（Android 9 x86_64，已 root）。宿主机 `10.110.29.230`，
-客户端里的 CDN / oauth 地址在打包时**原地等长替换**成它。
+模拟器：MEmu（Android 9 x86_64，已 root）。**默认不依赖宿主机 IP**：对外地址取自
+`server/gamesrv/config.py` 的 `PUBLIC_HOST`（默认 `127.0.0.1`），打包时写进
+`patch.js`，由它在**运行时**改写客户端里的 CDN / oauth 地址；配合
+`adb reverse tcp:{18080,8080,10001,10003}` 连局域网都不需要（真机插 USB 同理）。
+要局域网直连就设 `$env:GS_PUBLIC_HOST='<宿主机 IP>'`。
 
 ---
 

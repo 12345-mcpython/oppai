@@ -448,7 +448,7 @@ quicksdk.sdkLoginCallback(1, "emulator", "emulator-token")
 | 数据模块构造容错 | 某个模块数据没对齐时不连累整体 |
 | `initUserData` 兜底 | 无论如何保证 `player._moduleState` 建出来（否则主界面黑屏） |
 | `RESP-DISPATCH` 响应派发 | 客户端 `responseConfig` 在这套引擎上根本没被派发，自己补一层。⚠️ **原版那张表有三类写法**（收整个 `res` 的 / `updateByServer` 的 / 方法名各不相同的），只补中间那批的话 `favor` / `newFavorEvent` / `useGiftStatus` 整条是死的 —— 详见 [`docs/protocol.md`](docs/protocol.md) §5.2 |
-| `URL-REWRITE` 地址改写 | jsc 里的官方地址打包时只能等长替换（LAN IP 必须 13 字符），且换 IP 会静默跳过、整包作废。这里改成运行时改写 XHR 与 WebSocket 的 URL，配合 `adb reverse` 真机免 root/免 hosts/免局域网 —— 见 [`../REPRODUCE.md`](../REPRODUCE.md) Step 4b |
+| `URL-REWRITE` 地址改写 | jsc 里的官方地址打包时只能等长替换（host 必须 13 字符），且换 IP 会静默跳过、整包作废。**默认**改成运行时改写 XHR 与 WebSocket 的 URL（老路子要显式 `-JscUrlPatch`），配合 `adb reverse` 真机免 root/免 hosts/免局域网 —— 见 [`../REPRODUCE.md`](../REPRODUCE.md) Step 4b |
 | LGL-GUARD | 视频层清理 + 最后一帧回调幂等 |
 
 `probe.js` 做的事：

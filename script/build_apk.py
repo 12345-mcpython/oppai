@@ -68,7 +68,7 @@ OLD_WWW = b"www.shuangmawei.net"           # 19 字节
 OLD_OAUTH = b"http://114.55.66.97:16840"   # 25 字节
 OLD_SHARE = b"http://114.55.66.97:14589"   # 25 字节
 
-# 原始包（`--no-url-patch` 要拿它恢复「带地址的那几个文件」）
+# 原始包（默认路子要拿它恢复「带地址的那几个文件」）
 ORIGINAL_APK = os.environ.get(
     "GS_ORIGINAL_APK", os.path.join(APK_DIR, "original", "zcsmw-original.apk"))
 
@@ -334,7 +334,7 @@ def _replace_in_file(path: str, pairs, what: str) -> int:
 def restore_pristine_urls() -> None:
     """把带地址的那几个文件从**原始包**恢复回来。
 
-    `--no-url-patch` 用。为什么必须恢复：这几个文件是**就地改写**的，
+    默认路子用。为什么必须恢复：这几个文件是**就地改写**的，
     换地址时 `_replace_in_file` 找不到旧串会**静默跳过** —— 实测踩过：
     DHCP 换了 PC 的 IP 之后，`game/` 里那三个 jsc + manifest 卡在旧 IP 上，
     重打包出来的包还是旧地址，整包作废。恢复成原始串之后，运行时改写
@@ -343,7 +343,7 @@ def restore_pristine_urls() -> None:
     if not os.path.exists(ORIGINAL_APK):
         raise SystemExit(
             f"!! 找不到原始包 {ORIGINAL_APK}\n"
-            f"   --no-url-patch 需要它来恢复地址（可用 GS_ORIGINAL_APK 指定）")
+            f"   默认路子需要它来恢复地址（可用 GS_ORIGINAL_APK 指定）")
     with zipfile.ZipFile(ORIGINAL_APK) as z:
         for rel in URL_FILES:
             data = z.read(rel)
@@ -620,15 +620,32 @@ def prune_stale_dex() -> None:
             log(f"  清理陈旧 dex: build/apk/{f}")
 
 
+def default_host() -> str:
+    """打包用的对外地址 —— **和服务端同一处配置**（`gamesrv/config.py`）。
+
+    以前这里是硬编码的 `10.110.29.230`，而服务端那份默认值也在自己文件里，
+    两边一旦不一致，客户端就会收到「客户端连 A、服务器列表说 B」的组合。
+    现在默认读 `config.PUBLIC_HOST`（可用 `GS_PUBLIC_HOST` 覆盖），只有一处要设。
+    """
+    try:
+        sys.path.insert(0, BASE_DIR)
+        from gamesrv import config as gsconfig
+        return gsconfig.PUBLIC_HOST
+    except Exception as exc:  # noqa: BLE001
+        log(f"  ! 读不到 gamesrv.config（{exc}），--host 回退到 127.0.0.1")
+        return "127.0.0.1"
+
+
 def prepare_assets(host: str, port: int, login_port: int, patch_path: str,
                    probe_path: str, with_probe: bool,
-                   patch_urls: bool = True) -> None:
+                   patch_urls: bool = False) -> None:
     cdn_base = f"http://{host}:{port}"
     login_url = f"http://{host}:{login_port}"
 
     if patch_urls:
-        # 老路子：把 jsc 里的地址**等长**替换掉（<host>:<port> 必须 19 字节
-        # → host 必须 13 个字符）。留着是为了兼容老流程与「包里不留官方地址」。
+        # 老路子（`--patch-jsc-urls`）：把 jsc 里的地址**等长**替换掉
+        # （<host>:<port> 必须 19 字节 → host 必须 13 个字符）。
+        # 只在「包里不留官方地址」这类正式分发场景才需要。
         token = make_host_token(host, port)
         login_base = make_login_base(host, login_port)
         log(f"CDN      -> {token.decode()}（等长替换 jsc）")
@@ -640,8 +657,9 @@ def prepare_assets(host: str, port: int, login_port: int, patch_path: str,
         _replace_in_file(os.path.join(APK_DIR, "assets/src/data/share.jsc"),
                          [(OLD_SHARE, login_base)], "share.jsc")
     else:
-        # 新路子：jsc 保留原始地址，运行时由 patch.js 的 URL-REWRITE 改写。
-        # 好处是没有长度约束（127.0.0.1 也行），换服务器只要重打包 assets。
+        # 默认路子：jsc 保持官方原始地址，运行时由 patch.js 的 URL-REWRITE 改写。
+        # 好处是没有长度约束（127.0.0.1 也行），换服务器只要重打包 assets，
+        # 而且打包是幂等的（每次先从原始包恢复，不会「找不到旧串就静默跳过」）。
         restore_pristine_urls()
         log(f"CDN      -> {cdn_base}（运行时改写，jsc 保持原始地址）")
         log(f"登录服务 -> {login_url}（运行时改写）")
@@ -694,7 +712,7 @@ def prepare_assets(host: str, port: int, login_port: int, patch_path: str,
     #   __CDN_BASE__          probe.js 的 REPL/hook 地址
     #   __OPPAI_CDN_BASE__    patch.js 的 URL-REWRITE：CDN 目标
     #   __OPPAI_LOGIN_BASE__  patch.js 的 URL-REWRITE：登录/oauth 目标
-    # （`--no-url-patch` 时后两个才是真正的地址来源，长度随便）
+    # （默认路子里后两个才是真正的地址来源，长度随便）
     sources = [("patch.js", patch_path)]
     if with_probe:
         sources.append(("probe.js", probe_path))
@@ -833,29 +851,39 @@ def sign(path: str) -> str:
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--host", default="10.110.29.230")
-    ap.add_argument("--port", type=int, default=18080, help="CDN 端口（必须 5 位）")
-    ap.add_argument("--login-port", type=int, default=8080, help="登录端口（必须 4 位）")
+    ap.add_argument("--host", default=None,
+                    help="客户端要连的地址。默认读服务端配置 gamesrv/config.py 的 "
+                         "PUBLIC_HOST（= GS_PUBLIC_HOST，默认 127.0.0.1）")
+    ap.add_argument("--port", type=int, default=18080, help="CDN 端口")
+    ap.add_argument("--login-port", type=int, default=8080, help="登录端口")
     ap.add_argument("--patch", default=DEFAULT_PATCH)
     ap.add_argument("--probe", default=DEFAULT_PROBE)
     ap.add_argument("--no-probe", action="store_true",
                     help="不打包 probe.js（release 构建）")
+    ap.add_argument("--patch-jsc-urls", action="store_true",
+                    help="【老路子，默认关】把地址**等长**替换进 jsc，而不是运行时改写。"
+                         "代价：host 必须 13 个字符、端口位数固定，而且换地址时"
+                         "「找不到旧串」会静默跳过（踩过）；好处是包里不留官方地址")
     ap.add_argument("--no-url-patch", action="store_true",
-                    help="不改 jsc 里的地址，改用 patch.js 的 URL-REWRITE 在运行时改写"
-                         "（jsc 会先从原始包恢复）。好处：--host 不再受 19/25 字节约束，"
-                         "可以填 127.0.0.1:18080 配合 adb reverse；换服务器也不会因为"
-                         "「找不到旧串」而静默失败")
+                    help=argparse.SUPPRESS)   # 已默认，保留只为兼容老命令
     ap.add_argument("--out", default=os.path.join(WORK, "zcsmw-mod.apk"))
     ap.add_argument("--skip-prepare", action="store_true", help="只打包，不重新改资源")
     ap.add_argument("--keep-intermediate", action="store_true", help="保留 aligned 中间产物")
+    ap.add_argument("--print-host", action="store_true",
+                    help="只打印默认对外地址（读服务端配置）然后退出，给 build.ps1 用")
     args = ap.parse_args()
 
+    if args.print_host:
+        print(default_host())
+        return 0
+
     os.makedirs(WORK, exist_ok=True)
+    host = args.host or default_host()
 
     if not args.skip_prepare:
-        prepare_assets(args.host, args.port, args.login_port, args.patch,
+        prepare_assets(host, args.port, args.login_port, args.patch,
                        args.probe, not args.no_probe,
-                       patch_urls=not args.no_url_patch)
+                       patch_urls=args.patch_jsc_urls)
         prune_stale_dex()
 
     apktool_build(args.out)

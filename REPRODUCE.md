@@ -240,9 +240,21 @@ Get-NetTCPConnection -State Listen |
 > ⚠️ 用 `serve.py`（守护进程），**别用 `Start-Process python run.py`** ——
 > 那起的是分离进程，父会话结束就被回收，表现为"服务端莫名宕机"。
 >
-> ⚠️ 四个端口**不能改**：客户端里的 URL 是**原地等长字节替换**进去的
-> （`cdn.shuangmawei.net` = 19 字节 → `10.110.29.230:18080`），
-> 长度一变就把 assets 写坏了。详见 [`server/docs/build.md`](server/docs/build.md)。
+> **对外地址**（服务器列表 / `gameServUrl` / 打包时写进客户端的地址）来自
+> `gamesrv/config.py` 的 `PUBLIC_HOST`，**默认 `127.0.0.1`** = adb reverse 工作流
+> （手机/模拟器的回环转发到本机，不需要局域网/防火墙/root，而且和 PC 的 IP 无关）。
+> 要局域网直连就覆盖它：
+>
+> ```powershell
+> $env:GS_PUBLIC_HOST = '192.168.1.100'      # 打包会自动用同一个值
+> python script\serve.py
+> ```
+>
+> ⚠️ 四个端口**不能改**：客户端里原来的地址长度是固定的
+> （`cdn.shuangmawei.net` = 19 字节 / `http://114.55.66.97:16840` = 25 字节），
+> 老路子（`-JscUrlPatch`）下必须等长替换；默认的运行时改写没有这个约束，
+> 但端口仍然贯穿服务端配置与客户端，别动。
+> 详见 [`server/docs/build.md`](server/docs/build.md)。
 >
 > 深入：[`server/docs/protocol.md`](server/docs/protocol.md)。
 
@@ -258,6 +270,8 @@ cd E:\code\zcsmw
 python server\client\patch_smali.py
 
 # 4.2 打包（改 assets → apktool b → zipalign → 签名）
+#     对外地址默认取自服务端配置（默认 127.0.0.1 = adb reverse 工作流，
+#     build.ps1 会自动把四个端口 adb reverse 掉）
 .\build.ps1 -Install -Launch
 ```
 
@@ -308,28 +322,30 @@ adb -s 127.0.0.1:21503 logcat -d -v brief | Select-String "OPPAIPATCH|JS ERROR"
 | **连得上** | 地址烘在包里 → 换 IP 就要重打包 | 见下面，**改成运行时改写**，连局域网都不需要 |
 
 ```powershell
-# 1) 手机插 USB、开 USB 调试，拿到序列号
+# 手机插 USB、开 USB 调试，拿到序列号
 adb devices
 
-# 2) 四个端口全部反向转发（手机上的 127.0.0.1:<port> -> PC 的 <port>）
+# 1) 【默认就是这个工作流】对外地址 = 127.0.0.1，四个端口反向转发到本机
+#    build.ps1 到 [4b] 会自动重设；手工做就是这四行
 foreach ($p in 18080,8080,10001,10003) { adb -s <手机序列号> reverse "tcp:$p" "tcp:$p" }
 adb -s <手机序列号> reverse --list
 
-# 3) 服务端对外宣告 127.0.0.1（服务器列表和 gameServUrl 都从它来）
-$env:GS_PUBLIC_HOST='127.0.0.1'; python script\serve.py
+# 2) 起服务端（默认就宣告 127.0.0.1，不用设环境变量）
+python script\serve.py
 
-# 4) 打包 + 装到真机：-RuntimeUrlRewrite = 地址交给 patch.js 运行时改写
-.\build.ps1 -RuntimeUrlRewrite -HostName 127.0.0.1 -Install -Serial <手机序列号>
+# 3) 打包 + 装到真机（-Serial 指到手机；不带任何地址参数，读服务端配置）
+.\build.ps1 -Install -Serial <手机序列号>
 
-# 5) Android 15+ 若报 INSTALL_FAILED_DEPRECATED_SDK_VERSION，换这条装法
+# 4) Android 15+ 若报 INSTALL_FAILED_DEPRECATED_SDK_VERSION，换这条装法
 adb -s <手机序列号> install -r --bypass-low-target-sdk-block out\zcsmw-mod-signed.apk
 ```
 
 **为什么不用 root / 不用改 hosts**：
 
-* jsc 里的官方地址**不再被打包时改写**（`--no-url-patch`），`patch.js` 在运行时把
-  `cdn.shuangmawei.net` / `114.55.66.97:16840` 改写到 `--HostName`。拦截点是
-  `cc.loader.getXMLHttpRequest()` 和 `window.WebSocket` 两个 JS 单点。
+* jsc 里的官方地址**不再被打包时改写**（这是现在的**默认**行为；老路子要显式加
+  `-JscUrlPatch`），`patch.js` 在运行时把 `cdn.shuangmawei.net` / `114.55.66.97:16840`
+  改写到对外地址。拦截点是 `cc.loader.getXMLHttpRequest()` 和 `window.WebSocket`
+  两个 JS 单点。
 * 热更新那份 `project.manifest` 走**原生 curl**，拦不到 → 由 `build_apk.py`
   按 **JSON** 重写（纯文本，不受等长约束）。
 * 于是地址可以随便填（`127.0.0.1` 也行），`adb reverse` 把手机的回环转发到 PC ——
@@ -342,11 +358,11 @@ adb -s <手机序列号> install -r --bypass-low-target-sdk-block out\zcsmw-mod-
 > 密钥也算完了，服务端发完欢迎包就一直阻塞在 recv）。详见
 > [`server/docs/overview.md`](server/docs/overview.md) §6.13。
 >
-> ⚠️ 老路子的坑：`--host` 走的是**等长**替换（`<host>:18080` 必须 19 字节 →
-> **LAN IP 必须 13 个字符**），而且那几个文件是**就地改写**的 —— 换 IP 时替换逻辑
-> 「找不到旧串」会**静默跳过**，整包作废（实测踩过：DHCP 换了 IP）。要用老路子就
-> 得先从 `game/original/zcsmw-original.apk` 恢复那几个文件；`-RuntimeUrlRewrite`
-> 不存在这个问题（jsc 永远保持原始地址）。
+> ⚠️ 老路子（`-JscUrlPatch`）的坑，知道一下就行：它走**等长**替换
+> （`<host>:18080` 必须 19 字节 → **host 必须 13 个字符**），而且那几个文件是
+> **就地改写**的 —— 换地址时替换逻辑「找不到旧串」会**静默跳过**，整包作废
+> （实测踩过：DHCP 换了 IP）。默认路子不存在这个问题（jsc 永远保持原始地址，
+> 每次打包都先从 `game/original/zcsmw-original.apk` 恢复一遍）。
 
 ---
 

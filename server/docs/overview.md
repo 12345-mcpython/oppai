@@ -178,7 +178,7 @@ vanilla 不传参 → 游戏代码 `function (eventName) { if (/began\d/.test(ev
 | 数据模块构造容错 | 某个模块数据没对齐时不连累整体 |
 | `initUserData` 兜底 | 无论如何保证 `player._moduleState` 建出来（否则主界面黑屏） |
 | **`RESP-DISPATCH`** | 客户端 `responseConfig` 在这套引擎上根本没被派发，自己补一层响应分发。**三类写法都要补**（收整个 `res` 的 / `updateByServer` 的 / 方法名各不相同的），只补中间那批的话好感度整条是死的 —— 见 [protocol.md §5.2](protocol.md) |
-| **`URL-REWRITE`** | jsc 里的官方地址只能**等长**替换（`<host>:18080` 必须 19 字节 → LAN IP 必须 13 字符），而且换 IP 会静默跳过、整包作废。改成运行时改写 `cc.loader.getXMLHttpRequest()` 与 `window.WebSocket`，地址不再有长度约束 —— 配合 `adb reverse` 连局域网/root/hosts 都不需要（见 [`REPRODUCE.md`](../../REPRODUCE.md) Step 4b） |
+| **`URL-REWRITE`** | jsc 里的官方地址只能**等长**替换（`<host>:18080` 必须 19 字节 → host 必须 13 字符），而且换 IP 会静默跳过、整包作废。改成运行时改写 `cc.loader.getXMLHttpRequest()` 与 `window.WebSocket`（**默认**；老路子是 `-JscUrlPatch`），地址不再有长度约束 —— 配合 `adb reverse` 连局域网/root/hosts 都不需要（见 [`REPRODUCE.md`](../../REPRODUCE.md) Step 4b） |
 | 宿舍互动判定框放大 | ⚠️ **这条是私服体验改动，不是修 bug**（原版 100×100 且不可见） |
 
 ### `probe.js` —— 诊断（`--no-probe` 时不打包）
