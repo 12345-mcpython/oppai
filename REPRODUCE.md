@@ -311,7 +311,15 @@ adb -s 127.0.0.1:21503 logcat -d -v brief | Select-String "OPPAIPATCH|JS ERROR"
 
 ---
 
-### Step 4b · 真机（**不用 root**）：`adb reverse` + 运行时地址改写
+### Step 4b · **默认工作流**（模拟器 / 真机通用）：`adb reverse` + 运行时地址改写
+
+> **开发就用这条**（也是默认值）：地址固定 `127.0.0.1`，四个端口用 `adb reverse`
+> 转发到本机。好处是**和 PC 的 IP 无关** —— DHCP 换了地址也不会让包作废
+> （踩过：地址一变，包里烘死的 IP 失效，连调试台的下发通道都一起断），
+> 而且不需要局域网、防火墙、root、hosts。模拟器和 USB 真机走的是同一条路。
+>
+> 要**脱离 USB**（手机自己连 Wi-Fi 玩）就用本节末尾的局域网模式 —— 也能用，
+> 代价是 PC 的 IP 一变就要重打包。
 
 真机上有三条硬约束，按「装得上 → 跑得起来 → 连得上」确认：
 
@@ -363,6 +371,21 @@ adb -s <手机序列号> install -r --bypass-low-target-sdk-block out\zcsmw-mod-
 > **就地改写**的 —— 换地址时替换逻辑「找不到旧串」会**静默跳过**，整包作废
 > （实测踩过：DHCP 换了 IP）。默认路子不存在这个问题（jsc 永远保持原始地址，
 > 每次打包都先从 `game/original/zcsmw-original.apk` 恢复一遍）。
+
+#### 局域网模式（不用 USB / 不用 adb reverse）
+
+模拟器实测：**能直接连 PC 的局域网 IP**（MEmu 的 NAT 网关 `192.168.232.1` 反而不通），
+所以只要设备与 PC 在同一网络：
+
+```powershell
+$env:GS_PUBLIC_HOST = '10.210.22.230'   # 换成 PC 当前的局域网 IP（ipconfig 看 WLAN）
+python script\serve.py                   # 服务端和打包共用这一处配置
+.\build.ps1 -Install                     # 地址自动跟随；[4b] 不会执行
+```
+
+* 防火墙要放行入站 TCP `18080 / 8080 / 10001 / 10003`
+* ⚠️ **IP 一变就得重打包**（约 1 分钟）。想省事就给 PC 设 DHCP 保留/静态 IP
+* 手机不插 USB 就用这条；插着 USB 的话还是推荐上面默认那条（IP 无关，最省心）
 
 ---
 
