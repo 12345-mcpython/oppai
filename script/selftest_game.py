@@ -823,39 +823,87 @@ def exchange_check(ok: bool) -> bool:
 def module_open_check(ok: bool) -> bool:
     """「功能开启」弹窗的开关（服务端控制，不动客户端）。
 
-    客户端 `MainLayer._updateAnimation()` 里有 `moduleManager.popModuleOpen()`：
-    它把所有「已解锁但 `isOpened` 还是假」的模块挨个弹一遍动画（`table_function_open`
-    32 条）。而 `isOpened` 来自登录块的 `moduleOpenMark[mark_index]`
-    （`Player.initModuleState`），弹完客户端会回写 `player.setmoduleopenmark`。
-    私服默认把 32 个 mark 全标成已弹过 → 一进游戏不再连弹 32 个。
+    客户端（反汇编 `assets/src/data/player.jsc`）：
+
+        MainLayer._updateAnimation()  → moduleManager.popModuleOpen()
+        popModuleOpen():  list = dataManager.player.updateModuleState()
+                          for (m of list) if (m.unlockDesc) createModuleUnlockEffect(...)
+        updateModuleState():  把「!isOpened 且解锁条件满足」的模块 push 进列表
+        initModuleState():    module.isOpened = moduleOpenMark[module.markIndex] > 0
+        Player.ctor(data):    this._moduleOpenMark = data.moduleOpenMark   ← data 是 **player 块**
+
+    ⇒ 要关掉这些弹窗，就得让**玩家块里的** `moduleOpenMark` 覆盖 `table_function_open`
+    的全部 32 个 mark。私服默认（`store.MODULE_OPEN_POPUP_SKIP`）全标成已弹过。
+
+    ⚠️ 这条检查踩过两层错位（2026-09-20）：
+      ① 我原来把 `moduleOpenMark` 放在 `_module_stubs()` = `data` 顶层，
+         而客户端读 `data.player.moduleOpenMark`（`jsc_find moduleOpenMark` 只有
+         `Player.ctor` / `initModuleState` 两处，都在玩家块上）——顶层那份谁都看不到；
+      ② 这条检查当时断言的**也是顶层**那个键，所以一直"通过"。
+      实机后果：行为完全由存档里那份老 mark 决定 —— 存档只有 `{"1": 1}` 时
+      `_moduleOpenMark` 就只认 1 号，进游戏连弹 31 个（logcat 里紧接着
+      `player.setmoduleopenmark [2,3,…,32]` 回写）。
+      所以现在：断言**玩家块**里的那份，并且**故意把存档的 mark 掐成 `{"1": 1}`**
+      （复现那个坏状态）看服务端还会不会补齐，跑完还原。
     """
-    login = call("agent.getlogindata", {}, 147)
-    marks = (login.get("data") or {}).get("moduleOpenMark")
-    if not isinstance(marks, dict):
-        print(f"  BAD moduleOpenMark 不是 map：{type(marks)}（客户端是 [markIndex] 取值）")
-        return False
-    from gamesrv import items as items_mod
+    from gamesrv import config, items as items_mod, store
 
     table = items_mod.table("table_function_open") or {}
     want = sorted({str(int((row or {}).get("mi"))) for row in table.values()
                    if (row or {}).get("mi") is not None})
-    missing = [mi for mi in want if not marks.get(mi)]
-    if missing:
-        print(f"  BAD moduleOpenMark 缺 {len(missing)} 个 mark（{missing[:6]}…）"
-              f"→ 这些功能的开启弹窗还会弹")
+
+    def marks_of(resp):
+        data = resp.get("data") or {}
+        return (data.get("player") or {}).get("moduleOpenMark"), data
+
+    def check_cover(tag: str, marks) -> bool:
+        if not isinstance(marks, dict):
+            print(f"  BAD {tag}：data.player.moduleOpenMark 不是 map（{type(marks).__name__}）"
+                  f"→ 客户端 `_moduleOpenMark` 是空的，isOpened 全 false，一进游戏连弹")
+            return False
+        missing = [mi for mi in want if not marks.get(mi)]
+        if missing:
+            print(f"  BAD {tag}：缺 {len(missing)} 个 mark（{missing[:6]}…）→ 这些功能的开启弹窗还会弹")
+            return False
+        return True
+
+    player = store.get_or_create_player(config.DEFAULT_ACCOUNT)
+    saved = player.get("moduleOpenMark")
+    bad = False
+    try:
+        # ① 正常登录：玩家块里那份要覆盖全 32 个
+        marks, data = marks_of(call("agent.getlogindata", {}, 147))
+        bad = not check_cover("登录块", marks)
+        if data.get("moduleOpenMark") is not None:
+            print("  ..  注意：data 顶层还有一份 moduleOpenMark（客户端不读，只剩噪音）")
+
+        # ② 复现坏状态：存档里只有 1 号 mark（新号 / 老存档就是这个样子）
+        if store.MODULE_OPEN_POPUP_SKIP:
+            player["moduleOpenMark"] = {"1": 1}
+            store.save_player(player)
+            marks2, _ = marks_of(call("agent.getlogindata", {}, 147))
+            if not check_cover("存档只有 1 号 mark 时", marks2):
+                bad = True
+
+        # ③ 客户端回写（弹完会报一批 markIndex）之后仍然完整
+        r = call("player.setmoduleopenmark", [1, 2, 3], 148)
+        if r.get("code") != 200:
+            print(f"  BAD player.setmoduleopenmark code={r.get('code')} {r}")
+            bad = True
+        marks3, _ = marks_of(call("agent.getlogindata", {}, 149))
+        if not check_cover("回写后", marks3):
+            bad = True
+    finally:
+        if saved is None:
+            player.pop("moduleOpenMark", None)
+        else:
+            player["moduleOpenMark"] = saved
+        store.save_player(player)
+
+    if bad:
         return False
-    # 客户端弹完会回写；服务端要能收（并且别把数组当 map 回给它）
-    r = call("player.setmoduleopenmark", [1, 2, 3], 148)
-    if r.get("code") != 200:
-        print(f"  BAD player.setmoduleopenmark code={r.get('code')} {r}")
-        return False
-    marks2 = ((call("agent.getlogindata", {}, 149).get("data") or {})
-              .get("moduleOpenMark"))
-    if not isinstance(marks2, dict) or not marks2.get("1"):
-        print(f"  BAD 回写后 moduleOpenMark 形状不对：{type(marks2)} {str(marks2)[:80]}")
-        return False
-    print(f"  OK  功能开启弹窗：登录块 moduleOpenMark 覆盖 {len(want)} 个 mark"
-          f"（默认不弹）；player.setmoduleopenmark 可回写")
+    print(f"  OK  功能开启弹窗：**玩家块**里的 moduleOpenMark 覆盖 {len(want)} 个 mark"
+          f"（存档只标过 1 号时也会补齐 → 一进游戏不弹）；player.setmoduleopenmark 可回写")
     return ok
 
 

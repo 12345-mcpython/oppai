@@ -106,10 +106,8 @@ def _module_stubs(player: dict | None = None) -> dict:
         #   正好是这里建的那 19 条。见 favor.py「宿舍事件」段 + overview §6.8）
         "favorevent": favor.event_block(player),
         "friend": {"friendMapList": [], "recommendationList": [], "isNeedShowTip": 0},
-        # 功能开启标记。客户端 `Player.initModuleState()` 用它算 `isOpened`，
-        # 而 `moduleManager.popModuleOpen()` 会把 `!isOpened` 的模块挨个弹「功能开启」。
-        # 私服把 32 个 mark 全标成已弹过 → 一进游戏不再连弹 32 个（见 store.MODULE_OPEN_POPUP_SKIP）。
-        "moduleOpenMark": _module_open_mark(player),
+        # 功能开启标记**不在这里**：客户端读的是 `data.player.moduleOpenMark`
+        # （`Player.ctor`），放顶层等于没发 —— 见 `_player_block()`。
         # 黑市交易所 / 充值页。形状 `{<itemKey>: 行}` —— 客户端 `_exchangeData` 直接用它，
         # 行里的 `todayExchangeTimes` 决定下一次兑换用哪一档（见 gamesrv/exchange.py）。
         "exchange": exchange.block(player),
@@ -170,12 +168,36 @@ def _module_stubs(player: dict | None = None) -> dict:
     }
 
 
-def _module_open_mark(player: dict) -> dict:
-    """登录块 `moduleOpenMark` —— 客户端拿它决定「功能开启」弹窗要不要弹。
+def _player_block(player: dict) -> dict:
+    """`data.player` —— 顺手把「功能开启」标记灌进去。
 
-    `Player.initModuleState()`：`module.isOpened = moduleOpenMark[module.markIndex]`；
+    ⚠️⚠️ **`moduleOpenMark` 必须挂在玩家对象里，不能放 `data` 顶层。**
+    客户端 `assets/src/data/player.jsc`：
+
+        Player.ctor(data):         this._moduleOpenMark = data.moduleOpenMark
+        Player.initModuleState():  module.isOpened = moduleOpenMark[module.markIndex] > 0
+        moduleManager.popModuleOpen(): 把 !isOpened 的模块挨个弹「xxx开启」
+
+    `Player` 拿到的是 **`data.player` 那一块**，所以顶层那个键谁都读不到
+    （`jsc_find moduleOpenMark` 只有 `Player.ctor` / `initModuleState` 两处，
+     都在玩家块上）。
+
+    2026-09-20 踩的坑：原来 `moduleOpenMark` 是放在 `_module_stubs()`（= `data` 顶层），
+    而**存档里那份老的 mark 是随 `player` 原样下发的** —— 于是行为完全由存档决定：
+    存档里只有 `{"1": 1}` 时，`_moduleOpenMark` 就只认 1 号，`popModuleOpen()`
+    一口气弹了 31 个（logcat 里能看到紧接着的
+    `player.setmoduleopenmark [2,3,…,32]` 回写）。
+    """
+    player["moduleOpenMark"] = _module_open_mark(player)
+    return player
+
+
+def _module_open_mark(player: dict) -> dict:
+    """登录块 `data.player.moduleOpenMark` —— 客户端拿它决定「功能开启」弹窗要不要弹。
+
+    `Player.initModuleState()`：`module.isOpened = moduleOpenMark[module.markIndex] > 0`；
     `moduleManager.popModuleOpen()` 会把所有 `!isOpened` 且已解锁的模块挨个弹一遍
-    （`table_function_open` 32 条，我们建号就全解锁 + 30 级 → 一进游戏连弹 32 个）。
+    （`table_function_open` 32 条，我们建号就全解锁 + 30 级 → 一进游戏连弹）。
     弹完客户端会把这些 mark 写回 `player.setmoduleopenmark`，服务端存下来。
 
     私服默认（`store.MODULE_OPEN_POPUP_SKIP`）把 mark **全标成已弹过** → 不弹。
@@ -269,7 +291,7 @@ def get_login_data(session: dict, msg: dict, req_id):
         "agent": _agent_block(),
         "timeObj": t,
         "serverTime": store.now_ms(),
-        "player": player,
+        "player": _player_block(player),
         # 主线任务窗口（quests.py 里算，和 quest.getnewquest 同一个函数）
         "quest": quests.block(player),
         # 关卡进度（关卡表在客户端自己那儿，服务端只给"哪些关通了、几星、打了几次"）
@@ -309,7 +331,7 @@ def create_player(session: dict, msg: dict, req_id):
         "agent": _agent_block(),
         "timeObj": t,
         "serverTime": store.now_ms(),
-        "player": player,
+        "player": _player_block(player),
         "isNewPlayer": True,
         "newPlayerGuide": 0,   # 0 = 不是新号，跳过新手引导
         "quest": quests.block(player),
