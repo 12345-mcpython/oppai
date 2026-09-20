@@ -739,53 +739,90 @@ SignNormalLayer.receiveRewards(): if (!sign.canSignToday) return;   // 签过了
 {arenaInfo:  {points, change, wins, rating, refreshTime},   // 我的数据
  rivals:     [{index, name, lv, rating, points, headId, asstKey, state, soldier1..5}, …],
  resetTime:  秒级时间戳,       // 赛季重置（table_arena_constant：14 天一轮，起算 2016-01-01）
- refreshTime:秒级时间戳,       // 上一次刷对手的时刻
- mechaSuperSkillCorrectOwn: {…}}   // table_arena_mecha_super_skill_correct_own 原样
+ refreshTime:秒级时间戳}       // 上一次刷对手的时刻
 ```
 
-⚠️ **五个坑**：
+`arenaInfo` 客户端**只读这 5 个键**（没有刷新次数/重置次数之类的计数）：
+`points` 积分、**`change` = 今日剩余挑战次数**（不是积分变化！`<= 0` 时客户端
+「挑战」「刷新对手」两个按钮直接 `toast(table_dictionary[1602])`「木有挑战次数了！」退出，
+整个界面像哑掉）、`wins` 连胜、`rating` 段位 1..5、`refreshTime`。
+
+⚠️ **六个坑**：
 
 1. **`refreshTime` 要发两份**：`ctor` 读顶层 `data.refreshTime`，而
    `updateByServer` 读 **`data.arenaInfo.refreshTime`**
    （`_refreshTime = data.arenaInfo.refreshTime + table_arena_constant.update_interval_by_player`）。
    只发一处，另一条路径上就是 `undefined + 7200 = NaN`（刷新倒计时直接乱）。
+   两个时间字段都是**秒级 unix 时间戳**（客户端自己 `* 1000` 再进倒计时）。
 2. **每条回包都要带 `data.arena`**：`requestGetArenaInfo(cb)` 的 cb **不带参数**，
    数据是靠 `patch.js` 的 RESP-DISPATCH（`arena -> arenaCenter.updateByServer`）落回去的。
    回包里没有 `arena` 块 = 界面不刷新（和 §5.2 那类「服务端发了但客户端不动」同一个根因）。
-3. **`rival.soldier<i>` 是 `table_soldier` 的 key 字符串**，不是对象 ——
-   客户端 `ArenaCenter._init` 拿 `charManager.decodeSoldier(key)` 解出来挂到
-   `rival.soldiers[i]`（**1 基**：`soldier1` → `soldiers[1]`）；同一个角色重复会被丢掉。
-   服务端直接从 `table_friend_support_npc`(101 个 NPC) 抄名字 + 5 个军士 key：
-   NPC 行形如 `{general:"sasm010103#1#30#1", brave:…, armor:…, biological:…, agent:…,
-   player_name:"大阪小松子", player_lv:10}`，取 `#` 前那一段就是军士 key。
-4. **`state` 只当布尔用**：`ArenaRivalItemLayer._setDekaroned(state)` 是
-   `_dekaronButton.visible = !state` / `_successImage.visible = !!state`
-   → 0 = 还没打（显示「挑战」）、非 0 = 已打过（显示成功图）。
-5. **结算回包要平铺字段**：`ArenaLayer._fightResult(err, data)` 直接读
+3. **`rival.soldier<i>` 是「军士编码串」**：`"<table_soldier key>#<星级>#<等级>#<技能等级>[#daemonLv][#装备串]"`
+   —— 客户端 `ArenaCenter._init` 拿 `charManager.decodeSoldier(str)` 解出来挂到
+   `rival.soldiers[i]`（**1 基**：`soldier1` → `soldiers[1]`，wire 上**不要**发 `soldiers`）。
+   `decodeSoldier` 就是 `str.split("#")`，**少于 4 段直接 `cc.warn` + 返回 undefined**；
+   只发裸 key 的话 8 个对手的军士**一个都解不出来**（实机量过）。
+   服务端直接从 `table_friend_support_npc`(101 个 NPC) 抄：
+   行形如 `{general:"sasm010103#1#30#1", brave:…, armor:…, biological:…, agent:…,
+   player_name:"大阪小松子", player_lv:10}`，那 5 个字段的值正好是编码串。
+4. **`asstKey` 是军士卡 key**（`"sgnw010104"`），**不是角色 key**（`"sgnw"`）：
+   `headId` 为 0 时客户端走 `new ItemIcon(asstKey)` → `Shop.getTypeById(key)`，
+   而它只认 `table_item` / `table_soldier` / `table_mecha` / `table_hero` / `table_equipment`
+   的 key；给角色 key 会 `cc.log("key is error")`（实机 8 个对手各一次）且头像画不出来。
+5. **`state === 1` 表示「已经战胜过他」**（`_setDekaroned(rival.state === 1)`：
+   隐藏挑战按钮、显示成功图；`table_dictionary[1603]` =「已经战胜过他了呢~」）。
+   所以**输了不能置 1**，否则那个对手再也点不动。其它任何值都算"可挑战"。
+6. **结算回包要平铺字段**：`ArenaLayer._fightResult(err, data)` 直接读
    `data.success / rewards / winsRewards / scoreInfo / battleData / winPoints`
-   （`rewards` 是标准 `[{type,key,count}]`，客户端按 `REWARD_TYPE` 拆成 `cards`/`items`），
-   **同时**还要带 `data.arena` 给派发用。回非 200 时 `_fightResult` 直接 return ——
-   用户会卡在「战斗打完、什么都不弹」，所以别拿非 200 当「不能打」的挡箭牌。
+   （`rewards` 是标准 `[{type,key,count}]`，客户端按 `REWARD_TYPE` 拆成 `cards`/`items`；
+   `type 2 = ITEM` 和客户端的 `REWARD_TYPE.ITEM` 是同一个值），**同时**还要带 `data.arena`。
+   其中 `battleData` 必须是**结算面板的三行**（`arenawinlayer.csb` 里的标题）：
+
+   | 键 | 面板标题 | 值 |
+   |---|---|---|
+   | `combatTime` | 战斗用时 | **秒**（客户端会 `* 1000` 再喂 `op.getCountdownStr`） |
+   | `death` | 人员伤亡 | 我方阵亡数（请求体里的 `ownSoldierDiedCount`） |
+   | `rank` | **对手积分**（名字有误导性） | 该对手的 `points` |
+
+   少任何一个 → `numelabed.label.string = undefined` → `js_cocos2dx_ui_Text_setString :
+   Error processing arguments` 抛异常，**整个结算面板停在半路、玩家退不出战斗**
+   （2026-09-20 实机踩过，只发了 `combatTime`）。`scoreInfo` 是这三行各自的评价字母
+   （`a|b|c|d|s|ss|sss`，对应 `res/icon/arenascore/*.png`，客户端**赢了才画**）。
+   ⚠️ 回非 200 时 `_fightResult` 直接 return（同样什么都不弹）——所以别拿非 200
+   当「不能打」的挡箭牌，重复上报照发。
 
 **四条路由**：
 
 | route | 请求 | 回包 |
 |---|---|---|
 | `arena.getrivallist` | `{}` | `{code:200, data:{arena: 块}}` |
-| `arena.resetrivals` | `{useGold}` | `{code:200, data:{arena: 块}}`；失败 `{code≠200, msg}`（客户端弹 msg） |
+| `arena.resetrivals` | `{useGold}` | `{code:200, data:{arena: 块}}`；失败 `{code≠200}`（客户端弹的是 `table_dictionary[1609]`「冷却未结束」，**不看回包 `msg`**） |
 | `arena.enterfight` | `{index}` | `{code:200, data:{arena: 块}}` |
 | `arena.exitfight` | `{index, success, battleInfo:{combatTime, ownSoldierDiedCount}}` | `{code:200, data:{arena, success, rewards, winsRewards, scoreInfo, battleData, winPoints}}` |
+
+`arena.enterfight` / `exitfight` 的 `checkEnterFight` / `checkExitFight` 在客户端里都是
+`return true` 的**空钩子**，不是门禁 —— 门槛全在按钮上（`arenaInfo.change > 0`）。
 
 **战斗在客户端算**（`BattleScene.combat({id, team, enemyTeams, …})`，`id` 是
 `table_arena_constant.level_rating_<rating>` 里随机取的关卡 key，如 `800001`），
 打完把 `success` + `battleInfo` 报给服务端 —— 和关卡结算 `instance.finishlevel` 一个套路。
+敌方队伍由 `Team.getArenaEnemyBattleTeam(rival)` 用 `rival.soldiers[1..5]` 现组
+（不吃本机装备，属性修正走 `table_arena_attr_correct_enemy`），**不读 rival 的其它字段**。
 
 **数值**（`table_arena_constant`，44 项，抽在 `data/table_arena_constant.json`）：
 `rival_count`=8 个对手、`update_interval_by_player`=7200 秒自动换一批、
-`refresh_cost`="5" 金条 / `refresh_cooldown`=120 秒（冷却内手刷要花钱）、
-`rating_1..5`=100/1000/2000/3000/4000（积分段位）、`default/min/max_arena_points`、
-`pvp_rewards`="100019#14"（赢了给 14 演习萌币，客户端自己解析这个串显示奖励）、
-`fail_coins`=14（输了也给，**推断**）。积分增减公式原版无从考证，见 differences.md §D。
+`refresh_cost`="5" + `refresh_cooldown`=120 秒（冷却内弹 `table_dictionary[1611]`
+问「是否消耗 N 金条立刻刷新」；客户端查的其实是 **萌钞** `ITEM_KEY.MONEY`，
+文案和判定不一致是原版客户端自己的小矛盾，服务端跟着判定扣萌钞）、
+`rating_1..5`=100/1000/2000/3000/4000（积分段位）、`default_change`=8（每日挑战次数）、
+`default/min/max_arena_points`、`pvp_rewards`="100019#14"（赢了给 14 演习萌币，
+客户端自己解析这个串显示奖励）、`fail_coins`=14（输了也给，**推断**）。
+积分增减公式原版无从考证，见 differences.md §D。
+
+`mechaSuperSkillCorrectOwn`（旧登录块里的那个键）**客户端压根不读**：全库 797 个 `.jsc`
+搜不到这个 atom。演习场机甲超必杀走的是客户端**本地静态表**
+`table_arena_mecha_super_skill_correct_own`（唯一消费者 `Mecha.loadArenaSuperSkill`，
+键 `"<mechaKey>#<superSkillLv>"`），所以服务端不用发。
 
 ---
 

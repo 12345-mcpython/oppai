@@ -1214,16 +1214,21 @@ def arena_check(ok: bool) -> bool:
 
     客户端这条链的要点（`src/data/arenacenter.jsc` + `src/ui/arena/*`）：
 
-    * 登录块 `data.arena` = `{arenaInfo, rivals, resetTime, refreshTime, mechaSuperSkillCorrectOwn}`；
-      `ArenaCenter.ctor` 读顶层 `refreshTime`，而 `updateByServer` 读 **`arenaInfo.refreshTime`**
-      —— 两份都得有，少一份 `_refreshTime` 会变成 `undefined + 7200 = NaN`（倒计时乱）。
-    * 每项对手的 `soldier<i>` 是 **`table_soldier` 的 key 字符串**（客户端自己
-      `charManager.decodeSoldier()` 解出来挂到 `rival.soldiers[i]`，1 基）；
-      key 无效的话那个位置就是空的，详情页少一个头像。
+    * 登录块 `data.arena` = `{arenaInfo, rivals, resetTime, refreshTime}`（`mechaSuperSkillCorrectOwn`
+      客户端压根不读，已不发）；`ArenaCenter.ctor` 读顶层 `refreshTime`，而 `updateByServer`
+      读 **`arenaInfo.refreshTime`** —— 两份都得有，少一份 `_refreshTime` 会变成
+      `undefined + 7200 = NaN`（倒计时乱）。
+    * `arenaInfo.change` 是**今日剩余挑战次数**（不是积分变化）：`<= 0` 时客户端
+      「挑战」「刷新对手」两个按钮直接 `toast(1602)` 返回，界面像哑掉。
+    * 每项对手的 `soldier<i>` 是**编码串** `"key#星级#等级#技能等级"`（客户端
+      `charManager.decodeSoldier()` 解，少于 4 段直接 warn + undefined），
+      `asstKey` 必须是**军士卡 key**（客户端拿它走 `new ItemIcon` → `Shop.getTypeById`）。
     * **每条回包都要带 `data.arena`**：客户端这条路线的 cb 不带参数，
       数据全靠 `patch.js` 的 RESP-DISPATCH（`arena -> arenaCenter.updateByServer`）。
+      结算还要平铺 `battleData.combatTime/death/rank`（缺一个结算面板就抛
+      `Text_setString` 异常，玩家退不出战斗）。
 
-    ⚠️ 会真改积分 / 对手状态 / 道具，跑完还原（所以可以反复跑）。
+    ⚠️ 会真改积分 / 挑战次数 / 对手状态 / 道具，跑完还原（所以可以反复跑）。
     """
     from gamesrv import arena, config, items, store
 
@@ -1242,6 +1247,11 @@ def arena_check(ok: bool) -> bool:
             if field not in info:
                 bad.append(f"arenaInfo 缺 {field}（客户端 _update/_updateWinsImage 要读；"
                            f"updateByServer 只认 arenaInfo.refreshTime）")
+        # `change` 是「今日剩余挑战次数」：`<= 0` 时客户端两个按钮直接 toast 退出
+        if int(info.get("change") or 0) <= 0:
+            bad.append(f"arenaInfo.change={info.get('change')!r} 必须 > 0 —— "
+                       f"客户端 _onClickFightButton/_onClickRefreshButton 在 change<=0 时"
+                       f"直接 toast(1602) 返回，界面会像哑掉一样")
         rivals = block.get("rivals") or []
         if len(rivals) != arena.rival_count():
             bad.append(f"对手数 {len(rivals)} != table_arena_constant.rival_count "
@@ -1251,6 +1261,10 @@ def arena_check(ok: bool) -> bool:
             for field in ("index", "name", "lv", "rating", "points", "state"):
                 if field not in r:
                     bad.append(f"对手 {r.get('index')} 缺字段 {field}")
+            # asstKey 走 `new ItemIcon(asstKey)` → Shop.getTypeById，只认军士/道具/…的 key
+            if r.get("asstKey") and r["asstKey"] not in cards:
+                bad.append(f"对手 {r.get('index')} 的 asstKey={r['asstKey']!r} 不是军士卡 key"
+                           f"（客户端 getTypeById 会报 key is error、头像画不出来）")
             texts = [r.get("soldier%d" % i) for i in range(1, 6) if r.get("soldier%d" % i)]
             if not texts:
                 bad.append(f"对手 {r.get('index')} 一个军士都没有（详情页会空）")
@@ -1275,7 +1289,7 @@ def arena_check(ok: bool) -> bool:
         if en.get("code") != 200:
             bad.append(f"arena.enterfight index={idx} code={en.get('code')} {str(en)[:80]}")
         ex = call("arena.exitfight", {"index": idx, "success": True,
-                                      "battleInfo": {"combatTime": 61000,
+                                      "battleInfo": {"combatTime": 23,
                                                      "ownSoldierDiedCount": 1}}, 183)
         data = ex.get("data") or {}
         if ex.get("code") != 200:
@@ -1284,16 +1298,47 @@ def arena_check(ok: bool) -> bool:
                       "winPoints", "arena"):
             if field not in data:
                 bad.append(f"arena.exitfight 的 data 缺 {field}（ArenaLayer._fightResult 直接读）")
+        # 结算面板三行：缺一个就是 setString(undefined) → 面板崩、退不出战斗
+        for field in ("combatTime", "death", "rank"):
+            if field not in (data.get("battleData") or {}):
+                bad.append(f"battleData 缺 {field}（ArenaWinLayer 会 numelabed.label.string = "
+                           f"undefined → Text_setString 抛异常，玩家退不出战斗）")
+        letters = {"a", "b", "c", "d", "s", "ss", "sss"}
+        for field in ("combatTime", "death", "rank"):
+            if (data.get("scoreInfo") or {}).get(field) not in letters:
+                bad.append(f"scoreInfo.{field}={(data.get('scoreInfo') or {}).get(field)!r} "
+                           f"不是 a|b|c|d|s|ss|sss（客户端 ARENA_SCORE_RES 只有这 7 个）")
+        if not isinstance(data.get("winsRewards"), (list, dict)):
+            bad.append("winsRewards 要能 for-in（客户端走 util.objectToArray + popupReward）")
         after_rivals = (data.get("arena") or {}).get("rivals") or []
         if not after_rivals:
             bad.append("arena.exitfight 没带 data.arena.rivals（RESP-DISPATCH 刷不动界面）")
-        npoints = ((data.get("arena") or {}).get("arenaInfo") or {}).get("points")
+        after_info = (data.get("arena") or {}).get("arenaInfo") or {}
+        npoints = after_info.get("points")
         if isinstance(npoints, int) and isinstance(info.get("points"), int):
             if npoints != info["points"] + int(data.get("winPoints") or 0):
                 bad.append(f"积分对不上：{info['points']} + {data.get('winPoints')} != {npoints}")
+        if int(after_info.get("change", -1)) != int(info["change"]) - 1:
+            bad.append(f"挑战次数没扣 1：{info['change']} -> {after_info.get('change')}")
         mine = [r for r in after_rivals if r.get("index") == idx]
-        if mine and not mine[0].get("state"):
-            bad.append(f"打完 index={idx} 后 state 还是 0（客户端不会显示「已挑战」）")
+        if mine and mine[0].get("state") != 1:
+            bad.append(f"赢了 index={idx} 之后 state={mine[0].get('state')!r}，应该变 1"
+                       f"（客户端 1603「已经战胜过他了呢~」）")
+
+        # 再打一场**输了**的：state 不能变成 1（输了可以再挑战），积分要往下走
+        idx2 = block["rivals"][1].get("index")
+        lose = call("arena.exitfight", {"index": idx2, "success": False,
+                                       "battleInfo": {"combatTime": 61,
+                                                      "ownSoldierDiedCount": 6}}, 184)
+        ldata = lose.get("data") or {}
+        if lose.get("code") != 200:
+            bad.append(f"输了那场 exitfight code={lose.get('code')} {str(lose)[:80]}")
+        if int(ldata.get("winPoints") or 0) > 0:
+            bad.append(f"输了还给正分：winPoints={ldata.get('winPoints')!r}")
+        lrivals = [r for r in ((ldata.get("arena") or {}).get("rivals") or [])
+                   if r.get("index") == idx2]
+        if lrivals and lrivals[0].get("state") == 1:
+            bad.append(f"输了 index={idx2} 却标成 state=1（客户端会显示「已经战胜过他了呢」）")
     finally:
         player = store.get_or_create_player(config.DEFAULT_ACCOUNT)
         if before is None:
@@ -1312,9 +1357,9 @@ def arena_check(ok: bool) -> bool:
             print(f"  BAD {one}")
         return False
     print(f"  OK  演习场：登录块 {len(rivals)} 个对手（`soldier<i>` 都是 "
-          f"\"key#星级#等级#技能等级\" 编码串、arenaInfo 带 refreshTime）、"
-          f"resetrivals/enterfight/exitfight 都通，赢一场 {data.get('winPoints')} 分并落盘"
-          f"（收尾已还原）")
+          f"\"key#星级#等级#技能等级\" 编码串、asstKey 是军士卡 key、change>0）、"
+          f"resetrivals/enterfight/exitfight 都通：赢一场 {data.get('winPoints')} 分→state=1、"
+          f"输一场 {ldata.get('winPoints')} 分→state 不变，挑战次数每场扣 1（收尾已还原）")
     return ok
 
 

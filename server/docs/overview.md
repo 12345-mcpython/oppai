@@ -252,6 +252,9 @@ vanilla 不传参 → 游戏代码 `function (eventName) { if (/began\d/.test(ev
 
 | 点**演习场**没用（进去一个对手都没有、面板空的） | 登录块 `arena` 原来是桩 `{arenaInfo:{}, mechaSuperSkillCorrectOwn:{}}`，而 `ArenaCenter.ctor` 要 `{arenaInfo, rivals, resetTime, refreshTime}`——`rivals` 空就没有对手；另外 `arena.*` 那 4 条路由也没实现，点「挑战」连请求都发不出去 | `gamesrv/arena.py` + [protocol.md §6.9](protocol.md)（对手从 `table_friend_support_npc` 生成） |
 | 演习场打了**不弹结算面板** / 积分不动 | 结算回包的字段是 `ArenaLayer._fightResult(err, data)` **平铺**读的（`success`/`rewards`/`winsRewards`/`scoreInfo`/`battleData`/`winPoints`），回非 200 它直接 `return`（用户就卡在战斗结束、什么都不弹）；另外每条 `arena.*` 回包都要带 `data.arena`，否则 RESP-DISPATCH 没法把对手列表/积分刷回界面 | 同上 |
+| 演习场**失败后无法退出战斗**（`JS ERROR: js_cocos2dx_ui_Text_setString : Error processing arguments @ arenawinlayer.js:54`） | 结算面板三行是 `battleData.combatTime`（战斗用时，**秒**）/ `battleData.death`（人员伤亡）/ `battleData.rank`（**对手积分**，字段名有误导性）—— 我当时只发了 `combatTime`，另外两个是 `undefined` → `numelabed.label.string = undefined` 直接抛异常，面板构建中断、退不出去。三行的标题是从 `arenawinlayer.csb` 里读出来的（`战斗用时`/`人员伤亡`/`对手积分`） | `arena.exit_fight()` + [protocol.md §6.9](protocol.md) 第 6 条 |
+| 演习场**「挑战」「刷新对手」按钮点不动**（toast「木有挑战次数了！」） | `arenaInfo.change` 被理解成"上一次积分变化"，输一场发成 `-10` → 客户端 `_onClickFightButton`/`_onClickRefreshButton` 开头都是 `if (_arenaInfo.change <= 0) toast(1602); return`。它其实是**今日剩余挑战次数**（`default_change` = 8，跨 05:00 重置，每场扣 1） | `arena.state()`/`info_view()`；`change` 必须是正数 |
+| 演习场对手**头像画不出来**、日志刷 `JS: key is error`（8 次＝8 个对手） | `asstKey` 发成了**角色** key（`sgnw`），而客户端是 `new ItemIcon(asstKey)` → `Shop.getTypeById(key)`，它只认 `table_item`/`table_soldier`/`table_mecha`/`table_hero`/`table_equipment` 的 key —— 要发**军士卡** key（`sgnw010104`） | `arena.make_rivals()`；`arena_check` 会断言 |
 
 ### 6.1 SDK 桩里的「死键」——一类很容易误判成 JS 层 bug 的问题
 
