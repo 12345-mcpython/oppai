@@ -519,15 +519,27 @@ def draw(player: dict, pool_key, times) -> dict:
 def library_show(player: dict, pool_key) -> dict:
     """`gacha.getlibraryshow {key}` → `{cards, upRate}`。
 
-    `cards` 是**角色 key 数组**（客户端 `updateLibCards` 会拿 key 查
-    `charManager.getCharType/getSoldierQuality` 排序，再 `createCharCardNode(key)` 画）。
+    ⚠️ `cards` 必须是 **map**（`{角色key: 1, …}`），不要发数组：
+    客户端 `updateLibCards(key, data)` 是
+
+        var cards = data.cards;
+        for (var k in cards) list.push(k);      // ← 数组的话 k 是下标！！
+
+    发数组时 `k` 是 "0"/"1"/…（上到 160），接着 `charManager.getCharType(k)` /
+    `getSoldierQuality(k)` / `createCharCardNodeByKey(k)` 全用下标去查表 →
+    日志刷 `charManager.getCharType() error, key is 96` +
+    `CharManager.createCharCardNodeByKey() error, key is not found`，
+    最后 `charcardnode.js:53 TypeError: ui is undefined`，**图鉴层直接崩**（实机踩过）。
+    值随便（客户端只读键），这里给 1。
+
     ⚠️ `upRate` **必须是字符串**（客户端 `upRate.split("#")`）—— 没有 UP 就发 `""`，
-    发 `{}` 会 TypeError，整个图鉴层起不来。格式（若以后要显示概率）是
-    `"1@30#2@25#3@25#4@20"`（1..4 = 白/绿/紫/金）。
+    发 `{}` 会 TypeError。要显示概率的话格式是 `"1@30#2@25#3@25#4@20"`
+    （1..4 = 白/绿/紫/金，对应 `UP_RATE_NAME` 里那四个面板）。
     """
-    cards = []
+    cards = {}
     for _rarity, pool in card_pool().items():
-        cards.extend(pool)
+        for key in pool:
+            cards[key] = 1
     for (_typ, key) in prize_pool():
-        cards.append(key)
+        cards[key] = 1
     return {"cards": cards, "upRate": ""}

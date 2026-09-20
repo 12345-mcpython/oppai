@@ -1450,13 +1450,15 @@ def gacha_check(ok: bool) -> bool:
             bad.append("gacha.getgacha 的 data.gacha.freeGachaTip 要是布尔"
                        "（黑市按钮红点靠 RESP-DISPATCH 写 _freeGachaTip）")
 
-        # 图鉴：cards 是角色 key 数组、upRate 必须是**字符串**
+        # 图鉴：cards 必须是 **map**（键=角色 key）、upRate 必须是**字符串**
         lib = call("gacha.getlibraryshow", {"key": "1002"}, 192)
         ld = lib.get("data") or {}
-        if not isinstance(ld.get("cards"), list) or not ld["cards"]:
-            bad.append(f"gacha.getlibraryshow 没给 cards：{str(lib)[:90]}")
-        elif not all(isinstance(c, str) for c in ld["cards"]):
-            bad.append(f"图鉴 cards 元素要是**角色 key 字符串**：{ld['cards'][:3]!r}")
+        if not isinstance(ld.get("cards"), dict) or not ld["cards"]:
+            bad.append(f"图鉴 cards 必须是 map（键=角色 key）：客户端是 `for (var k in cards)`，"
+                       f"发数组会拿到下标 → getCharType(96) 报错、图鉴层崩。实得："
+                       f"{type(ld.get('cards')).__name__} {str(ld.get('cards'))[:60]}")
+        elif not all(isinstance(k, str) for k in ld["cards"]):
+            bad.append(f"图鉴 cards 的键要是角色 key 字符串：{list(ld['cards'])[:3]!r}")
         if not isinstance(ld.get("upRate"), str):
             bad.append(f"upRate={ld.get('upRate')!r} 必须是字符串"
                        f"（客户端 upRate.split('#')，发 {{}} 会 TypeError 让图鉴层起不来）")
@@ -1490,6 +1492,10 @@ def gacha_check(ok: bool) -> bool:
                        f"—— 多半是 items._add_soldier 查错表（应是 table_soldier.card）")
 
         # 免费池每天 1 次：第一次 200、第二次 204
+        # （用例前先把今天的免费次数清掉 —— 玩家自己可能已经抽过了，收尾会整体还原）
+        player0 = store.get_or_create_player(config.DEFAULT_ACCOUNT)
+        gacha.reset_daily(player0, "1001", "1")["todayTimes"] = 0
+        store.save_player(player0)
         free1 = call("gacha.gacha", {"key": "1001", "times": "1"}, 194)
         free2 = call("gacha.gacha", {"key": "1001", "times": "1"}, 195)
         if free1.get("code") != 200:

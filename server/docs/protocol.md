@@ -903,7 +903,7 @@ config/gachaconfig.jsc:
 | route | 请求 | 回包 |
 |---|---|---|
 | `gacha.getgacha` | `{}` | **扁平**三件套 `gachaData/gachaInfoList/gachaMasterList`（⚠️ 不是 `{"gacha":…}`，它不走响应派发）；可另带一个顶层 `gacha: {freeGachaTip: bool}` 用 RESP-DISPATCH 点亮「黑市」红点 |
-| `gacha.getlibraryshow` | `{key, isShowAll?}` | `{cards: ["<角色key>", …], upRate: "<字符串>"}` |
+| `gacha.getlibraryshow` | `{key, isShowAll?}` | `{cards: {"<角色key>": 1, …}, upRate: "<字符串>"}` |
 | `gacha.gacha` | `{key, times}`（`times` 是 `"1"`/`"10"`，可能是字符串） | `{gachaData: <那一行>, cards: ["<角色key>", …], extraReward: {}, gemGachaTimes}`；失败用 `GACHA_ERROR_DICT` 的码 |
 
 ⚠️ 三个字段级细节（反汇编 + 活客户端实测）：
@@ -915,6 +915,12 @@ config/gachaconfig.jsc:
   客户端 `new NewCardEffect(cards[0])` / `GachaBeganEffect.getEffectFile(cards)` /
   `TenGachaShow._updateCardHeadList` 都拿 key 去 `charManager.getCharType(key)` /
   `getImageFullPath(key)` / `createCharCardNode(key)` 现查表。发对象会直接崩。
+* **`getlibraryshow` 的 `cards` 必须是 map**（`{角色key: 1}`）：客户端
+  `updateLibCards` 是 `for (var k in cards) list.push(k)` —— 发**数组**时 `k` 是**下标**
+  （"0".."160"），随后 `getCharType(k)` / `getSoldierQuality(k)` /
+  `createCharCardNodeByKey(k)` 全拿下标查表 → 日志刷
+  `charManager.getCharType() error, key is 96`，最后 `charcardnode.js:53
+  TypeError: ui is undefined`，**图鉴层直接崩**（实机踩过）。
 * **`getlibraryshow` 的 `upRate` 必须是字符串**：`GachaLibraryShowLayer._initUpRate` 是
   `if (!upRate) { 隐藏概率面板; return; }` 然后 `upRate.split("#")` —— 发 `{}` 会
   **TypeError 让整个图鉴层起不来**。没有 UP 就发 `""`；要显示概率的话格式是
