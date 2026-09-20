@@ -350,27 +350,65 @@ adb -s <设备> shell "dumpsys package com.cm.zcsmw.baidu | grep -iE 'primaryCpu
   logcat 无 `UnsatisfiedLinkError` / `dlopen failed`。
 * MEmu（Android 9，x86）→ `primaryCpuAbi=x86`。
 
-### 能编哪些 ABI（能不能出 arm64？）
+### 能编哪些 ABI
 
 编 `libcocos2djs.so` 要用 NDK r10e 把 cocos2d-x 3.6 + SpiderMonkey 33.1.1 一起编，
-依赖两类**预编译库**，而它们只有三套：
+依赖一堆**预编译库**。cocos 官方依赖包在 3.6 那个年代**只有三套 ABI**
+（`armeabi` / `armeabi-v7a` / `x86`），**arm64 是我们自己凑出来的**：
 
+| ABI | 怎么来的 |
+|---|---|
+| `armeabi` | 原版包自带（引擎 `.so` 是自己重编的，依赖用官方 3.6 时代那套） |
+| `armeabi-v7a` | 官方依赖包里有，`.\build.ps1 -Engine -Abi armeabi-v7a` 直接编 · NEON + 硬浮点 |
+| `x86` | 同上（MEmu 跑原生 x86，不走 houdini） |
+| **`arm64-v8a`** | **2026-09-20 自建**，见下 |
+
+#### arm64-v8a 是怎么编出来的
+
+```powershell
+python script\build_arm64_deps.py          # ① 备依赖（幂等，一条命令）
+.\build.ps1 -Engine -Abi arm64-v8a         # ② 编 .so（会自动先跑 ①）
+.\build.ps1 -PackAbis arm64-v8a -Install -Serial <手机>   # ③ 只带 arm64 打包并安装
 ```
-engine\src\...\cocos2d-x\external\{chipmunk,curl,freetype2,jpeg,lua,png,tiff,webp,websockets,zlib}
-        → armeabi / armeabi-v7a / x86
-engine\src\...\js-bindings\external\spidermonkey\prebuilt\android\
-        → armeabi / armeabi-v7a / x86 的 libjs_static.a
-```
 
-所以：
+`build_arm64_deps.py` 干五件事，**其中 2、3 两个坑是踩出来的**：
 
-* **`armeabi-v7a`：能编**（上面三套都有），命令 `.\build.ps1 -Engine -Abi armeabi-v7a`，
-  产物会自动拷进 `game\lib\armeabi-v7a\`。v7a 有 NEON + 硬浮点，比 `armeabi`（ARMv5 软浮点）快。
-  > `build.ps1` 里 `-latomic` 只给 `armeabi` 加（`APP_LDFLAGS`），v7a 用空值链接通过 —— 实测如此。
-* **`arm64-v8a`：现在编不了**。缺的不是命令而是依赖：上面那 10 个第三方库 + SpiderMonkey
-  都**没有 arm64 版本**，得先把它们逐个交叉编译出来（SM 33 是 2014 年的代码，用现在的
-  NDK 编大概率还要改构建脚本），再让 `Application.mk` 走 `APP_PLATFORM=android-21`
-  （arm64 最低 API 21）。真机本来就能靠厂商 32 位兼容层跑 v7a，所以这件事优先级不高。
+1. **大部分库**：从官方依赖仓库的较新 tag（`v3-deps-140`）里取 arm64 版本
+   （那里面 10 个库 + openssl 都有 arm64）+ SpiderMonkey 的 arm64 `libjs_static.a`。
+   > 版本和 3.6 时代略有出入（png 1.6.16 vs 1.6.2、curl 7.52 vs 7.26、freetype 2.5.5 vs 2.5.0、
+   > openssl 1.1 vs 1.0；jpeg/tiff/webp/zlib 一致）。实测编出来能跑（登录 + 主界面轮询都正常），
+   > 但**这是唯一一处"版本没严格对齐"**的地方，要完全干净得把这几套也从源码编出来。
+2. **chipmunk 必须自己编**：依赖包里是 **7.0**（`cpSpaceAddStaticShape` 等 6.x API 被删了），
+   而 cocos2d-x 3.6 要 **6.2.1** → 从上游 `slembcke/Chipmunk2D` tag `Chipmunk-6.2.1` 编。
+   ⚠️ 约束实现在 `src/constraints/*.c` **子目录**里，只编 `src/*.c` 会缺 26 个
+   `cp*JointNew` / `cp*GetClass` 符号（链接期才炸，日志一大片 `undefined reference`）。
+3. **libwebsockets 必须自己编 + 补一个结构体字段**：依赖包里是 **2.1.0**（API 改名成 `lws_*`），
+   3.6 要 `v1.23-chrome32-firefox24` → 从上游拿那个 tag 编。三个坑：
+   * 它要一个 CMake 生成的 `config.h`（仓库里没有）→ 按官方 `config.h.cmake` 写一份 Android 版
+     （无 SSL + 带扩展，和 cocos 那份预编译 `.a` 的符号对得上）；
+   * bionic 没有 BSD 的 `getdtablesize()`（libwebsockets 直接调）→ 补一个小 shim；
+   * **`struct lws_context_creation_info` 里 cocos 比上游多 3 个字段**
+     （`token_limits` / `http_proxy_address` / `http_proxy_port`）。引擎（`WebSocket.cpp`）
+     是按 cocos 的头文件编译的，库里若按上游布局读 `info->gid` 就会读到 0 →
+     去调 `setgid(0)` → **Android seccomp 直接 `SIGSYS` 打死进程**
+     （真机 tombstone：`Cause: seccomp prevented call to disallowed arm64 system call 144`，
+     帧在 `libwebsocket_create_context+564` → `setgid+12`）。所以编库前要把那 3 个字段补回
+     **同一个位置**，让两边布局一致。
+4. **头文件按 ABI 分**：SpiderMonkey 的 `js-config`（32 位 `JS_NUNBOX32` / 64 位 `JS_PUNBOX64`）
+   和 curl 的 `curlbuild` 都得和链接的那份 `.a` 对得上 —— 脚本会挂出
+   `spidermonkey/include/android64/js-config.h` 和 `curl/include/android64/`，
+   并给两个 `Android.mk` 加上「arm64 用 64 位那套」的 `ifeq`。
+   > 对不上会怎样：`js-config` 错 = jsval 表示错（ABI 直接崩）；curl 那个错 =
+   > `curlrules.h` 的编译期自检当场报 `size of array '__curl_rule_01__' is negative`。
+5. 把上面这些落到 `engine\src\...\external\**` 和那两个 `Android.mk` 里
+   （`engine\src` 被 .gitignore 挡着不进仓库，所以**规则必须留在这个脚本里**）。
+
+`build.ps1` 侧只要两处适配（已内置）：arm64 用 **toolchain 4.9**（r10e 的 arm64 没有 GCC 4.8）
+和 `APP_PLATFORM=android-21`（`Application.mk` 里写的是 android-9，arm64 最低 21）。
+
+实测（一加 PLZ110 / Android 16）：`primaryCpuAbi=arm64-v8a`、冷启动正常、能登录、
+主界面轮询（`boss.getbosslist` / `sync.syncupclient`）正常、无 JS 报错 ——
+**原生 64 位跑，不再走厂商的 32 位兼容层**。产物 `libcocos2djs.so` 21.6 MB。
 
 ---
 

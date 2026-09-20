@@ -19,10 +19,18 @@ houdini 自己 trap 掉（tombstone 里唯一一帧永远是 /system/lib/libhoud
 自动优先选 x86，原生跑就不会再走 houdini。
 
 现成可用的 ABI（`game\lib\` 下）：armeabi（原版）、x86（自己编）、
-**armeabi-v7a（2026-09-20 自己编，NEON + 硬浮点，比 armeabi 快一截）**。
-arm64-v8a 编不了 —— 第三方预编译库（chipmunk/curl/freetype2/jpeg/lua/png/tiff/webp/
-websockets/zlib）和 SpiderMonkey 的 libjs_static.a 都**只有 armeabi / armeabi-v7a /
-x86** 三套，见 server\docs\build.md 的「ABI」那节。
+armeabi-v7a（2026-09-20 自己编，NEON + 硬浮点，比 armeabi 快一截）、
+**arm64-v8a（2026-09-20 自己编，真机就是一加 PLZ110 实测：primaryCpuAbi=arm64-v8a，
+原生 64 位跑，不走厂商的 32 位兼容层）**。
+
+arm64 的依赖 cocos 官方包里没有（只有三套 ABI），得先备齐：
+
+    python script\build_arm64_deps.py         # 幂等；这一步也可以省，
+                                              # 下面 -Abi arm64-v8a 会自动帮你跑
+    .\build.ps1 -Engine -Abi arm64-v8a -PackAbis arm64-v8a -Install -Serial <手机>
+
+坑（chipmunk 要 6.2.1 不是 7.0、libwebsockets 要 1.23 且要补 3 个结构体字段，
+否则真机 `setgid(0)` 被 seccomp 打死）都写在 server\docs\build.md 的「ABI」那节。
 
 产物统一落在 out\ 下：
 
@@ -154,10 +162,26 @@ if ($Engine) {
     }
 
     $env:NDK_MODULE_PATH = "$jsb;$cocos;$cocos\external;$cocos\cocos"
+    # arm64 的依赖（预编译库 + 自建的 chipmunk 6.2.1 / libwebsockets 1.23）先备齐；
+    # 脚本幂等，已经有的会跳过（只是重拷/重编那两个自建库，1 分钟以内）。
+    if ($Abi -contains "arm64-v8a") {
+        Ok "准备 arm64 依赖：python script\build_arm64_deps.py"
+        & python (Join-Path $Script "build_arm64_deps.py")
+        if ($LASTEXITCODE -ne 0) { throw "build_arm64_deps.py 退出码 $LASTEXITCODE" }
+    }
     foreach ($a in $Abi) {
         # x86 有原生 64 位原子指令，不需要 libatomic（NDK r10e 也没给 x86 编）。
         # 命令行上传的 APP_* 会覆盖 Application.mk 里的同名设置。
         $ld  = if ($a -eq "armeabi") { "-latomic" } else { "" }
+        # arm64 和 32 位不一样，三处都得换：
+        #   * toolchain：NDK r10e 的 arm64 只有 GCC **4.9**（4.8 没有 arm64）
+        #   * APP_PLATFORM：Application.mk 写的是 android-9，而 arm64 最低 **android-21**
+        #   * libatomic：arm64 有原生 64 位原子指令，不需要（r10e 也没编）
+        $tc   = if ($a -eq "arm64-v8a") { "4.9" } else { "4.8" }
+        $extra = @()
+        if ($a -eq "arm64-v8a") { $extra += "APP_PLATFORM=android-21" }
+        # arm64 的依赖（预编译库 + 自己编的 chipmunk/libwebsockets）用
+        # `python script\build_arm64_deps.py` 准备，脚本幂等。
         $log = Join-Path $Out "engine-build-$a.log"
         # ⚠️⚠️ **必须临时把 $ErrorActionPreference 降回 Continue**。
         # ndk-build 把**编译警告**写 stderr，而本脚本开头设了
@@ -170,7 +194,7 @@ if ($Engine) {
         $eap = $ErrorActionPreference
         $ErrorActionPreference = "Continue"
         try {
-            & "$ndk\ndk-build.cmd" -j24 -C $app NDK_TOOLCHAIN_VERSION=4.8 NDK_DEBUG=0 APP_ABI=$a "APP_LDFLAGS=$ld" *> $log
+            & "$ndk\ndk-build.cmd" -j24 -C $app "NDK_TOOLCHAIN_VERSION=$tc" NDK_DEBUG=0 APP_ABI=$a "APP_LDFLAGS=$ld" @extra *> $log
             $code = $LASTEXITCODE
         } finally {
             $ErrorActionPreference = $eap

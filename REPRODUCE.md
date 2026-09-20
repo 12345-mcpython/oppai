@@ -350,10 +350,12 @@ python script\serve.py
 adb -s <手机序列号> install -r --bypass-low-target-sdk-block out\zcsmw-mod-signed.apk
 ```
 
-> **ABI**：包里现在有 `armeabi`（原版）/ `armeabi-v7a`（2026-09-20 自己编）/ `x86`（模拟器）三份，
-> 系统自己按设备挑 —— 实测一加 PLZ110 挑的是 **`primaryCpuAbi=armeabi-v7a`**，
-> MEmu 挑 `x86`。`arm64-v8a` 暂时编不了（第三方预编译库和 SpiderMonkey 都没有 arm64 那套），
-> 详见 [`build.md`](server/docs/build.md) 的「ABI」一节。
+> **ABI**：包里现在有 `armeabi`（原版）/ `armeabi-v7a` / **`arm64-v8a`**（后两个 2026-09-20 自己编）
+> / `x86`（模拟器）四份可选，系统按设备 `abilist` 自己挑。实测一加 PLZ110 会挑
+> **`primaryCpuAbi=arm64-v8a`**（原生 64 位，不走厂商 32 位兼容层），MEmu 挑 `x86`。
+> 真机建议：`-PackAbis arm64-v8a -Install -Serial <手机>`（只带 64 位那一份，543 MB）。
+> arm64 依赖怎么凑（chipmunk 6.2.1 / libwebsockets 1.23 / 按 ABI 分头文件）见
+> [`build.md`](server/docs/build.md) 的「ABI」一节 + `script/build_arm64_deps.py`。
 
 **实测结论（一加 PLZ110，Android 16 / SDK 36）**：
 
