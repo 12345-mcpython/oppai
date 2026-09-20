@@ -199,6 +199,10 @@ def settle(player: dict, rewards) -> dict:
     for rtype, key, count in rewards:
         name = TYPE_NAME.get(str(rtype), str(rtype))
         if name == "ITEM":
+            if icon_of(key) == "":
+                log.warning("奖励里的道具 %s 在 table_item 里图标为空（ic=\"\"）—— "
+                            "客户端 ItemIcon 会抛 TypeError 打断界面初始化，"
+                            "奖励列表里不能出现它（见 items.icon_of）", key)
             add_item(player, key, count)
             granted["items"][str(key)] = granted["items"].get(str(key), 0) + int(count)
         elif name == "PLAYER_EXP":
@@ -269,6 +273,29 @@ def table(name: str) -> dict:
         log.warning("表 %s 还没抽（跑 script/extract_client_tables.py）", name)
     _TABLES[name] = data
     return data
+
+
+def icon_of(key):
+    """道具图标名（`table_item.ic`）。**空串 = 客户端画不出来**，不是道具回 `None`。
+
+    客户端 `Bag` 会给 `table_item` 里**每一条**预先建行（`_icon` 直接取 `ic`），
+    `ItemIcon.updateItemIcon` 遇到图标为空的道具会走
+    `bag.getItemIcon(key)` → 模板替换出 `res/icon/item/undefined.png` →
+    `cc.assert(fileUtils.isFileExist(url))` 失败 → 返回坏路径 → 后面用
+    `this._iconCase` 时它**还没建**，直接 `TypeError`（itemicon.js:199）。
+
+    这个异常是**打断调用方整条初始化**的（比如一进游戏跑
+    `SignRewardItem._init -> rewardManager.getRewardIcon`），表现就是
+    「界面点不动、服务端一条请求也收不到」。所以**任何会被显示出来的奖励
+    列表里都不能出现 `ic` 为空的道具**。
+
+    全表 481 条里只有两个没有图标，都是计数器（不是真道具）：
+    `100101 卡槽购买次数` / `100102 装备槽购买次数`。
+    """
+    row = table("table_item").get(str(key))
+    if not isinstance(row, dict):
+        return None
+    return str(row.get("ic") or "")
 
 
 def _item_limit(key: str) -> int:

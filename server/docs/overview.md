@@ -238,6 +238,7 @@ vanilla 不传参 → 游戏代码 `function (eventName) { if (/began\d/.test(ev
 | 通关后**好感度弹窗不出现/显示 +0** | 数量要回在 `rewards.levelReward.favor`（"给谁"由客户端拿自己 `table_level.favor_char_key` 算）；回了 `data.rewards.favorReward.favors` 会走到客户端一个 `.count` 写错的死分支 | `gamesrv/favor.py` + `instance.py` |
 | 编成 →「队伍」**一进去就停在第二队**（点左箭头才回到第一队） | 客户端自己的 off-by-one：入口是 `new TeamDetailLayer()`（**不带下标**），于是走 `_initData` 的兜底 `this.curTeamIdx = _.findIndex(this.teams, {index: DEFAULT_TEAM_IDX})`，而模块常量 `DEFAULT_TEAM_IDX = 1`；`team.index` 是**服务端下发**的，本服 0 起 ⇒ 命中下标 1 = 第 2 队。队伍 index 必须 0 起是客户端自己定的（`TEAM_COUNT_LIMIT = 5`、`_setCurTeamIdx` 夹到 [0,4]、`getCurTeam()` = `findIndex{index: curTeamIdx}`、`CommonTeamItem` 传 `getCurTeamIdx() - 1`），改服务端 index 会让**第 5 队**开战前被夹成第 4 队 ⇒ 服务端没有杠杆 | `patch.js` 末尾 TEAM-DETAIL（运行时改成「当前队伍」）；反汇编依据：`differences.md` A3d |
 | 宿舍**换完衣服整个界面点不动**（画面在动、音乐照放，屏幕上留着「着裝中…」） | **不是卡顿、也不是服务端**：客户端 `FavorLayer._playChangeClothes` 会把全局触摸闸 `op.touchEnabled = false`，而**唯一开闸的地方是 `end` 动画的最后一帧回调**；引擎 `ActionTimeline::step()` 在回调返回后又执行 `_playing = _loop`（用刚播完那段的 loop）并把新动画直接拽到最后一帧（`_currentFrame = _endFrame`）→ `end` 一帧没播、它的回调永远不响 ⇒ 闸门再也开不回来。探针实测：`touchEnabled=false`、时间轴停在新动画的 `endFrame`、trace 里只有 `FIRE …anim=began` 没有 `end`。换背景 `_replaceBg` / `LoadingLayer.show` 等同款写法都会中招 | 引擎补丁 **③b**（`engine/build/fix_lastframe_replay.py`，见 [`ENGINE_PATCHES.md`](../../engine/ENGINE_PATCHES.md)）；**引擎还没重编时：重启游戏**（回到登录）即可恢复 |
+| 一进游戏**整个界面点不动**（画面在动、音乐照放、服务端**一条请求都收不到**，但 `boss.getbosslist` 还照样每分钟轮询） | **客户端 JS 抛异常，把主界面初始化打断了**：奖励里出现了 `table_item.ic == ""`（`q == 0`）的道具（全表 481 条只有 `100101 卡槽购买次数` / `100102 装备槽购买次数` 两个）。`ItemIcon.updateItemIcon` 只对 `bagconfig.ITEM_QUALITY`（白/绿/蓝/紫/黄）里的品质建 `_iconCase`，品质 0 一个档都匹配不上 → `if (iconPath) this._iconCase.addChild(sprite)` 抛 `TypeError`（itemicon.js:199；前面还有一发 `bag.getItemIcon()` 的 `cc.assert`）。实机踩的是**签到第 7 天**自造奖励发了 `100101`，而 `SignRewardItem._init → rewardManager.getRewardIcon` 这条链一进游戏就跑 | 先看**客户端**日志：`adb logcat \| Select-String "JS ERROR\|JS:"`；服务端侧 `sign.SIGN_REWARDS` 已换（好人卡），`selftest_game.py` 的 `item_icon_check` 兜底；见 §6.14 + [`differences.md`](differences.md) §F |
 | 刚进游戏**连弹一堆「功能开启」**（32 个功能挨个弹） | 客户端 `MainLayer._updateAnimation()` 里有 `moduleManager.popModuleOpen()`：它遍历 `player.updateModuleState()`，把「已解锁但 `isOpened` 还是假」的模块挨个弹动画；而 `isOpened` 是 `Player.initModuleState()` 从**登录块的 `moduleOpenMark[mark_index]`** 读的（`table_function_open` 32 条，我们建号就 30 级 + 全解锁）。我们原来**没发这个字段** → 全被当"没弹过" | `handlers/agent.py` 的 `_module_open_mark()`（默认全标已弹过，`store.MODULE_OPEN_POPUP_SKIP = False` 还原）；表抽在 `table_function_open.json` |
 | **点签到没用**（界面里一条签到都没有） | 登录块的 `sign.signs` 给成了**空数组**，而客户端 `SignCenter` 是 `this._signs = data.signs` + `for (k in _signs)` —— 要的是 **map**（`{signKey: 行}`）；另外 `normalSigns`/`eventSigns` 那几个键客户端**压根不读**。领奖回包还要带 `data.sign`（`updateTime` 变大）让客户端把新 `count` 合并进同一行 | `gamesrv/sign.py`（排期/奖励是自定的，见 §D）+ [protocol.md §6.7](protocol.md) |
 | **点派遣没用**（面板里一个任务都没有） | 登录块 `detect` 原来是 `{completeCount, allDetect, dropInfo, speedCount}` —— 客户端 `Detect.ctor` 读的是 `detect.speedInfo`（分类→已用免费加速次数，**数字**）和 `detect.detect`（章节key→`{beginTimeSec, waitTime, subCD}`，**秒**），两个都没有；6 条 `detect.*` 路由也没实现 | `gamesrv/detect.py` + [protocol.md §6.8](protocol.md) |
@@ -633,6 +634,55 @@ else { cc.log("WebSocket readState:" + this.socket.readyState); }
 WS 侧要替换构造函数（就出事）。定位靠的是**脱离游戏逻辑的最小复现**：
 直接用客户端环境手动 `new WebSocket(...)` + `send(...)`，服务端立刻收到
 `WS <- #1` —— 一步就把「包装坏了」和「游戏逻辑坏了」分开了。
+
+---
+
+### 6.14 「界面点不动、服务端没请求」——**先去客户端日志里找异常**
+
+2026-09-20 修的：一进游戏主界面就点不动，服务端日志像**睡着了一样** ——
+只有 60 秒一次的 `boss.getbosslist` 轮询，用户点哪儿都没反应。这条特别容易
+往错的方向查（"是不是遮罩层吞了触摸"、"是不是触摸坐标错位"），因为
+**服务端这边完全正常**，而客户端画面也在动。
+
+**排查顺序**（照这个顺序做，别跳）：
+
+1. **先量服务端**：`GAME route=...` 有没有？没有就说明请求根本没发出来，
+   问题在客户端 —— 不要再去翻服务端 handler
+2. **再看客户端日志**（关键一步，之前一直漏）：
+   `adb logcat -d | Select-String "JS:|JS ERROR"` →
+   这次一把就命中了：
+   ```
+   16:35:28.599 JS: Assert: bag.getItemIcon() error, key is 100101
+   16:35:28.599 [oppai] JS ERROR: TypeError: this._iconCase is undefined
+                 @ .../assets/src/ui/item/itemicon.js:199
+   ```
+   `JS ERROR` 那一行是**未捕获异常** —— 它会把调用方**整条初始化**打断
+   （这里是登录块处理完、`guideManager.onGuide` 之后的主界面构建）
+3. **再回客户端代码里找那个 key 从哪来**：`100101` 只在登录块的
+   `data.sign.signs.normal.rewards` 里出现过（服务端把登录块 dump 出来数一下就知道）
+4. **量一下"画不出来"的机制**（实机 REPL，不用猜）：
+   ```js
+   dataManager.bag._items["100101"]   // {_key:"100101", _count:0, _name:"卡槽购买次数", _quality:0, 没有 _icon}
+   dataManager.bag.getItemIcon("100101")   // "res/charimage/undefined.png" + cc.assert 报错
+   ```
+   客户端 `Bag` 会拿 `table_item` **全表预先建行**（481 条），所以"画不出来"
+   跟玩家有没有这件道具无关，只跟表里 `ic`/`q` 有关
+
+**为什么不只是"图标空白"而是直接崩**：`ItemIcon.updateItemIcon` 是
+`for (q in ITEM_QUALITY) if (q === quality) { …; this._iconCase = seekNodeByName(…, "iconcase") }`
+—— 品质 0 落在五档（白/绿/蓝/紫/黄 = 10/20/30/40/50）**之外**，
+循环走完 `_iconCase` 仍是 undefined，后面 `if (iconPath)` 用的时候就是 TypeError。
+
+**教训**：
+* 「服务端没收到请求」**先怀疑客户端抛异常**，而不是先怀疑触摸/遮罩/网络；
+  触摸那类问题的特征是**画面停住**或**引导卡住**，而这次画面照常动
+* 凡是要给客户端**显示**的东西（奖励列表、掉落、成就奖励、兑换结果），
+  键必须能在 `table_item` 里查到**非空 `ic`**；能做自检就做自检
+  （`item_icon_check` 就是这么加上去的，它带一个"把假登录块喂进去必须报 BAD"的
+  反向验证）
+* 客户端表里**没有图标的那两个键**（`100101`/`100102`）是**计数器**，不是道具：
+  只能躺在背包里（`Bag.getList(ITEM_TYPE.ALL)` 会跳过 `type == CURRENCY`），
+  永远不要放进奖励列表
 
 ---
 

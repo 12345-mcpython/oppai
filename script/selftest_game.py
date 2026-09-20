@@ -1071,6 +1071,116 @@ def detect_check(ok: bool) -> bool:
     return ok
 
 
+def item_icon_check(ok: bool) -> bool:
+    """奖励里不能出现「客户端画不出图标」的道具（`table_item.ic` 为空 / `q = 0`）。
+
+    客户端 `bagconfig.ITEM_QUALITY` 只有 白/绿/蓝/紫/黄 五档，而
+    `ItemIcon.updateItemIcon` **只有品质匹配上才会建 `this._iconCase`**：
+
+        for (q in ITEM_QUALITY) if (q === quality) _iconCase = seekNodeByName(…)
+
+    表里 `q = 0` 的道具一个档都匹配不上，循环走完 `_iconCase` 还是 undefined，
+    随后 `if (iconPath) this._iconCase.addChild(sprite)` 直接
+    `TypeError: this._iconCase is undefined`（itemicon.js:199，2026-09-20 真机上
+    就是这么挂的）。它前面还有一发 `bag.getItemIcon()`，因为 `ic` 是空串，
+    拼出来是 `res/icon/item/undefined.png` → `cc.assert(isFileExist(url))` 报
+    `Assert: bag.getItemIcon() error, key is 100101`。
+
+    这个异常会**打断调用方的整条初始化**：我当时把 `100101`（表里叫「卡槽购买次数」）
+    当成签到第 7 天奖励，`data.sign.signs.normal.rewards` 里带着它，一进游戏
+    `SignRewardItem._init → rewardManager.getRewardIcon → new ItemIcon(key)`
+    就抛异常，主界面初始化停在一半 —— 表现是「界面点不动、服务端一条请求都收不到」，
+    特别难查（服务端这边一切正常）。
+
+    所以这里把**会被画成奖励图标**的来源全扫一遍：登录块（背包本身不算，见下）、
+    签到奖励、派遣奖池、分区成就奖励、关卡掉落、商店货架、回礼表。
+
+    `100101` / `100102` 这两个计数器是全表**仅有**的没有图标的道具：它们只能留在背包里
+    （客户端 `Bag.getList(ITEM_TYPE.ALL)` 明确跳过 `type == CURRENCY`，所以背包列表
+    不会画它们），**永远不要放进任何奖励/展示列表**。
+    """
+    from gamesrv import items, sign
+
+    titem = items.table("table_item") or {}
+    if not titem:
+        print("  BAD 没有 table_item，抽表没跑？")
+        return False
+    dead = sorted(k for k, v in titem.items()
+                  if isinstance(v, dict) and not (v.get("ic") or ""))
+    bad = []
+
+    def check(title, keys):
+        hit = sorted({str(k) for k in keys if str(k) in dead})
+        if hit:
+            bad.append(f"{title} 里出现了画不出图标的道具 {hit}")
+
+    # 1) 登录块 —— 一进游戏客户端就会读它建图标（签到那条链就在里面）
+    login = call("agent.getlogindata", {}, 170)
+    block = dict(login.get("data") or {})
+    block.pop("item", None)       # 背包：计数器躺在里面是允许的（Bag.getList 跳过货币）
+    found = set()
+
+    def walk(node):
+        if isinstance(node, dict):
+            for v in node.values():
+                walk(v)
+        elif isinstance(node, list):
+            for v in node:
+                walk(v)
+        elif isinstance(node, str) and node in dead:
+            found.add(node)
+
+    walk(block)
+    if found:
+        bad.append(f"登录块里有画不出图标的道具 {sorted(found)}")
+
+    # 2) 各奖励/展示来源
+    check("签到奖励 SIGN_REWARDS",
+          [k for day in sign.SIGN_REWARDS for (_t, k, _c) in day])
+
+    from gamesrv import detect
+    check("派遣奖池 gainIcon/gainIcon2",
+          [x for row in detect.chapter_table().values()
+           for x in str(row.get("gainIcon2") or row.get("gainIcon") or "").split("#") if x])
+
+    from gamesrv import subarea
+    check("分区成就奖励",
+          [row.get("key") for row in subarea.reward_table().values()
+           if str(row.get("type")) == "2"])
+
+    from gamesrv import instance
+    lv = instance._level_table()
+    check("关卡掉落 table_level_reward.reward",
+          [row.get("key_%d" % i) for row in (lv.get("reward") or {}).values()
+           for i in range(1, 6)])
+
+    check("商店货架 table_shelf(good_type=i)",
+          [row.get("good_key") for row in items.table("table_shelf").values()
+           if str(row.get("good_type")) == "i"])
+
+    from gamesrv import favor
+    check("好感回礼 table_favor_receive",
+          [row.get(field) for rows in favor._receive().values() if isinstance(rows, list)
+           for row in rows if isinstance(row, dict)
+           for field in ("id1", "id2")])
+
+    # 3) 背包里允许躺计数器（100101/100102），但只允许这两个
+    from gamesrv import config, store
+    bag = items.items_of(store.get_or_create_player(config.DEFAULT_ACCOUNT))
+    extra = sorted(k for k, v in bag.items()
+                   if int(v or 0) > 0 and k in dead and k not in ("100101", "100102"))
+    if extra:
+        bad.append(f"背包里有画不出图标又不是计数器的道具 {extra}")
+
+    if bad:
+        for one in bad:
+            print(f"  BAD {one}")
+        return False
+    print(f"  OK  奖励图标：登录块 + 签到/派遣/分区成就/关卡掉落/商店/回礼 里没有"
+          f"画不出图标的道具（全表只有 {dead} 两个计数器没有图标，它们只允许躺在背包里）")
+    return ok
+
+
 def main():
     cases = [
         ("agent.getlogindata", {}),
@@ -1178,6 +1288,13 @@ def main():
         ok = module_open_check(ok)
     except Exception as exc:  # noqa: BLE001
         print(f"  BAD 功能开启弹窗自检异常: {exc}")
+        ok = False
+
+    print()
+    try:
+        ok = item_icon_check(ok)
+    except Exception as exc:  # noqa: BLE001
+        print(f"  BAD 奖励图标自检异常: {exc}")
         ok = False
 
     print()
