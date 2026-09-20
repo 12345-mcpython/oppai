@@ -890,9 +890,20 @@ def new_mecha() -> dict:
 
 
 def new_team(index: int) -> dict:
-    """空队伍。字段名来自客户端 src/data/team.js 的 Team。"""
+    """空队伍。字段名来自客户端 src/data/team.js 的 Team。
+
+    ⚠️ `id` **等于 `index`（0 起）**，不是 index+1。客户端 `Player.initTeams` 是
+
+        for (var i in this._teams) { ... new Team(this._teams[i], this._character, i); }
+
+    —— `Team.ctor(team, chars, id)` 的第三个参数就是 `for..in` 的 key（"0".."4"），
+    所以客户端认为的队伍 id 就是**服务端 teams 数组的下标**，
+    `player.updateteams` 发上来的也是 "0".."4"。
+    以前这里写 `index + 1`，跟客户端对不上 → 编成保存被整单跳过
+    （症状：编好的队伍一直消失）。见 `normalize_team_ids()`。
+    """
     return {
-        "id": index + 1,
+        "id": index,
         "index": index,
         "hero": new_hero(),
         "heroKey": HERO_KEY,
@@ -904,6 +915,28 @@ def new_team(index: int) -> dict:
         "spRate": 10,
         "spMax": 1800,
     }
+
+
+def normalize_team_ids(player: dict) -> bool:
+    """把队伍的 `id`/`index` 对齐成 0 起下标（老存档是 `id = index + 1`）。返回是否有改动。
+
+    为什么必须对齐：客户端 `player.updateteams` 发的是 `{id: "0".."4"}`（见 `new_team` 的说明），
+    服务端按 id 找队伍时，老存档的 1 起 id 会让**整单被跳过** ——
+    症状就是「编好的队伍一直消失」（重登还是空的）。
+    更糟的是 id 偶尔"撞上"：客户端发 "1" 时恰好匹配到我们 id=1 那行，
+    但那是 index 0 的队伍 → **写错队伍**。
+    """
+    changed = False
+    for i, team in enumerate(player.get("teams") or []):
+        if not isinstance(team, dict):
+            continue
+        if team.get("index") != i:
+            team["index"] = i
+            changed = True
+        if team.get("id") != i:
+            team["id"] = i
+            changed = True
+    return changed
 
 
 def new_player(account: str) -> dict:
@@ -1071,6 +1104,16 @@ def _migrate(player: dict) -> bool:
     if refresh_equipment_attrs(player):
         changed = True
         log.info("玩家 %s 重算了装备属性 key", player.get("account"))
+    # 队伍 id 对齐成 0 起下标。
+    #
+    # ⚠️ 客户端认的队伍 id 就是**服务端 teams 数组的下标**（`Player.initTeams` 里
+    # `new Team(this._teams[i], this._character, i)`），`player.updateteams` 发的也是 "0".."4"。
+    # 早期 `new_team()` 给的是 `id = index + 1`，两边对不上 → 编成保存**整单被静默跳过**，
+    # 症状是「编好的队伍一直消失」（重登又是空的）。这里在加载时无条件对齐（幂等）。
+    if normalize_team_ids(player):
+        changed = True
+        log.info("玩家 %s 队伍 id 对齐成 0 起下标（原来可能是 index+1）",
+                 player.get("account"))
     return changed
 
 

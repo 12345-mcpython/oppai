@@ -212,6 +212,53 @@ def restore_roster() -> None:
               f"（现在 {len(player.get('soldiers') or [])} 个，已有等级没动）")
 
 
+_TEAM_SNAPSHOT = None
+
+
+def snapshot_teams() -> None:
+    """跑「会吃军士」的用例之前，先把各队伍的上阵名单记下来。
+
+    ⚠️ 军士升级链路会**真的把材料（军士）吃掉**，而 `handlers/char.py` 会顺手把被吃的
+    军士从队伍里摘掉；`restore_roster()` 补回来的是**新的 id**，原来那支队就永远空了。
+    实测：跑几轮之后玩家的编成一直是空的（用户报的「配对队伍一直消失」就是这个 +
+    下面 `player.updateteams` 那个 id 不匹配，两个原因叠在一起）。
+
+    所以这里记一份，收尾时按**还能找到的 id** 放回去。
+    """
+    global _TEAM_SNAPSHOT
+    from gamesrv import config, store
+
+    player = store.get_or_create_player(config.DEFAULT_ACCOUNT)
+    _TEAM_SNAPSHOT = [(t.get("index"), [int(k) for k in (t.get("soldierKeys") or [])])
+                      for t in (player.get("teams") or [])]
+
+
+def restore_teams() -> None:
+    """把 `snapshot_teams()` 记下的编成放回去（只放回还存在的军士）。"""
+    global _TEAM_SNAPSHOT
+    if not _TEAM_SNAPSHOT:
+        return
+    from gamesrv import config, store
+
+    player = store.get_or_create_player(config.DEFAULT_ACCOUNT)
+    live = {int(s["id"]) for s in (player.get("soldiers") or [])}
+    teams = player.get("teams") or []
+    changed = False
+    for index, keys in _TEAM_SNAPSHOT:
+        keep = [k for k in keys if k in live]
+        for team in teams:
+            if team.get("index") != index:
+                continue
+            if list(team.get("soldierKeys") or []) != keep:
+                team["soldierKeys"] = keep
+                team["soldierCount"] = len(keep)
+                changed = True
+    _TEAM_SNAPSHOT = None
+    if changed:
+        store.save_player(player)
+        print("  ..  收尾：把测试摘掉的编成放回去")
+
+
 def favor_check(ok: bool) -> bool:
     """好感度（宿舍）登录块的形状。
 
@@ -271,6 +318,61 @@ def favor_check(ok: bool) -> bool:
         return False
     print(f"  OK  好感度登录块：{len(rows)} 个角色（{len(acquired)} 个已获得），"
           f"互动次数 {block['favorInteractChance']}")
+    return ok
+
+
+def team_save_check(ok: bool) -> bool:
+    """编成保存（`player.updateteams`）—— 「编好的队伍一直消失」的回归测试。
+
+    ⚠️ 客户端发的是 `{teams: [{id: "0", team: {heroKey, mechaKey, soldierKeys: [...]}}]}`
+    —— **id 是服务端 teams 数组的 0 起下标**（反汇编 `Player.initTeams`：
+    `new Team(this._teams[i], this._character, i)`，第三个参数就是 `for..in` 的 key）。
+    服务端如果按 1 起 id 找队伍，整单会被**静默跳过**，症状就是重登后队伍又是空的。
+
+    会临时改 0 号队再**原样还回去**（不把测试数据留给玩家）。
+    """
+    login = call("agent.getlogindata", {}, 119)
+    pl = (login.get("data") or {}).get("player") or {}
+    teams = pl.get("teams") or []
+    if len(teams) < 2:
+        print(f"  BAD 登录块的队伍数不对：{len(teams)}")
+        return False
+    if [t.get("index") for t in teams] != list(range(len(teams))):
+        print(f"  BAD 队伍 index 不是 0..N-1：{[t.get('index') for t in teams]}")
+        return False
+    if [t.get("id") for t in teams] != list(range(len(teams))):
+        print(f"  BAD 队伍 id 不是 0..N-1（客户端就是按下标认的）："
+              f"{[t.get('id') for t in teams]}")
+        return False
+
+    before = dict(teams[0])
+    ids = [int(s["id"]) for s in (pl.get("soldiers") or [])][:2]
+    if len(ids) < 2:
+        print(f"  BAD 军士不够两个：{len(ids)}")
+        return False
+
+    def patch(soldier_keys):
+        body = {"heroKey": before.get("heroKey"), "mechaKey": before.get("mechaKey"),
+                "soldierKeys": soldier_keys}
+        return call("player.updateteams", {"teams": [{"id": "0", "team": body}]}, 120)
+
+    res = patch(ids)
+    if res.get("code") != 200:
+        print(f"  BAD player.updateteams code={res.get('code')}")
+        return False
+    login2 = call("agent.getlogindata", {}, 121)
+    teams2 = ((login2.get("data") or {}).get("player") or {}).get("teams") or [{}]
+    got = sorted(int(x) for x in (teams2[0].get("soldierKeys") or []))
+    if got != sorted(ids):
+        print(f"  BAD 队伍没存下来：发了 {ids}，重登后是 {got}"
+              f"（服务端可能是按 1 起 id 找队伍 → 整单被跳过）")
+        return False
+    if len(teams2) > 1 and (teams2[1].get("soldierKeys") or []):
+        print(f"  BAD 写错队伍了：1 号队被写成 {teams2[1].get('soldierKeys')}")
+        return False
+
+    patch(before.get("soldierKeys") or [])       # 还原
+    print(f"  OK  编成保存：id=\"0\" 的两名军士 {ids} 落盘、重登仍在，且没写错队伍")
     return ok
 
 
@@ -477,6 +579,7 @@ def main():
 
     print()
     try:
+        snapshot_teams()          # 军士链路会把材料（军士）吃掉、顺带从队伍里摘掉
         ok = soldier_flow(ok)
     except Exception as exc:  # noqa: BLE001
         print(f"  BAD 军士链路异常: {exc}")
@@ -485,6 +588,17 @@ def main():
         restore_roster()
     except Exception as exc:  # noqa: BLE001
         print(f"  ..  收尾补军士失败（不影响结论）: {exc}")
+    try:
+        restore_teams()
+    except Exception as exc:  # noqa: BLE001
+        print(f"  ..  收尾放回编成失败（不影响结论）: {exc}")
+
+    print()
+    try:
+        ok = team_save_check(ok)
+    except Exception as exc:  # noqa: BLE001
+        print(f"  BAD 编成保存自检异常: {exc}")
+        ok = False
 
     print()
     try:

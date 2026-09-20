@@ -143,6 +143,24 @@ def update_teams(session: dict, msg: dict, req_id):
     其中 `getReqUpdateParam()` 返回 `{heroKey, mechaKey, soldierKeys}`，
     `soldierKeys` 实际是 `getSoldierIds()`（军士的 id）。
 
+    ⚠️⚠️ **队伍 id 是 0 起的下标，不是我们 `new_team()` 里那个 1 起的 `id`。**
+    反汇编 `Player.initTeams`：
+
+        for (var i in this._teams) { ... new Team(this._teams[i], this._character, i); }
+
+    `Team.ctor(team, chars, id)` 的第三个参数**就是** `for..in` 出来的 key（"0".."4"），
+    所以客户端 `team.id` = 服务端 `teams` 数组的下标。实测（运行中的客户端）：
+
+        player._teams = [{id:"0",index:0}, {id:"1",index:1}, ..., {id:"4",index:4}]
+
+    而 `store.new_team(index)` 早期给的是 `id = index + 1`（1 起）—— 两边对不上，
+    于是**编成保存整单被跳过**（日志里 `updateteams 未知队伍 id=0`），
+    表现就是「编好的队伍一直消失」（重登后又是空的）。
+    （更早还"成功"过一次：客户端发 id="1" 时恰好撞上我们 id=1 那行 —— 但那是 index 0 的队伍
+    写进了 id=1 的行，等于**写错队伍**。）
+
+    所以这里**按 index 找**，并且 `store.normalize_team_ids()` 会把老存档里的 id 拉回 index。
+
     ⚠️ 这个路由不只是「存档」：主线的「队伍中只上阵 N 个军士获得胜利」要靠
     `player.teams[curTeamIdx].soldierKeys` 的长度判定上阵人数；
     不存的话服务端永远以为队伍是空的（`new_team()` 给的就是空队伍），
@@ -150,16 +168,22 @@ def update_teams(session: dict, msg: dict, req_id):
     """
     account = _account(session)
     player = store.get_or_create_player(account)
+    store.normalize_team_ids(player)
     teams = player.get("teams") or []
-    by_id = {str(t.get("id")): t for t in teams}
 
     changed = 0
     for item in (msg or {}).get("teams") or []:
         team_id = str((item or {}).get("id"))
         patch = (item or {}).get("team") or {}
-        target = by_id.get(team_id)
+        target = None
+        for t in teams:
+            # 先按 index（客户端约定），再按 id（兜底，比如手工构造的请求）
+            if str(t.get("index")) == team_id or str(t.get("id")) == team_id:
+                target = t
+                break
         if target is None:
-            log.warning("updateteams 未知队伍 id=%s", team_id)
+            log.warning("updateteams 未知队伍 id=%s（现有 index/id：%s）", team_id,
+                        [(t.get("index"), t.get("id")) for t in teams])
             continue
         if "heroKey" in patch:
             target["heroKey"] = patch["heroKey"]
@@ -172,7 +196,7 @@ def update_teams(session: dict, msg: dict, req_id):
 
     store.save_player(player)
     log.info("player.updateteams account=%s 更新 %d 支队伍 %s", account, changed,
-             [(t.get("id"), len(t.get("soldierKeys") or [])) for t in teams])
+             [(t.get("index"), len(t.get("soldierKeys") or [])) for t in teams])
     return {"code": CODE_OK, "msg": "", "data": {"teams": teams}}
 
 

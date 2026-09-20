@@ -232,6 +232,7 @@ vanilla 不传参 → 游戏代码 `function (eventName) { if (/began\d/.test(ev
 | 关卡结算面板**「获得物资」永远空着**、`Exp+N` 恒为 0 | 奖励块挂在 `data.level` 上了；客户端读的是 `data.rewards.levelReward`，而 `data.level` 只走 `Level.updateLevel()` | `gamesrv/instance.py` |
 | 真机/新系统**装不上**报 `INSTALL_FAILED_DEPRECATED_SDK_VERSION` | 原版 `targetSdkVersion=23`，Android 14+ 卡门槛 | `adb install --bypass-low-target-sdk-block`（官方开关，不需要 root） |
 | 看 `abilist32` 为空就以为**跑不了** 32 位的 `armeabi` | **不一定** —— 有些 ROM 带厂商 32 位兼容层。实测一加 PLZ110（Android 16、`zygote64`、`abilist32` 空）能正常跑 | 直接装一个试；见 [`REPRODUCE.md`](../../REPRODUCE.md) Step 4b |
+| 编好的**队伍一直消失**（重登又是空的） | 两个原因叠在一起：①**队伍 id 对不上** —— 客户端认的 id 是「服务端 teams 数组的**下标**」（`Player.initTeams` 里 `new Team(this._teams[i], this._character, i)`，第三个参数就是 `for..in` 的 key），所以 `player.updateteams` 发的是 `"0".."4"`；而 `new_team()` 早期给的是 `id = index + 1`（1 起）→ 服务端 `未知队伍 id=0`、**整单静默跳过**（偶尔还会"撞上"另一支队 → 写错队伍）。② 跑 `selftest_game.py` 的军士升级链路会真吃掉两个军士，`handlers/char.py` 顺手把它们从队伍里摘掉 | `store.new_team()` 的 `id` = `index`（0 起）+ `store.normalize_team_ids()`（加载时对齐老存档）+ `handlers/player.py` 的 `update_teams` 按 index 找；自检脚本 `snapshot_teams()`/`restore_teams()` 收尾放回编成 |
 | 分区界面**进去了但一片空白**（地图和按钮都在、一个章节都没有） | 分区左侧的章节列表来自 `getActivityChapterListOfType(SUBAREA)`，它遍历 `_activityChapters` 并用 **`table_chapter[entry.key].type == "5"`** 过滤；而 `instance.getactivityinstance` 原来回的是 `{"activityChapters": []}`（桩），且 `data` 必须是**那份 map 本身** | `gamesrv/instance.py` 的 `activity_chapters()`（认 `table_chapter.json` 里 type=="5" 的 4 个章节） |
 | 分区关卡一进去就提示**「挑战次数用完啦~TuT」** | 客户端 `isCanBattle` 末尾是**裸比较** `challengeTimes >= challengeTimeLimit`，**没有** `!limit` 那层保护（那层只在 `checkLevelChallengeTimes` 里，而它没被调用）。服务端给 `challengeTimes: 0` 时 `0 >= 0` 成立 → 直接判没次数 | `gamesrv/instance.py` 的 `SUBAREA_DAILY_TIMES` 必须 **> 0**；跨天重置也得服务端做（`sync_subarea_plays`） |
 | 通关后**好感度弹窗不出现/显示 +0** | 数量要回在 `rewards.levelReward.favor`（"给谁"由客户端拿自己 `table_level.favor_char_key` 算）；回了 `data.rewards.favorReward.favors` 会走到客户端一个 `.count` 写错的死分支 | `gamesrv/favor.py` + `instance.py` |
@@ -697,6 +698,13 @@ WS 侧要替换构造函数（就出事）。定位靠的是**脱离游戏逻辑
         —— 客户端在这几个字段全缺时直接放行（永久开放）
       * 每日上限 `SUBAREA_DAILY_TIMES = 3`（§D），跨天 05:00 由服务端清零
         （`sync_subarea_plays`）。见 §6 症状表里那两条「分区空白 / 次数用完」的坑
+- [x] **修好「编好的队伍一直消失」**：客户端认的队伍 id 是**服务端 teams 数组的下标**
+      （`Player.initTeams` 把 `for..in` 的 key 当 id 传进 `Team.ctor`），所以
+      `player.updateteams` 发的是 `"0".."4"`；而服务端早期用 `id = index + 1` →
+      **整单静默跳过**，编成从来没存下来过（偶尔还会写错队伍）。
+      现在 `new_team().id = index`，加载时 `normalize_team_ids()` 对齐老存档，
+      handler 按 index 找。顺带让自检脚本收尾时把编成放回去（它的军士升级链路
+      会真吃军士、顺带摘队伍）。见 §6 症状表
 - [x] 文档：协议 / 逆向手法 / 打包逻辑 / 调试台 / 引擎调试 / 本总览 / **与原版的差异** / **从零复刻**
 
 ### 待办（按卡点排序）
