@@ -80,7 +80,17 @@ def get_activity_instance(session: dict, msg: dict, req_id):
 
 @route("instance.getsubarealevel")
 def get_subarea_level(session: dict, msg: dict, req_id):
-    return {"code": CODE_OK, "msg": "", "data": {"subareaLevels": []}}
+    """分区关卡的「每日次数 / 开放时间」map。
+
+    ⚠️ `data` **本身就是那份 map**（不是 `{subareaLevels: ...}`）——
+    反汇编 `Instance.updateSubareaLevel/<`：
+        that._subareaLevels = data.data;      // ← 直接用
+    形状与 `gamesrv/instance.py:subarea_levels` 的说明一致。
+    """
+    player = _player(session)
+    block = instance.subarea_levels(player)
+    log.info("instance.getsubarealevel -> %d 个分区关卡", len(block))
+    return {"code": CODE_OK, "msg": "", "data": block}
 
 
 @route("instance.openalllevels")

@@ -274,6 +274,59 @@ def favor_check(ok: bool) -> bool:
     return ok
 
 
+def subarea_check(ok: bool) -> bool:
+    """分区关卡（`INSTANCE_TYPE.SUBAREA`）：登录块 + `instance.getsubarealevel`。
+
+    客户端 `SubareaChapterMapLayer` 靠这两处数据点亮分区地图：
+
+    * 登录块 `data.instance.subareaLevels`（`Instance.ctor` 读）
+    * `instance.getsubarealevel` 的 **`data` 本身就是那份 map**（不是再包一层，
+      反汇编 `Instance.updateSubareaLevel/<`：`that._subareaLevels = data.data`）
+
+    条目形状 `{levelId, challengeTimes}`；**故意不给** `deadline` / `limitDay` /
+    `limitTime` —— 客户端的 `isSubareaLevelOpen` 在这三个全缺时直接放行（永久开放），
+    这样就不用编造原版的开放时间表。
+    """
+    login = call("agent.getlogindata", {}, 116)
+    inst = (login.get("data") or {}).get("instance") or {}
+    sub = inst.get("subareaLevels")
+    if not isinstance(sub, dict) or not sub:
+        print(f"  BAD 登录块 subareaLevels 不是非空 map：{str(sub)[:80]}")
+        return False
+    bad = [k for k, v in sub.items()
+           if not isinstance(v, dict) or v.get("levelId") != k or "challengeTimes" not in v]
+    if bad:
+        print(f"  BAD subareaLevels 条目形状不对：{bad[:3]}")
+        return False
+    alien = [k for k in sub if not k.startswith("5")]
+    if alien:
+        print(f"  BAD 混进了不像分区关卡的 key：{alien[:3]}")
+        return False
+
+    res = call("instance.getsubarealevel", {}, 117)
+    if res.get("code") != 200:
+        print(f"  BAD instance.getsubarealevel code={res.get('code')}")
+        return False
+    data = res.get("data")
+    if not isinstance(data, dict) or "subareaLevels" in data:
+        keys = list(data)[:5] if isinstance(data, dict) else type(data).__name__
+        print(f"  BAD data 应该就是那份 map（不能包一层）：{keys}")
+        return False
+    if set(data) != set(sub):
+        print(f"  BAD 两处不一致：登录块 {len(sub)} 条 vs getsubarealevel {len(data)} 条")
+        return False
+    limits = sorted({v["challengeTimes"] for v in data.values()})
+    if not limits or min(limits) <= 0:
+        # limit=0 时客户端 `isCanBattle` 的**裸比较** `challengeTimes >= challengeTimeLimit`
+        # 会变成 `0 >= 0` → 一进关就「挑战次数用完啦~TuT」（实测踩过）
+        print(f"  BAD challengeTimes（每日上限）必须 > 0，实际 {limits}"
+              f" —— 0 会让客户端 isCanBattle 直接判「次数用完」")
+        return False
+    print(f"  OK  分区关卡：登录块与 getsubarealevel 一致，{len(data)} 关，"
+          f"每日上限={limits[0]}")
+    return ok
+
+
 def level_result_check(ok: bool) -> bool:
     """`instance.finishlevel` 的回包形状（战斗结算）。
 
@@ -401,6 +454,13 @@ def main():
         restore_roster()
     except Exception as exc:  # noqa: BLE001
         print(f"  ..  收尾补军士失败（不影响结论）: {exc}")
+
+    print()
+    try:
+        ok = subarea_check(ok)
+    except Exception as exc:  # noqa: BLE001
+        print(f"  BAD 分区关卡自检异常: {exc}")
+        ok = False
 
     print()
     try:

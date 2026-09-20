@@ -115,6 +115,8 @@
 | 抚摸的 `returnItems` | 恒给空 map | 那张回礼表是"收到礼物的反应"，和抚摸无关。给空 map 而不是 undefined，是因为客户端直接送进 `popupRewardWithItems` |
 | 宿舍事件何时解锁 | 好感度达到 `table_favor_random_event.favor_lv` | 表结构反推；`newFavorEvent` 走哪条响应推下去也没实机确认 |
 | 宿舍事件奖励 | 读事件时发 `reward_favor` | **客户端全库 0 命中**这个字段，说明是纯服务端数值，但"什么时候发"是推的 |
+| 分区关卡每日次数 | **每关每天 3 次**（`instance.SUBAREA_DAILY_TIMES`），05:00 跨天清零 | 客户端表里**没有**这个数（剧情关的 `challenge_times` 也空着），原版给多少无从考证。但**不能给 0**：客户端 `isCanBattle` 是裸比较 `challengeTimes >= challengeTimeLimit`，0 会被判成「次数用完」（实测踩过）。单旋钮 |
+| 分区关卡开放时间 | **不给**（`deadline`/`limitDay`/`limitTime` 全缺 = 永久开放） | 客户端 `isSubareaLevelOpen` 在这三个字段全缺时直接 `return true`，所以这是**客户端自己认的"不限时"**，不是我编的时间表。原版的排期（哪个区几点开）没处可查 |
 
 **反过来说，这些是"表里写死、和原版一致"的**（不用担心）：
 好感度升级曲线（`table_favor_upgrade`，500/700/…/90000，满级 15）、

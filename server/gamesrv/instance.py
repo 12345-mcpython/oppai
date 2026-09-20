@@ -145,16 +145,106 @@ def login_block(player: dict) -> dict:
     所以这里给空容器也不会缺关卡（`_initLevel()` 已经把 1142 关建好了）。
     `chapters` 目前给空字典 —— 客户端的章节列表走 `table_chapter`，
     章节星级是 `getChapterStars()` 从 `_levels` 现算的。
+
+    ⚠️ 发之前先 `sync_subarea_plays`：分区关卡的 `challengeTimes` 是**今日已打次数**，
+    跨天（05:00）要清零，而客户端自己不会清（`isCanBattle` 是裸比较）。
     """
+    sync_subarea_plays(player)
     return {
         "levels": _record(player),
         "chapters": {},
         "activityChapters": [],
-        "subareaLevels": [],
+        "subareaLevels": subarea_levels(player),
         "appearBossKey": {},
         "newActChapterFlag": {},
         "updateTime": store.time_str(),
     }
+
+
+# 分区关卡（`INSTANCE_TYPE.SUBAREA`）的 instance_type。
+# 抽表时从 `table_level[k].instance_type` 带出来（`table_level_reward.json` 的 `it`），
+# 1142 关里 27 关是分区关（500001~500003、500101~…）。
+SUBAREA_INSTANCE_TYPE = "5"
+
+# 分区关卡的**每日挑战上限**。
+#
+# ⚠️ 这个数是**服务端配置**，客户端表里没有（剧情关的 `challenge_times` 也空着），
+#    原版给多少无从考证 —— 取值写进 differences.md §D，单旋钮。
+#
+# ⚠️ 不能给 0（我第一版就是 0，实测被挡）：客户端 `isCanBattle` 末尾是**裸比较**
+#
+#        if (level.challengeTimes >= level.challengeTimeLimit) return dic[208];  // 次数用完
+#
+#    —— 没有 `!limit` 那层保护（那是 `checkLevelChallengeTimes` 才有的，而
+#    `isCanBattle` **不调用它**）。limit=0 时 `0 >= 0` 成立 → 一进去就"次数用完啦~TuT"。
+#    所以必须给正数，并且由**服务端**把已打次数按天清零（见 sync_subarea_plays）。
+SUBAREA_DAILY_TIMES = 3
+
+# 跨天时刻：`table_constant.common_reset_time` = "05:00:00"（客户端表里的值）。
+# 服务端没抽 `table_constant`，所以这里写死，改的时候两边一起改。
+SUBAREA_RESET_HOUR = 5
+
+
+def subarea_level_ids() -> list:
+    """哪些关卡是分区关（`instance_type == 5`）。无缓存，27 条，够快。"""
+    return [str(k) for k, v in (_level_table().get("level") or {}).items()
+            if str((v or {}).get("it") or "") == SUBAREA_INSTANCE_TYPE]
+
+
+def subarea_day(now: int | None = None) -> str:
+    """按 `SUBAREA_RESET_HOUR` 划天的日期串（'YYYY-MM-DD'）。"""
+    ts = int(now if now is not None else time.time()) - SUBAREA_RESET_HOUR * 3600
+    return store.time_str(ts)[:10]
+
+
+def sync_subarea_plays(player: dict, now: int | None = None) -> bool:
+    """分区关卡的「今日已打次数」按天对齐（换天就清零），返回是否有改动。
+
+    ⚠️ 为什么**必须服务端**清：客户端 `isCanBattle` 只做
+    `challengeTimes >= challengeTimeLimit` 的裸比较，**不会**自己按天重置
+    （带重置逻辑的 `checkLevelChallengeTimes` 它压根没调用）。所以"每天能打几次"
+    这件事完全落在服务端：`levels[levelId].challengeTimes` 对我们来说就是**今日次数**。
+
+    ⚠️ **只动分区关卡**：剧情关的 `challengeTimes` 客户端当"历史挑战次数"展示，
+    乱清零会把它抹掉。
+    """
+    day = subarea_day(now)
+    if player.get("subareaDay") == day:
+        return False
+    player["subareaDay"] = day
+    rec = _record(player)
+    for level_id in subarea_level_ids():
+        row = rec.get(level_id)
+        if isinstance(row, dict):
+            row["challengeTimes"] = 0
+    log.info("分区关卡次数跨天重置（%s 起算）：%d 关", day, len(subarea_level_ids()))
+    return True
+
+
+def subarea_levels(player: dict) -> dict:
+    """`data.subareaLevels` / `instance.getsubarealevel` 的那份 map。
+
+    形状（反汇编 `Instance.updateSubareaLevel/<` 钉的）::
+
+        {levelId: {levelId, challengeTimes, [deadline, limitDay, limitTime], [ac_*]}}
+
+    客户端只读两处：
+
+    * `level.challengeTimeLimit = 条目.challengeTimes`
+      —— 注意：服务端这个字段客户端当**上限**用（名字叫 times，语义是 limit）
+    * `isSubareaLevelOpen(levelId)` / `isSubareaUpLevelOpen` / `getSubareaEndTime`
+      —— **`deadline` / `limitDay` / `limitTime` 三个都缺就直接 return true**
+      （永久开放），所以这里干脆不给，省得编造开放时间表；`ac_*` 同理
+      （那是"进阶"变体，`isSubareaUpLevelOpen` 一套一样的判定）。
+
+    ⚠️ key 用什么无所谓（客户端只用条目里的 `levelId` 回查 `_levels`），
+    这里用 levelId 自己，方便调试时一眼看懂。
+
+    ⚠️ 关卡进度（星级/**今日已打次数**/最后时间）不走这里 —— 走登录块的 `levels`，
+    那本来就覆盖全部 1142 关（调用方要保证先跑过 `sync_subarea_plays`）。
+    """
+    return {level_id: {"levelId": level_id, "challengeTimes": SUBAREA_DAILY_TIMES}
+            for level_id in subarea_level_ids()}
 
 
 def _team(player: dict, idx) -> dict:
@@ -209,12 +299,24 @@ def finish_level(player: dict, msg: dict) -> dict | None:
     except (TypeError, ValueError):
         star_mark = 0
 
+    # 分区关卡的「今日已打」跨天要先清零，否则今天第一次打完会变成 N+1（见 sync_subarea_plays）
+    sync_subarea_plays(player)
+
     rec = _record(player)
     lv = rec.setdefault(level_id, {"starMark": -1, "challengeTimes": 0, "lastUpdateTimeSec": 0})
-    lv["starMark"] = max(int(lv.get("starMark", -1)), star_mark)
+    prev_star = int(lv.get("starMark", -1))
+    lv["starMark"] = max(prev_star, star_mark)
     lv["challengeTimes"] = int(lv.get("challengeTimes") or 0) + 1
     lv["lastUpdateTimeSec"] = int(time.time())
-    first_clear = lv["challengeTimes"] == 1 and star_mark > 0
+
+    # 首通 = 这一关**以前从没通关过**（星级第一次从 -1 变成正数）。
+    #
+    # ⚠️ **不能**写成 `challengeTimes == 1`：分区关卡的 `challengeTimes` 现在是
+    #    「今日已打次数」（`sync_subarea_plays` 每天清零），那样会变成
+    #    「每天都能领一次首通奖励」。用星级判断对两种关都对，而且顺带修掉一个老问题：
+    #    先失败一次（star_mark=0）再通关时，旧写法 `challengeTimes == 1` 是 false，
+    #    首通奖励会漏发。
+    first_clear = star_mark > 0 and prev_star < 0
 
     # 一次胜利 = 一次主线任务进度
     team = _team(player, (msg or {}).get("curTeamIdx"))

@@ -174,7 +174,8 @@ LEVEL_JS = r"""
             fc: r.first_complete_reward_ids || "",
             ap: r.appraise_reward_ids || "",
             favor: r.favor || 0,
-            fck: r.favor_char_key || ""
+            fck: r.favor_char_key || "",
+            it: r.instance_type || ""
         };
     }
     out.reward = {};
