@@ -162,11 +162,16 @@ def touch_check():
 
 def use_gift_check():
     print("== 送礼 favor.usegift ==")
-    items.add_item(player, "305101", 3)   # 喜欢的礼物（gt5）
-    items.add_item(player, "301101", 2)   # 普通礼物（gt1）
+    # ⚠️ 用「赋值」而不是 add_item：建号时 store.top_up_gifts() 已经发了每种 99 个
+    #    （私服取舍，见 store.GIFT_STOCK），add 的话基数就不是这里想的那 3 个了。
+    bag = items.items_of(player)
+    bag["305101"] = 3                     # 喜欢的礼物（gt5）
+    bag["301101"] = 2                     # 普通礼物（gt1）
     save()
     reload_()
     before = store.find_favor(player, "hadf")["curExp"]
+    gold_before = items.count_of(player, "100001")
+    used_before = int(player.get("usedGiftCount") or 0)
 
     r = call(hfavor.use_gift, {"charKey": "hadf", "items": {"305101": 2}}, 3)
     check("code = 200", r["code"] == 200, str(r)[:200])
@@ -183,15 +188,76 @@ def use_gift_check():
     check("returnItems 是 map", isinstance(d.get("returnItems"), dict), str(d.get("returnItems")))
     reload_()
     check("扣了 2 件", items.count_of(player, "305101") == 1, str(items.count_of(player, "305101")))
-    check("player.usedGiftCount = 1", player["usedGiftCount"] == 1)
+    check("player.usedGiftCount 又 +1", player["usedGiftCount"] == used_before + 1,
+          "%s vs %s" % (player["usedGiftCount"], used_before + 1))
     check("player.lastGiftTimeSec > 0", player["lastGiftTimeSec"] > 0)
+    check("回礼与背包一致（弹窗不撒谎）",
+          all(items.count_of(player, k) >= 0 for k in (d.get("returnItems") or {})),
+          str(d.get("returnItems")))
 
     bad = call(hfavor.use_gift, {"charKey": "hadf", "items": {"100001": 1}}, 4)
     check("非礼物被拒", bad["code"] != 200, str(bad)[:120])
+    # 先把存量压到 1，再要 99 —— 不然建号发的 99 个会让这一单真的成功
+    bag = items.items_of(player)
+    bag["305101"] = 1
+    save()
     bad = call(hfavor.use_gift, {"charKey": "hadf", "items": {"305101": 99}}, 5)
     check("礼物不够被拒", bad["code"] != 200, str(bad)[:120])
     reload_()
     check("整单校验：被拒时一件没扣", items.count_of(player, "305101") == 1)
+
+
+def gift_stock_check():
+    """礼物存量 + 回礼真的入账（两件都是 2026-09-20 这轮补的）。"""
+    print("== 礼物存量 / 回礼入账 ==")
+    import random
+
+    reload_()
+    gifts = favor._gifts()
+    have = [k for k in gifts if items.count_of(player, k) > 0]
+    check("建号就发了全部礼物（47 种）", len(have) == len(gifts),
+          "%d/%d" % (len(have), len(gifts)))
+    check("每种都是 store.GIFT_STOCK 个",
+          all(items.count_of(player, k) == store.GIFT_STOCK for k in gifts),
+          str(store.GIFT_STOCK))
+    check("gift_need_lv 读 table_favor_constant.use_gift_lv_<quality>（四档都是 1）",
+          all(favor.gift_need_lv(gifts[k]) == 1 for k in gifts),
+          str(sorted({favor.gift_need_lv(v) for v in gifts.values()})))
+
+    # 回礼：把 random.randint 钉成「必中 + 取上限」，验的是**入账**那一步
+    # （客户端拿到 returnItems 只弹窗，不会自己加道具 —— 服务端不加就是撒谎）
+    bag = items.items_of(player)
+    bag["305101"] = 2
+    save()
+    reload_()
+    gold_before = items.count_of(player, "100001")
+    ap_before = items.count_of(player, "100003")
+    real = random.randint
+
+    def fake(a, b):
+        # 概率那一步是 randint(1, RETURN_ITEM_PR_BASE)、数量那一步是 randint(lo, hi)，
+        # 两组的参数可能一模一样（金条就是 1..10），所以只回下界：
+        # 概率必中（1 <= pr），数量取下界 —— 断言就是确定的 1 / 1。
+        # 区间本身由下面的 return_item_check() 用大样本统计覆盖。
+        return a
+
+    random.randint = fake
+    try:
+        r = call(hfavor.use_gift, {"charKey": "hadf", "items": {"305101": 1}}, 6)
+    finally:
+        random.randint = real
+    d = r.get("data") or {}
+    ret = d.get("returnItems") or {}
+    # hadf 的 p=2 行：金条 100001（1..10）+ 行动力 100003（1..30）
+    check("回礼 = 表里 p=2 那行（金条 + 行动力）",
+          ret == {"100001": 1, "100003": 1}, str(ret))
+    reload_()
+    check("回礼的 100001 真的进背包了",
+          items.count_of(player, "100001") == gold_before + 1,
+          "%s vs %s" % (items.count_of(player, "100001"), gold_before + 1))
+    check("回礼的 100003 真的进背包了",
+          items.count_of(player, "100003") >= ap_before + 1,
+          "%s vs %s" % (items.count_of(player, "100003"), ap_before + 1))
 
 
 def level_check():
@@ -696,6 +762,7 @@ def main() -> int:
     login_block_check()
     gift_math_check()
     touch_check()
+    gift_stock_check()
     use_gift_check()
     level_check()
     desc_check()

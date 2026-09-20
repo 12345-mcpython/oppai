@@ -308,6 +308,18 @@ def favor_check(ok: bool) -> bool:
     if r.get("code") != 200:
         print(f"  BAD favor.setdescread code={r.get('code')} {r}")
         return False
+    # 礼物存量：宿舍送礼面板列的是 `bag.getGifts()`（table_item.type == 30），
+    # 一件都没有的话面板是空的、玩法等于没做。建号/老存档补货见 store.top_up_gifts()。
+    from gamesrv import favor as favor_mod
+    from gamesrv import store as store_mod
+
+    bag = (login.get("data") or {}).get("item") or {}
+    gifts = list(favor_mod._gifts())
+    have = [k for k in gifts if int(bag.get(k) or 0) > 0]
+    if len(have) != len(gifts):
+        print(f"  BAD 礼物没发齐：{len(have)}/{len(gifts)} 种在背包里"
+              f"（store.GIFT_STOCK={store_mod.GIFT_STOCK}）")
+        return False
     r = call("favor.touchcharasst", {"charKey": acquired[0]}, 112)
     data = r.get("data") or {}
     if r.get("code") != 200:
@@ -317,7 +329,8 @@ def favor_check(ok: bool) -> bool:
         print(f"  BAD favor.touchcharasst 响应缺字段：{sorted(data)}")
         return False
     print(f"  OK  好感度登录块：{len(rows)} 个角色（{len(acquired)} 个已获得），"
-          f"互动次数 {block['favorInteractChance']}")
+          f"互动次数 {block['favorInteractChance']}，礼物 {len(have)} 种 × "
+          f"{store_mod.GIFT_STOCK}")
     return ok
 
 

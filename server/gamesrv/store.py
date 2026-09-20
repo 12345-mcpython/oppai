@@ -111,6 +111,16 @@ TALENT_MATERIAL_KEYS = (
 )
 TALENT_MATERIAL_STOCK = 99
 
+# 好感度礼物（`table_item.type == 30`，共 47 件）。原版从抽卡 / 活动里拿，
+# 私服一份都不给的话，宿舍「送礼」面板是空的、道具栏里也看不到礼物 —— 整个玩法等于没做。
+# 想还原原版手感：`GIFT_STOCK` 改成 0 并把 `GIFT_STOCK_VERSION` +1。
+#
+# ⚠️ 礼物 key **不在 store 里硬抄**（不像天赋材料那 9 个）：直接从客户端表
+# `table_item` 里按 type==30 取，表变了自动跟上。查表要走 `items.table()`，
+# 而 items.py 反过来 import store → 只能函数内局部 import（同 `_add_soldier` 的写法）。
+GIFT_STOCK = 99
+GIFT_STOCK_VERSION = 1
+
 # 材料补货的版本号。改了存量/加了材料就把这个 +1，所有存档（含玩过的）会再补一次。
 #
 # ⚠️ 不能写成「少于 STOCK 就补」：`_migrate` 每次取存档都会跑
@@ -382,6 +392,25 @@ def top_up_equipment_material(items: dict) -> None:
     """把装备升级材料补到 EQUIPMENT_MATERIAL_STOCK（只加不减）。"""
     items[EQUIPMENT_UPGRADE_ITEM] = max(int(items.get(EQUIPMENT_UPGRADE_ITEM) or 0),
                                         EQUIPMENT_MATERIAL_STOCK)
+
+
+def top_up_gifts(items: dict) -> int:
+    """把 47 件好感度礼物补到 GIFT_STOCK（只加不减、不碰玩家已有的更多存量）。
+
+    返回补了几种。礼物 key 从客户端表 `table_item` 里按 `type == 30` 取
+    （抽表时压成了短键 `t`；拿不到表就回 0，不让建号挂掉）。
+    """
+    from . import items as items_mod   # 局部 import：store ← items 是循环依赖
+
+    table = items_mod.table("table_item")
+    n = 0
+    for key, row in (table or {}).items():
+        if str((row or {}).get("t")) != "30":     # t = type；30 = ITEM_TYPE.GIFT
+            continue
+        key = str(key)
+        items[key] = max(int(items.get(key) or 0), GIFT_STOCK)
+        n += 1
+    return n
 
 
 # ---------------------------------------------------------------------------
@@ -952,6 +981,7 @@ def new_player(account: str) -> dict:
     items = default_items()
     top_up_talent_materials(items)
     top_up_equipment_material(items)
+    top_up_gifts(items)          # 47 件好感度礼物（宿舍送礼要用）
     return {
         "id": 1,
         "account": account,
@@ -1102,6 +1132,17 @@ def _migrate(player: dict) -> bool:
                      player.get("account"), EQUIPMENT_UPGRADE_ITEM,
                      EQUIPMENT_STOCK_VERSION, EQUIPMENT_MATERIAL_STOCK)
         player["equipmentStockVersion"] = EQUIPMENT_STOCK_VERSION
+        changed = True
+    # 好感度礼物补货（47 件）。同天赋/装备材料：老存档的 `items` 已存在，
+    # 「按 key 补字段」救不到，必须靠版本号做成一次性的。
+    if int(player.get("giftStockVersion") or 0) != GIFT_STOCK_VERSION:
+        bag = player.get("items")
+        if isinstance(bag, dict):
+            n = top_up_gifts(bag)
+            if n:
+                log.info("玩家 %s 补好感度礼物（v%s，%d 种各 %d 个）",
+                         player.get("account"), GIFT_STOCK_VERSION, n, GIFT_STOCK)
+        player["giftStockVersion"] = GIFT_STOCK_VERSION
         changed = True
     # 装备的属性 key。早期发出去的装备行 `firstAttrKeys` 是空数组，而客户端
     # `addEquipmentAttrByKeys` 是**先取值后判长度** → 空数组也崩（强化界面打不开）。

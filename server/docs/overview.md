@@ -238,6 +238,8 @@ vanilla 不传参 → 游戏代码 `function (eventName) { if (/began\d/.test(ev
 | 通关后**好感度弹窗不出现/显示 +0** | 数量要回在 `rewards.levelReward.favor`（"给谁"由客户端拿自己 `table_level.favor_char_key` 算）；回了 `data.rewards.favorReward.favors` 会走到客户端一个 `.count` 写错的死分支 | `gamesrv/favor.py` + `instance.py` |
 | 编成 →「队伍」**一进去就停在第二队**（点左箭头才回到第一队） | 客户端自己的 off-by-one：入口是 `new TeamDetailLayer()`（**不带下标**），于是走 `_initData` 的兜底 `this.curTeamIdx = _.findIndex(this.teams, {index: DEFAULT_TEAM_IDX})`，而模块常量 `DEFAULT_TEAM_IDX = 1`；`team.index` 是**服务端下发**的，本服 0 起 ⇒ 命中下标 1 = 第 2 队。队伍 index 必须 0 起是客户端自己定的（`TEAM_COUNT_LIMIT = 5`、`_setCurTeamIdx` 夹到 [0,4]、`getCurTeam()` = `findIndex{index: curTeamIdx}`、`CommonTeamItem` 传 `getCurTeamIdx() - 1`），改服务端 index 会让**第 5 队**开战前被夹成第 4 队 ⇒ 服务端没有杠杆 | `patch.js` 末尾 TEAM-DETAIL（运行时改成「当前队伍」）；反汇编依据：`differences.md` A3d |
 | 宿舍**换完衣服整个界面点不动**（画面在动、音乐照放，屏幕上留着「着裝中…」） | **不是卡顿、也不是服务端**：客户端 `FavorLayer._playChangeClothes` 会把全局触摸闸 `op.touchEnabled = false`，而**唯一开闸的地方是 `end` 动画的最后一帧回调**；引擎 `ActionTimeline::step()` 在回调返回后又执行 `_playing = _loop`（用刚播完那段的 loop）并把新动画直接拽到最后一帧（`_currentFrame = _endFrame`）→ `end` 一帧没播、它的回调永远不响 ⇒ 闸门再也开不回来。探针实测：`touchEnabled=false`、时间轴停在新动画的 `endFrame`、trace 里只有 `FIRE …anim=began` 没有 `end`。换背景 `_replaceBg` / `LoadingLayer.show` 等同款写法都会中招 | 引擎补丁 **③b**（`engine/build/fix_lastframe_replay.py`，见 [`ENGINE_PATCHES.md`](../../engine/ENGINE_PATCHES.md)）；**引擎还没重编时：重启游戏**（回到登录）即可恢复 |
+| 宿舍**送礼面板一件礼物都没有**（道具栏里也看不到礼物） | 礼物（47 种，`table_item.type == 30`）原版从抽卡/活动来，私服一件都没发 | `store.top_up_gifts()` + `GIFT_STOCK`（建号发、老存档按 `giftStockVersion` 补一次）；想还原就把 `GIFT_STOCK` 改 0 并把版本号 +1 |
+| 送礼**回礼弹窗闪一下东西就没了** | 客户端 `giveAwayGift/<` 只把 `data.returnItems` 丢进 `popupRewardWithItems` **弹窗**，自己不加道具 —— 服务端算完必须自己 `add_item`，否则那个弹窗就是在撒谎 | `handlers/favor.py` 的 `use_gift`（已修，自检见 `selftest_favor.py` 的「回礼入账」段） |
 | 商店里**金条换萌钞点下去弹不出东西/提示"资源不够啦……OAQ"** | 兑换的档位和「补满」规则都在客户端（`exchange_key_<次数>` + `receive_count = -1`），服务端要按同一套算：`times = todayExchangeTimes + 1` → 档位 → `table_resource_exchange[档位]`；`-1` 要补到上限而不是发 -1；失败码必须用客户端 `EXCHANGE_ERR_CODE_DICT` 里真有的（205 = 资源不够、204 = 今天次数用完），自己编的码会 `toast(undefined)` | `gamesrv/exchange.py` + [protocol.md §6.5](protocol.md) |
 | 点**充值 / 月卡 / 礼包**一直弹提示、买不了 | **故意的**：私服没有支付渠道。客户端的 `judgeexchangestate` 先回 `state≠0` 弹提示，`exchange.payment` 也回非 200（`201` 的文案是「充值成功」，回 200 会被当成充值成功） | `gamesrv/exchange.py` 的 `judge_state` + `differences.md` §B |
 
@@ -730,6 +732,14 @@ WS 侧要替换构造函数（就出事）。定位靠的是**脱离游戏逻辑
        `first_exchange_percentage` 折算。失败码必须用客户端
        `EXCHANGE_ERR_CODE_DICT` 里真有的（205 = 资源不够），否则 `toast(undefined)`。
        IAP 那半边**故意不通**（没有支付渠道），见 §6 症状表 + [protocol.md §6.5](protocol.md)
+- [x] **好感度礼物整备**：① 建号/老存档一次性发满 47 种礼物（`store.top_up_gifts()`，
+       版本号做成一次性的）—— 不然宿舍送礼面板是空的；② **回礼真的进背包**（以前只把
+       `returnItems` 回给客户端弹窗，服务端自己不加道具，弹出来的东西等于没给）；
+       ③ 数值又核对了一遍：礼物加值全部来自 `table_item`（`favor/favor_love/favor_hate/
+       gift_type/quality`），礼物的好感等级门槛照抄客户端
+       `table_constant.use_gift_lv_<quality>`（四档都是 1，实际不拦人）；
+       仍然是推断值的只剩生日倍数与回礼概率（`table_constant` 223 项里没有对应键），
+       见 differences.md §D
 - [x] 文档：协议 / 逆向手法 / 打包逻辑 / 调试台 / 引擎调试 / 本总览 / **与原版的差异** / **从零复刻**
 
 ### 待办（按卡点排序）

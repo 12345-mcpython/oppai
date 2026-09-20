@@ -52,6 +52,7 @@
 | 装备升级材料 | 100401 **×500** | 靠分解装备攒 | `store.EQUIPMENT_MATERIAL_STOCK` + 版本号 |
 | 角色默认造型 | **自动发**默认衣服 + 默认背景 | 靠抽卡/活动 | `favor.ensure_default_looks()` |
 | **衣柜 / 背景** | **一次性发满**（109 件衣服 + 54 张背景） | 靠扭蛋和活动；私服扭蛋是空卡池，不发的话「换装」「换背景」永远只有一件 | `favor.LOOK_STOCK_VERSION = 0`（或删掉 `ensure_look_stock` 的调用） |
+| **好感度礼物** | 建号/老存档**一次性发满 47 种 × 99 个** | 原版靠抽卡和活动拿；私服一件都不给的话宿舍「送礼」面板是空的、道具栏里也看不到礼物，整个玩法等于没做 | `store.GIFT_STOCK`（改成 0 并把 `GIFT_STOCK_VERSION` +1 即可还原；礼物 key 不硬抄，按 `table_item.type == 30` 取） |
 | 宿舍互动判定框 | **放大到覆盖角色**（560×560） | 100×100，在角色右边且**不可见**，还只有 1 秒窗口 | 删掉 `patch.js` 末尾那段 |
 | 排行榜 | **回空表** | 真实排行 | 不要改 —— 单机没榜，回空才对 |
 | 好友 BOSS | **回空表** | 好友互动 | 同上 |
@@ -109,10 +110,11 @@
 
 | 项 | 私服取值 | 依据 / 不确定性 |
 |---|---|---|
-| 好感度生日加成 | **×2**（额外再加一份等量经验） | `birthdayAdd` 这个字段得有含义，但**没有任何表能佐证倍数**。单旋钮 `favor.FAVOR_BIRTHDAY_MULTIPLE` |
+| 好感度生日加成 | **×2**（额外再加一份等量经验） | `birthdayAdd` 这个字段得有含义，但**没有任何表能佐证倍数**（2026-09-20 又整表翻了一遍客户端 `table_constant` 的 223 项，没有生日/倍数相关的键）。单旋钮 `favor.FAVOR_BIRTHDAY_MULTIPLE` |
 | 送礼物加好感 | 喜欢→`favor_love` / 讨厌→`favor_hate` / 普通→`favor` | 偏好档位是**实机问客户端**问出来的（`getPreferenceWithSendGift` 返回 2/4/3），但三个字段的用法是推的 |
 | 生日偏好档 | 生日 → 档位 **1** | `getPreferenceWithSendGift` 只有 love/hate 两条分支，**永远回不了 1**；而回礼表里 1/2 两档才有东西、请求体里又带着 `isBirthday`，所以推成"生日=1" |
-| 回礼概率 | `return_item_pr` 按**十分之几**（40%） | 表里 `pr` 全是 4，**取值域无从校准**。单旋钮 `favor.RETURN_ITEM_PR_BASE` |
+| 回礼概率 | `pr` 按**十分之几**（4 → 40%/件，`id1`/`id2` 各判一次） | 表里 `pr` 全是 4，**取值域无从校准**；`table_favor_receive` 客户端**一行都不读**（`jsc_find` 0 命中），所以只能自己定规则。单旋钮 `favor.RETURN_ITEM_PR_BASE` |
+| 回礼内容 | 只在偏好档 1（生日）/ 2（喜欢）掉 `id1`/`id2`，数量取 `c1`/`c2` 的 `"min,max"` 区间 | `p=3/4` 那两行**表里压根没有 id/c 字段**（63 个角色 × 4 档全一样）→「普通/讨厌的礼物不回礼」是表里读出来的，不是猜的 |
 | 换装 / 换背景 | `favorValue = 0`（不加好感度） | 没有换装表，`table_constant` 里也没对应项。客户端会把它拿去播"+N" |
 | 抚摸的 `returnItems` | 恒给空 map | 那张回礼表是"收到礼物的反应"，和抚摸无关。给空 map 而不是 undefined，是因为客户端直接送进 `popupRewardWithItems` |
 | 宿舍事件何时解锁 | 好感度达到 `table_favor_random_event.favor_lv` | 表结构反推；`newFavorEvent` 走哪条响应推下去也没实机确认 |
@@ -125,7 +127,8 @@
 **反过来说，这些是"表里写死、和原版一致"的**（不用担心）：
 好感度升级曲线（`table_favor_upgrade`，500/700/…/90000，满级 15）、
 抚摸加值（`touch_favor_add = 22`）、互动次数上限 5 / 每小时回 1、
-礼物加值（`table_favor_gift`）、回礼内容（`table_char_favor_receive_talk`）、
+礼物加值（`table_favor_gift`）、回礼内容（`table_favor_receive` 的 `id1/id2` + `c1/c2` 区间；
+台词在 `table_char_favor_receive_talk`）、
 军士升级公式、装备属性 key 规则、天赋升级消耗、
 **战斗结算的好感度**（`table_level.favor` / `favor_char_key`，895 关有值）——
 全部用的客户端原表。

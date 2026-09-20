@@ -152,6 +152,12 @@ def use_gift(session: dict, msg: dict, req_id):
             continue
         if int(bag.get(str(item_key)) or 0) < count:
             return {"code": FAIL, "msg": "礼物不够：%s" % item_key, "data": {}}
+        # 客户端礼物面板的等级门槛（`FavorGiftPanelWrapper.newItem`：
+        # `needFavorLv = table_constant["use_gift_lv_" + quality]`，没到就显示成不可用）。
+        # 抽出来的表里四档全是 1，所以实际上不拦人 —— 这里照抄规则防改包。
+        need_lv = favor.gift_need_lv(gift)
+        if need_lv > 1 and int(row.get("lv") or 1) < need_lv:
+            return {"code": FAIL, "msg": "好感等级不够（要 %d）" % need_lv, "data": {}}
         plan.append((str(item_key), count, gift))
     if not plan:
         return {"code": FAIL, "msg": "礼物数量不对", "data": {}}
@@ -181,20 +187,26 @@ def use_gift(session: dict, msg: dict, req_id):
     st["lastTimeSec"] = int(time.time())
     player["usedGiftCount"] = st["usedCount"]
     player["lastGiftTimeSec"] = st["lastTimeSec"]
+    # 回礼要**真的进背包**：客户端 `giveAwayGift/<` 只是把 `data.returnItems`
+    # 丢进 `popupRewardWithItems(..., RETURN_GIFT)` 弹个窗，自己不加道具 ——
+    # 服务端不 add_item 的话，那个弹窗就是在撒谎（东西弹出来就没了）。
+    returns = favor.roll_return_items(char_key, best_pref)
+    for rk, rc in returns.items():
+        items.add_item(player, rk, int(rc))
     # 好感度涨了 → 可能跨过某条宿舍事件的解锁等级，顺带把新解锁的推下去
     new_events = favor.sync_events(player)
     store.save_player(player)
 
-    log.info("favor.usegift %s 礼物 %s 好感 +%d%s（升 %d 级 -> lv%d）",
+    log.info("favor.usegift %s 礼物 %s 好感 +%d%s（升 %d 级 -> lv%d）回礼 %s",
              char_key, [(k, c) for k, c, _ in plan], total,
-             "（生日 +%d）" % bonus if bonus else "", up, row.get("lv"))
+             "（生日 +%d）" % bonus if bonus else "", up, row.get("lv"), returns)
 
     data = {
         "charKey": char_key,
         "preference": unit_pref,
         "favorValue": total,
         "birthdayAdd": bonus,
-        "returnItems": favor.roll_return_items(char_key, best_pref),
+        "returnItems": returns,
         "useGiftStatus": {"usedGiftCount": st["usedCount"], "lastGiftTimeSec": st["lastTimeSec"]},
         "favor": favor.row_block(char_key, row),
     }

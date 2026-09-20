@@ -301,6 +301,27 @@ def preference_of(char_key: str, gift_type, is_birthday: bool = False) -> int:
     return 3
 
 
+def gift_need_lv(gift: dict, default: int = 1) -> int:
+    """这件礼物要求角色好感等级到几级才能送。
+
+    客户端 `FavorGiftPanelWrapper.newItem` 里是
+
+        needFavorLv = table_constant["use_gift_lv_" + quality]
+
+    （没到就在礼物面板上显示成不可用）。抽出来的 `table_favor_constant` 里
+    `use_gift_lv_10/20/30/40` **全是 1**，所以实际不拦人 —— 服务端照抄规则，
+    防的是改包。
+    """
+    quality = str(gift.get("q") or "")
+    if not quality:
+        return default
+    row = items.table("table_favor_constant") or {}
+    try:
+        return int(row.get("use_gift_lv_%s" % quality) or default)
+    except (TypeError, ValueError):
+        return default
+
+
 def gift_value(char_key: str, gift: dict, preference: int) -> int:
     """一件礼物加多少好感度。字段含义见模块 docstring。"""
     if preference in (1, 2):
