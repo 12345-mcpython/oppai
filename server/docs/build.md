@@ -21,8 +21,13 @@
         ↓
 ③ python script\build_apk.py             ★ 改 assets + apktool b + 对齐 + 签名
         ↓
-④ adb install -r -d
+④ adb -s <设备> install -r -d
 ```
+
+> ⚠️ **模拟器和真机同时连着时必须带 `-s`**。`build.ps1` 以前只有 `adb reverse` 那步带了
+> `-s $Serial`，`install` / `forward` / 启动都没带 —— 单设备时看不出来，一旦手机和模拟器
+> 一起插着就报 `adb: more than one device/emulator`（2026-09-20 踩到，已修）。
+> 指定设备：`.\build.ps1 -Install -Serial <序列号>`，或 `$env:GS_ADB_SERIAL`。
 
 **只改服务端时不用打包** —— 那只是 Python 代码，重启 `run.py` 就行。
 
@@ -141,7 +146,52 @@ smali/android/net       20 个文件（android.net.http.* + WebAddress）
 > 压缩比约 3:1，所以 APK 上只少了 **0.44 MB**（580,377,326 → 579,918,574）。
 > 想看真实数字就 `python script\apk_report.py`。
 
-### 2b-2. 按「可达性」删单类（`DROP_SMALI_GROUPS`）
+### 2b-2b. 把「游戏自己的代码还吊着」的 SDK 也清掉（2026-09-20 第二轮）
+
+上面两轮清的都是**"没人引用"**的死代码。到 2026-09-20 时 `smali_reach.py` 只剩 1 个
+不可达类（还是故意留的 `ActivityAdapter`），但包里仍然躺着一堆 SDK ——
+因为它们是**反过来被游戏自己的代码引用着**的：
+
+| SDK | 谁吊着它 | 处置 |
+|---|---|---|
+| 微信分享（com.tencent.mm，8 类） | `GameShare` | 把 `GameShare` 改写成"保留接口、实现清空"的桩（见下） |
+| 信鸽推送（com.tencent.android.tpush，3 类） | `XGAdapter` + `AppActivity` | 同上，`XGAdapter` 改桩 |
+| 微博分享（com.sina.weibo，4 类） | `GameShare` | 同上 |
+| 微博分享 Activity（com.kurogame，1 类） | `GameShare` | 直接删 |
+| TalkingData 统计（com.tendcloud，1 类） | `AppActivity`（`init`/`onPause`/`onResume` 三处） | 删调用点 |
+
+做法：**先删调用点 / 改桩，再删包**（顺序反了构建脚本的可达性闸门会拒绝删）。
+
+⚠️ **桩必须保留原来的方法签名**，因为调用方有两路，都不在 smali 里：
+
+* `assets/src/sdk/gameshare/gameshare.jsc` 用 `jsb.reflection.callStaticMethod` 点名
+  `GameShare.shareToWeChat` / `shareToSina`；
+* 两个 `lib/*/libcocos2djs.so` 的字符串表里也有 `org/cocos2dx/javascript/GameShare`、
+  `shareToWeChat`、`shareToSina` —— **引擎侧也按名字找**。
+* `assets/src/sdk/xg/xg.jsc` 点名 `XGAdapter.getDeviceToken/setTag/delTag/addNotification/
+  clearNotifications/XGServiceEnabled`，`AppActivity` 调 `XGAdapter.init(Context)`。
+
+签名一改就是运行时 `method not found`，所以只删包、不删方法。桩的行为：
+`shareToWeChat/shareToSina` 走原实现那套 JS 回调
+（`Cocos2dxJavascriptJavaBridge.evalString("sharegame.shareFailed(...)")`）→ 点分享弹一条失败提示；
+`XGServiceEnabled()` 返回 false、`getDeviceToken()` 返回空串 → 推送相关红点自然不出现。
+
+实测（同一份包，两台设备）：
+
+* `classes.dex` **144,404 → 134,276 字节**（`GameShare` 37.6 KB smali → 3 KB、
+  `XGAdapter` 8 KB → 2 KB，另删 17 个类）；smali 151 → **134 个类**；
+* 运行时用 `jsb.reflection` 直接问一遍：`XGAdapter.getDeviceToken()` → `""`、
+  `XGServiceEnabled()` → `false`、`GameShare.shareToWeChat(...)` 调用不抛异常；
+* 模拟器（Android 9）+ 真机（PL16，Android 16）都冷启动正常、能登录，
+  logcat 无 `ClassNotFound` / `NoSuchMethod` / `FATAL`。
+
+原件备份在 `out/removed-smali-20260920/`（`game/` 不在 git 里，这是唯一的后悔药）。
+
+> ⚠️ **坑：注释里别写斜杠形式的包名。** `smali_users_of()` 是**纯文本**匹配
+> `com/sina` 这种斜杠前缀 —— 我在桩文件的注释里写了一句"微博（com/sina/weibo）"，
+> 结果构建脚本认为"还有人引用"，那几个包怎么都删不掉。注释里统一写点号包名。
+
+### 2b-3. 按「可达性」删单类（`DROP_SMALI_GROUPS`）
 
 `android/support` 那批是「整包没人要」，这批是**散落的死类**。判据不能靠 grep，
 要靠可达性：`script/smali_reach.py` 从真正的入口做闭包——

@@ -160,6 +160,27 @@ RE_RES_REF = re.compile(r"@(?:\+)?(?:android:)?([a-z]+)/([A-Za-z0-9_.]+)")
 DROP_SMALI = (
     ("smali/android/support", ("android/support",)),
     ("smali/android/net", ("android/net/http", "android/net/compatibility")),
+    # --- 2026-09-20 第二轮：把"游戏自己的代码还吊着"的那几个 SDK 包也清了 ---
+    #
+    # 这一轮不是"没人引用的类"（那种早清完了），而是**反过来**：这些 SDK 类之所以
+    # 一直留着，是因为 `GameShare` / `XGAdapter` / `AppActivity` 里还留着对它们的
+    # 调用。先把那三个类改写成"保留接口、实现清空"的桩（见各文件头部注释 +
+    # `out/removed-smali-20260920/` 里的原件），这些包才变成可达性上的死代码。
+    #
+    # 接口为什么必须留：`GameShare.shareToWeChat/shareToSina` 在
+    # `assets/src/sdk/gameshare/gameshare.jsc` 里被 jsb.reflection 点名，
+    # 而且两个 `.so` 的字符串表里也有 `shareToWeChat` / `shareToSina`
+    # （引擎侧也会按名字找）；`XGAdapter` 那几个方法是 `assets/src/sdk/xg/xg.jsc`
+    # 用的，`init(Context)` 由 `AppActivity` 调。签名一改就是运行时
+    # "method not found"，所以只删包、不删方法。
+    #
+    # ⚠️ 注释里千万别写斜杠形式的包名：`smali_users_of()` 是**纯文本**匹配斜杠前缀，
+    #    注释里出现那个串就会被当成"还有人引用"，这几个包会永远删不掉（真踩过）。
+    ("smali/com/tencent/mm", ("com/tencent/mm",)),                    # 微信分享 SDK
+    ("smali/com/tencent/android/tpush", ("com/tencent/android/tpush",)),  # 信鸽推送
+    ("smali/com/sina", ("com/sina",)),                                # 微博分享 SDK
+    ("smali/com/kurogame", ("com/kurogame",)),                        # 微博分享 Activity
+    ("smali/com/tendcloud", ("com/tendcloud",)),                      # TalkingData 统计
 )
 
 # 单类级别的死代码，一组一组删。每组是 ((glob…), 说明)。

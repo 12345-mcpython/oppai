@@ -242,21 +242,23 @@ if ($HostName -eq "127.0.0.1") {
 if ($Install) {
     Step 5 "安装到设备"
     & $Adb connect $Serial | Out-Null
-    & $Adb install -r -d $apk
+    # ⚠️ 必须带 -s：模拟器和真机同时连着时，不带 -s 的 adb install 直接报
+    #    "more than one device/emulator"（2026-09-20 两个设备一起连时就踩到了）
+    & $Adb -s $Serial install -r -d $apk
     if ($LASTEXITCODE -ne 0) { throw "adb install 失败" }
-    Ok "装好了"
-    & $Adb forward tcp:5086 tcp:5086 | Out-Null
+    Ok "装好了（$Serial）"
+    & $Adb -s $Serial forward tcp:5086 tcp:5086 | Out-Null
     Ok "端口转发 5086 -> 引擎调试器"
 } else {
     Step 5 "安装（跳过）"
-    Warn "手动装： adb install -r -d `"$apk`""
+    Warn "手动装： adb -s $Serial install -r -d `"$apk`""
 }
 
 if ($Launch) {
     Step 6 "启动游戏"
     & $Adb connect $Serial | Out-Null
-    & $Adb shell am force-stop $Pkg
-    & $Adb shell am start -n "$Pkg/$Act" | Out-Null
+    & $Adb -s $Serial shell am force-stop $Pkg
+    & $Adb -s $Serial shell am start -n "$Pkg/$Act" | Out-Null
     Ok "已启动（等 20 秒左右进主界面）"
 }
 
