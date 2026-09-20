@@ -858,6 +858,86 @@ def module_open_check(ok: bool) -> bool:
     return ok
 
 
+def sign_check(ok: bool) -> bool:
+    """签到：登录块形状 + 领一次 + 当天不能再领。
+
+    客户端 `SignCenter.ctor` 是 `this._signs = data.signs` 然后 `for (k in _signs)`
+    —— `signs` 必须是 **map**（`{signKey: 行}`），给数组就是一条签到都没有，
+    表现就是「点签到没用」。回包还要带 `data.sign`（`updateTime` 变大）让客户端
+    `updateByServer` 把新 `count` 合并进同一行。
+
+    ⚠️ 会真改签到状态和道具，跑完还原（所以可以反复跑）。
+    """
+    from gamesrv import config, items, sign, store
+
+    login = call("agent.getlogindata", {}, 150)
+    block = (login.get("data") or {}).get("sign") or {}
+    signs = block.get("signs")
+    if not isinstance(signs, dict):
+        print(f"  BAD data.sign.signs 不是 map：{type(signs)}（客户端当 map 用）")
+        return False
+    row = signs.get(sign.SIGN_KEY)
+    if not isinstance(row, dict):
+        print(f"  BAD 没有 {sign.SIGN_KEY} 那条签到：{sorted(signs)}")
+        return False
+    for field in ("signKey", "type", "count", "rewardCount", "rewards",
+                  "canSignToday", "beginTimeSec", "endTimeSec"):
+        if field not in row:
+            print(f"  BAD 签到行缺字段 {field}（客户端 _update/_updateItems 要读）")
+            return False
+    if not isinstance(row.get("rewards"), list) or len(row["rewards"]) != sign.SIGN_DAYS:
+        print(f"  BAD rewards 不是 {sign.SIGN_DAYS} 天的二维数组：{str(row.get('rewards'))[:60]}")
+        return False
+
+    player = store.get_or_create_player(config.DEFAULT_ACCOUNT)
+    before_state = dict(sign.state(player))
+    before_items = dict(items.items_of(player))
+
+    bad = []
+    try:
+        if not row.get("canSignToday"):
+            bad.append("canSignToday 应该是 1（除非今天已经签过 —— 那说明上一轮没还原）")
+        r = call("sign.receivereward", {"key": sign.SIGN_KEY}, 151)
+        if r.get("code") != 200:
+            bad.append(f"sign.receivereward code={r.get('code')} {r}")
+        data = r.get("data") or {}
+        nb = (data.get("sign") or {}).get("signs") or {}
+        nrow = nb.get(sign.SIGN_KEY) or {}
+        if int(nrow.get("count") or -1) != int(row.get("count") or 0) + 1:
+            bad.append(f"回包签到 count={nrow.get('count')!r} 期望 {int(row.get('count') or 0) + 1}")
+        if nrow.get("canSignToday"):
+            bad.append("领完之后 canSignToday 应该变 0")
+        # 道具真的发了
+        day = int(row.get("count") or 0) % sign.SIGN_DAYS
+        want = {}
+        for _t, k, c in sign.SIGN_REWARDS[day]:
+            want[str(k)] = want.get(str(k), 0) + int(c)
+        after = ((call("agent.getlogindata", {}, 152).get("data") or {}).get("item") or {})
+        for k, c in want.items():
+            if int(after.get(k) or 0) != int(before_items.get(k) or 0) + c:
+                bad.append(f"第 {day + 1} 天奖励 {k} 没到账：{before_items.get(k)} -> {after.get(k)}")
+        # 同一天不能再领
+        again = call("sign.receivereward", {"key": sign.SIGN_KEY}, 153)
+        if again.get("code") == 200:
+            bad.append("同一天第二次签到竟然又成功了")
+    finally:
+        player = store.get_or_create_player(config.DEFAULT_ACCOUNT)
+        player[sign.PLAYER_KEY] = before_state
+        got = items.items_of(player)
+        for k, v in before_items.items():
+            got[k] = v
+        store.save_player(player)
+
+    if bad:
+        for one in bad:
+            print(f"  BAD {one}")
+        return False
+    print(f"  OK  签到：signs 是 map（{row['rewardCount']} 天、当前第 "
+          f"{int(row['count']) + 1} 天）→ 领奖 code=200、道具到账、当天不能再领"
+          f"（收尾已还原）")
+    return ok
+
+
 def main():
     cases = [
         ("agent.getlogindata", {}),
@@ -944,6 +1024,13 @@ def main():
         ok = exchange_check(ok)
     except Exception as exc:  # noqa: BLE001
         print(f"  BAD 交易所自检异常: {exc}")
+        ok = False
+
+    print()
+    try:
+        ok = sign_check(ok)
+    except Exception as exc:  # noqa: BLE001
+        print(f"  BAD 签到自检异常: {exc}")
         ok = False
 
     print()

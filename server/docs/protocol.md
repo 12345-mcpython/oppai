@@ -252,7 +252,6 @@ payload = unpack_request(rest)    # 再用该 session 的 secret 解
 ```
 
 ### 5.2 响应派发（responseConfig）在这套引擎上不生效
-
 `src/util/server.js` 里有一张 `responseConfig`，本意是「响应 `data` 里出现哪个模块的
 key，就喂给对应模块的回调」：
 
@@ -308,6 +307,15 @@ responseConfig.player / mail / char / gacha / favorEvent / useGiftStatus / ...
    （先黑屏热更新、再登录）时 `window.server` 可能比 2 分钟更晚出现，整个补丁就**没装上**
    —— 实测踩到过一次（表现是所有推数据又全哑、但引导跳过/WebView 这些照样生效）。
    现在不设上限，装上自己停。
+
+4. **改了背包就要在响应里带 `items` 块**（`patch.js` 的 customTargets：
+   `items -> dm.bag.updateItems(res.data.items)`）。客户端 `Bag` 是**登录时缓存**的，
+   不带这个块的话东西进了存档但界面不动（背包/顶部货币条要重登才刷新）。
+
+   ⚠️ 但**新入手的道具不能塞进去**：`Bag.updateItems` 是
+   `this._items[key].count = n`，key 不在客户端那份 bag 里就是 `undefined.count` → TypeError。
+   服务端用 `items.changed_block(player, known_keys)` —— `known_keys` 传这次改动**之前**
+   的 key 集合，只回那些（新道具照常进存档 + 进奖励弹窗，重登才会出现在背包列表里）。
 
 ### 5.1 成功码是 200
 
@@ -610,6 +618,39 @@ Player.initModuleState():   module.isOpened = moduleOpenMark[module.markIndex];
 顺带：`table_function_open.unlock_lv` 是「XX 系统几级开」的唯一出处
 （如 `100005` 培养系统 = 6 级、`100029` 分区战场 = 25 级），
 私服建号直接给 30 级就是为了这个（见 `store.MIN_PLAYER_LV`）。
+
+### 6.7 签到（`sign.receivereward`）
+
+客户端只有**一条**路由，其余全靠登录块：
+
+```js
+SignCenter.ctor(data):   this._signs = data.signs;      // ★ 是 {signKey: 行} 的 map
+                         this._updateTime = data.updateTime;
+SignCenter._init():      for (k in _signs) 按 row.type 分到 4 个列表 + 算红点
+SignCenter.updateByServer(data):
+                         if (data.updateTime <= _updateTime) return;   // ← 时间必须变大
+                         for (k in data.signs)
+                             if (!_signs[k]) 整条塞进去
+                             else            **逐字段合并**进同一条对象
+SignNormalLayer._update():   读 sign.{signKey, count, rewardCount, rewards, canSignToday,
+                                   beginTimeSec, endTimeSec, dialogue, soldierKey}
+SignNormalLayer._updateItems(): rewards 是**按天分组的二维数组**（每天一组 {type,key,count}），
+                                把 `i < sign.count` 的那些天标成已领取
+SignNormalLayer.receiveRewards(): if (!sign.canSignToday) return;   // 签过了根本不发请求
+                                  requestReceiveRewards({key: signKey})
+```
+
+⚠️ 三个坑：
+
+1. **`signs` 必须是 map**（`{signKey: 行}`）。以前这里给的是 `signs: []`
+   → 客户端 `for (k in [])` 一条都拿不到 → **「点签到没用」**
+   （`normalSigns`/`eventSigns`/… 那几个键客户端**压根不读**，只有 `signs`+`updateTime` 有用）。
+2. **回包要带 `data.sign` 且 `updateTime` 比上次大**：客户端按 key 逐字段合并进
+   **同一个行对象**，界面上的「第 N 天 / 已领取」靠它当场刷新。
+3. 非 200 会被客户端当成 `isTimeout` → 弹 `table_dictionary[3002]`「已经过期」。
+
+排期和奖励**客户端表里没有**（`jsc_find table_sign*` 0 命中）→ 服务端自己定，
+见 `gamesrv/sign.py` 的 `SIGN_REWARDS`（7 天循环）与 differences.md §D。
 
 ---
 

@@ -145,6 +145,27 @@ def add_item(player: dict, key, count: int) -> None:
         log.info("发道具 %s: %d -> %d", k, cur, new)
 
 
+def changed_block(player: dict, known_keys) -> dict:
+    """响应里该带的 `items` 块（让客户端 `Bag` 当场刷新，而不是重登才看到）。
+
+    客户端 `patch.js` 的 RESP-DISPATCH 里 `items -> bag.updateItems(res.data.items)`，
+    而 `Bag.updateItems` 是：
+
+        for (k in items) {
+            var item = this._items[k];
+            if (typeof items[k] === "object") item.updateByObj(items[k]);
+            else                              item.count = items[k];   // ← 直接写
+        }
+
+    ⚠️ **新入手的道具不能塞进来**：key 不在客户端那份 bag 里时 `item` 是 undefined，
+    `undefined.count = n` 直接抛 TypeError。所以这里只回**客户端本来就有**的 key
+    （`known_keys` = 这次改动**之前** `items_of(player)` 的 key 集合）。
+    新道具仍然进存档、也会在奖励弹窗里显示，只是要重登才会出现在背包列表里。
+    """
+    bag = items_of(player)
+    return {str(k): int(v) for k, v in bag.items() if str(k) in known_keys}
+
+
 def sub_item(player: dict, key, count: int) -> bool:
     """扣道具。不够就返回 False 且**不改动**。"""
     items = items_of(player)

@@ -140,6 +140,7 @@ def use_gift(session: dict, msg: dict, req_id):
     # 先整单校验再扣，避免「扣了第一件、第二件不合法」这种半截状态。
     plan = []
     bag = items.items_of(player)
+    known_keys = {str(k) for k in bag}      # 客户端那份 bag 认识的 key（见 items.changed_block）
     for item_key, count in raw_items.items():
         gift = favor.gift_row(item_key)
         if not gift:
@@ -209,6 +210,9 @@ def use_gift(session: dict, msg: dict, req_id):
         "returnItems": returns,
         "useGiftStatus": {"usedGiftCount": st["usedCount"], "lastGiftTimeSec": st["lastTimeSec"]},
         "favor": favor.row_block(char_key, row),
+        # 礼物扣了、回礼加了 —— 让客户端背包/顶部货币条当场刷新
+        # （不然回礼只在弹窗里出现，背包要重登才看得到；见 items.changed_block）
+        "items": items.changed_block(player, known_keys),
     }
     block = favor.new_event_block(new_events)
     if block:

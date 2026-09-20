@@ -230,6 +230,7 @@ def gift_stock_check():
     bag["305101"] = 2
     save()
     reload_()
+    known = {str(k) for k in items.items_of(player)}
     gold_before = items.count_of(player, "100001")
     ap_before = items.count_of(player, "100003")
     real = random.randint
@@ -258,6 +259,16 @@ def gift_stock_check():
     check("回礼的 100003 真的进背包了",
           items.count_of(player, "100003") >= ap_before + 1,
           "%s vs %s" % (items.count_of(player, "100003"), ap_before + 1))
+    # 回包必须带 `items` 块：客户端 `Bag` 是登录时缓存的，不发这个块的话
+    # 回礼只在弹窗里出现、背包/顶部货币条要重登才动（用户就是这么问的）
+    blk = d.get("items")
+    check("回包带 items 块（客户端 bag.updateItems 才会刷新）", isinstance(blk, dict), str(type(blk)))
+    if isinstance(blk, dict):
+        check("items 块里 100001 是新值",
+              int(blk.get("100001") or -1) == gold_before + 1,
+              "%s vs %s" % (blk.get("100001"), gold_before + 1))
+        check("items 块只含客户端本来就有的 key",
+              all(str(k) in known for k in blk), "多余 %s" % ([k for k in blk if str(k) not in known][:5]))
 
 
 def level_check():

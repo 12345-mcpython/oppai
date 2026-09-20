@@ -9,7 +9,7 @@ route 名字来自客户端 src/manager/datamanager.js：
 from __future__ import annotations
 
 from ..gameproto import CODE_OK
-from .. import config, exchange, favor, instance, logx, quests, store, subarea
+from .. import config, exchange, favor, instance, logx, quests, sign, store, subarea
 from . import route
 
 log = logx.get("handler.agent")
@@ -120,13 +120,11 @@ def _module_stubs(player: dict | None = None) -> dict:
         # `"1001#0"`~`"1001#10"`）→ 整条链断掉，天赋面板空白，异常被构造容错吞掉。
         # key 是 101/102/103（table_talent_type），**不是** 1001/2001/3001（那是 master 的 key）。
         "talents": store.player_talents(player),
-        "sign": {
-            "signs": [],
-            "normalSigns": [],
-            "eventSigns": [],
-            "birthdaySigns": [],
-            "noviceSigns": [],
-        },
+        # 签到。**形状是 `{updateTime, signs: {signKey: 行}}`**（`signs` 是 map 不是数组！
+        # 客户端 `SignCenter.ctor` 是 `this._signs = data.signs` + `for (k in _signs)`，
+        # 给数组就是一条签到都没有 —— 表现就是「点签到没用」）。
+        # 排期/奖励服务端自己定（客户端没有签到表），见 gamesrv/sign.py。
+        "sign": sign.block(player),
         "shop": {"shopObj": {}, "buyRecordObj": {}, "activityShopList": []},
         "arena": {"arenaInfo": {}, "mechaSuperSkillCorrectOwn": {}},
         "rank": {"rankInfoObj": {}, "lastUpdateTimeObj": {}},
