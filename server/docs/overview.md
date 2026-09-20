@@ -236,6 +236,7 @@ vanilla 不传参 → 游戏代码 `function (eventName) { if (/began\d/.test(ev
 | 分区界面**进去了但一片空白**（地图和按钮都在、一个章节都没有） | 分区左侧的章节列表来自 `getActivityChapterListOfType(SUBAREA)`，它遍历 `_activityChapters` 并用 **`table_chapter[entry.key].type == "5"`** 过滤；而 `instance.getactivityinstance` 原来回的是 `{"activityChapters": []}`（桩），且 `data` 必须是**那份 map 本身** | `gamesrv/instance.py` 的 `activity_chapters()`（认 `table_chapter.json` 里 type=="5" 的 4 个章节） |
 | 分区关卡一进去就提示**「挑战次数用完啦~TuT」** | 客户端 `isCanBattle` 末尾是**裸比较** `challengeTimes >= challengeTimeLimit`，**没有** `!limit` 那层保护（那层只在 `checkLevelChallengeTimes` 里，而它没被调用）。服务端给 `challengeTimes: 0` 时 `0 >= 0` 成立 → 直接判没次数 | `gamesrv/instance.py` 的 `SUBAREA_DAILY_TIMES` 必须 **> 0**；跨天重置也得服务端做（`sync_subarea_plays`） |
 | 通关后**好感度弹窗不出现/显示 +0** | 数量要回在 `rewards.levelReward.favor`（"给谁"由客户端拿自己 `table_level.favor_char_key` 算）；回了 `data.rewards.favorReward.favors` 会走到客户端一个 `.count` 写错的死分支 | `gamesrv/favor.py` + `instance.py` |
+| 编成 →「队伍」**一进去就停在第二队**（点左箭头才回到第一队） | 客户端自己的 off-by-one：入口是 `new TeamDetailLayer()`（**不带下标**），于是走 `_initData` 的兜底 `this.curTeamIdx = _.findIndex(this.teams, {index: DEFAULT_TEAM_IDX})`，而模块常量 `DEFAULT_TEAM_IDX = 1`；`team.index` 是**服务端下发**的，本服 0 起 ⇒ 命中下标 1 = 第 2 队。队伍 index 必须 0 起是客户端自己定的（`TEAM_COUNT_LIMIT = 5`、`_setCurTeamIdx` 夹到 [0,4]、`getCurTeam()` = `findIndex{index: curTeamIdx}`、`CommonTeamItem` 传 `getCurTeamIdx() - 1`），改服务端 index 会让**第 5 队**开战前被夹成第 4 队 ⇒ 服务端没有杠杆 | `patch.js` 末尾 TEAM-DETAIL（运行时改成「当前队伍」）；反汇编依据：`differences.md` A3d |
 
 ### 6.1 SDK 桩里的「死键」——一类很容易误判成 JS 层 bug 的问题
 

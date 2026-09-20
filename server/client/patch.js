@@ -43,6 +43,18 @@
 //      这里改成运行时改写 XHR / WebSocket 的 URL，jsc 保留原始地址 ——
 //      地址不再有长度约束，配合 `adb reverse` 连局域网都不需要（真机适配走这条）。
 //
+//   9. 队伍详情页默认落到「当前队伍」（客户端自己的 off-by-one）
+//      编成 →「队伍」按钮是 `new TeamDetailLayer()`，**不带队伍下标**，于是走客户端
+//      `_initData` 的兜底：`_.findIndex(this.teams, {index: DEFAULT_TEAM_IDX})`，
+//      而模块常量 `DEFAULT_TEAM_IDX = 1`。本服队伍 `index` 是 0 起，所以兜底落在
+//      **第 2 队** —— 症状就是「一进队伍页默认停在第二页」。
+//      而队伍 index 必须 0 起是客户端自己定的：`TEAM_COUNT_LIMIT = 5`（characterconfig）、
+//      `Player._setCurTeamIdx` 把 curTeamIdx 夹到 [0, TEAM_COUNT_LIMIT-1] = [0,4]、
+//      `Player.getCurTeam()` 又是 `findIndex{index: curTeamIdx}`、
+//      `CommonTeamItem` 传的是 `getCurTeamIdx() - 1`。改服务端 index 会让第 5 队
+//      在开战前被夹到第 4 队，所以服务端没有可用杠杆，只能在客户端补。
+//      详见文件末尾 TEAM-DETAIL 那段。
+//
 // 探针/诊断部分在 probe.js —— release 可以不打包那个文件。
 // 两个文件互相独立，这个文件不依赖 probe.js 的任何东西。
 // ===========================================================================
@@ -1225,6 +1237,123 @@
                 if (patch()) {
                     clearInterval(window.__oppaiFavorTouchTimer);
                     window.__oppaiFavorTouchTimer = null;
+                }
+            }, 500);
+        }
+    })();
+
+
+    // ------------------------------------------------------------------
+    // 队伍详情页默认「当前队伍」—— 修客户端自己的 off-by-one（见文件头第 9 条）
+    //
+    // 反汇编依据（`game/assets/src/ui/team/teamdetaillayer.jsc`，全部实测过）：
+    //
+    //   ① 入口不带参数
+    //        TeamMainLayer._onClickTeamButton:
+    //            cc.director.getRunningScene().push(new TeamDetailLayer(), false, true)
+    //        TeamDetailLayer.ctor:  this.curTeamIdx = param.teamIdx   // undefined
+    //        TeamDetailLayer.onEnter: this._initData(this.curTeamIdx)
+    //
+    //   ② 兜底常量 = 1
+    //        _initData: if (!this.curTeamIdx) {
+    //                       this.curTeamIdx = _.findIndex(this.teams, {index: DEFAULT_TEAM_IDX});
+    //                       this.curTeamIdx = this.curTeamIdx < 0 ? 0 : this.curTeamIdx;
+    //                   }
+    //      模块级常量的槽位对应关系（`getaliasedvar hops=0 slot=N` 里的 N）：
+    //        slot2=ITEM_SIZE_WIDTH=150、slot3=SCOMBATANT_LIMIT=null、slot4=ARMATURE_LIMIT=11、
+    //        slot5=DEFAULT_CHAR_POS="0"、**slot6=DEFAULT_TEAM_IDX=1**、slot7=ATTACK_SELECT_MAX=5、
+    //        slot8=CTM=CHAR_TYPE.MECHA、slot9=HP=clone(HERO_ROLE)、slot10=CTS=CHAR_TYPE.SOLDIER、
+    //        slot11=SP=clone(SOLDIER_POSITIONING)、…、slot16=seekNodeByName、slot17/18/19=三个 lambda
+    //      两个独立校验：`newCharItem`(形参 5 个)/`newCusArmature`(1 个)/`updateArmatureShader`(2 个)
+    //      三个 lambda 正好占 slot17/18/19；`getaliasedvar hops=1 slot=16` 被当 2 参函数调
+    //      （`seekNodeByName(node, "pitchon")`）。所以 names[i] ↔ slot(i+2)，slot6 = DEFAULT_TEAM_IDX = 1。
+    //
+    //   ③ team.index 是**服务端下发**的（`Team.ctor`: `this._index = team.index`），本服是 0..4
+    //      ⇒ findIndex 命中下标 1 ⇒ **第 2 队**。
+    //
+    //   ④ 下标本来就该是 0 起：`CommonTeamItem` 打开详情页时传 `getCurTeamIdx() - 1`。
+    //      也就是说兜底常量该是 0；而且就算传 0 也没用 —— `if (!this.curTeamIdx)` 把 0 当
+    //      「没指定」，又跳回同一个兜底。所以这里没法靠「传 0」修，得在兜底那一步动手。
+    //
+    // 做法：只在「没给下标 / 给的就是 0」时接管，把结果改成玩家当前队伍的下标；
+    //      显式传 1..4（CommonTeamItem 的列表点击）原样不动。
+    //      当前队伍下标是 0 时，客户端那句 `if (!this.curTeamIdx)` 一定会再去找
+    //      `{index: 1}`，所以在那一次调用里临时把 `_.findIndex` 拧成返回 0（同步、finally 还原）。
+    //
+    // 还原原版行为：整块删掉即可（症状回到「队伍页默认第 2 队」）。
+    // ------------------------------------------------------------------
+    (function installTeamDetailDefaultTeam() {
+        // 玩家当前队伍的**下标**。player.curTeamIdx 存的是队伍的 index 值，
+        // 客户端 `Player.getCurTeam()` 就是这么找的，这里照抄同一套规则。
+        function curTeamPos() {
+            var player = null;
+            try { player = window.dataManager && window.dataManager.player; } catch (e) { }
+            if (!player) { return 0; }
+            var teams = player.teams;
+            if (!teams || !teams.length) { return 0; }
+            var cur = player.curTeamIdx;
+            for (var i = 0; i < teams.length; i++) {
+                if (teams[i] && teams[i].index === cur) { return i; }
+            }
+            return 0;
+        }
+
+        function patch() {
+            if (typeof window.TeamDetailLayer === "undefined" || !window.TeamDetailLayer.prototype) {
+                return false;
+            }
+            var proto = window.TeamDetailLayer.prototype;
+            if (proto.__oppaiDefaultTeam) { return true; }
+            var orig = proto._initData;
+            if (typeof orig !== "function") { return false; }
+
+            proto._initData = function (teamIdx) {
+                var want;
+                if (teamIdx === undefined || teamIdx === null) {
+                    want = curTeamPos();                            // 没指定 → 当前队伍
+                } else if (teamIdx === 0) {
+                    want = 0;                                       // 显式第 1 队
+                } else {
+                    return orig.apply(this, arguments);              // 1..4：原样
+                }
+                if (want > 0) {
+                    return orig.call(this, want);                   // 非 0 下标可以直接传
+                }
+                // want === 0：`if (!this.curTeamIdx)` 会让客户端再查一次 {index: 1}，
+                // 那一次查询临时改成命中下标 0（只影响这一次同步调用）。
+                var lodash = window._;
+                if (!lodash || typeof lodash.findIndex !== "function") {
+                    emit("TEAM-DETAIL 找不到 _.findIndex，跳过（队伍页仍会默认第 2 队）");
+                    return orig.apply(this, arguments);
+                }
+                var teams = null;
+                try { teams = window.dataManager.player.teams; } catch (e) { }
+                var real = lodash.findIndex;
+                lodash.findIndex = function (coll, pred) {
+                    if (coll === teams && pred && pred.index === 1) {
+                        return 0;
+                    }
+                    return real.apply(this, arguments);
+                };
+                try {
+                    return orig.apply(this, arguments);
+                } finally {
+                    lodash.findIndex = real;
+                }
+            };
+            proto.__oppaiDefaultTeam = true;
+            emit("TEAM-DETAIL 队伍详情页默认改成「当前队伍」（原版兜底常量 DEFAULT_TEAM_IDX=1 → 第 2 队）");
+            return true;
+        }
+
+        if (patch()) {
+            return;
+        }
+        if (!window.__oppaiTeamDetailTimer) {
+            window.__oppaiTeamDetailTimer = setInterval(function () {
+                if (patch()) {
+                    clearInterval(window.__oppaiTeamDetailTimer);
+                    window.__oppaiTeamDetailTimer = null;
                 }
             }, 500);
         }

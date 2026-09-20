@@ -307,7 +307,7 @@ adb -s 127.0.0.1:21503 logcat -d -v brief | Select-String "OPPAIPATCH|JS ERROR"
 > 最坑的是**解析失败 = 一行都没执行**，别把它当成"跑过了但没效果"。
 >
 > 深入：[`server/docs/build.md`](server/docs/build.md)、
-> [`server/client/patch.js`](server/client/patch.js) 头部（5 条必需适配各自的原因）。
+> [`server/client/patch.js`](server/client/patch.js) 头部（9 条适配各自的原因，其中 6/9 两条是体验改动，可删）。
 
 ---
 

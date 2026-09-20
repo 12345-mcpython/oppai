@@ -168,6 +168,59 @@ python script\disasm_func.py <file.jsc> --list      # 列函数
 python script\disasm_func.py <file.jsc> initUserData
 ```
 
+### 1.8 闭包变量（`getaliasedvar slot=N`）怎么对回名字
+
+反汇编里最常卡住的一步：**模块级常量是数字槽位**，看不到名字。
+
+```
+132  swap | this | getprop "teams" | newinit 1 | getaliasedvar hops=0 slot=6 | initprop "index" ...
+```
+
+`slot=6` 是哪个变量？规则有两条：
+
+1. **`hops` 是「往外套几层 CallObject」**。函数自己有没有 CallObject，看它内部有没有内层函数
+   （字节码里的 `lambda obj#N`）—— 有才需要把被捕获的绑定搬进 CallObject。
+   所以**没有 lambda 的函数，`hops=0` 直接落到模块作用域**。
+   一眼分辨的办法：帧内局部变量走 `getlocal/setlocal`，模块级/被捕获的走
+   `getaliasedvar/setaliasedvar`。例：`TeamDetailLayer._initData` 里
+   `getlocal 0..5` 是它自己的 6 个局部（player/character/i/mechaArr/mecha/charGroups），
+   而 `setaliasedvar hops=0 slot=3` 写的是**模块级**的 `SCOMBATANT_LIMIT`
+   （上阵人数上限的缓存，模块体里初值是 `null` —— 正好反过来印证了这条）。
+
+2. **模块作用域的槽位 = 声明序号 + 2**（0/1 被 `this`/`arguments` 两个保留槽占了）。
+   也就是 `bindings[i]` ↔ `slot(i+2)`。`bindings` 顺序就是源码里的声明序。
+
+   > ⚠️ **这条一定要用已知信息复核，别直接信**。两个便宜又硬的校验点：
+   >
+   > * **lambda 的形参个数**：模块体里 `slot17/18/19 ← lambda obj#0/#1/#2`，
+   >   而子函数表里 `newCharItem` / `newCusArmature` / `updateArmatureShader`
+   >   的 `nargs` 正好是 `5 / 1 / 2`，和 `bindings[15..17]` 一一对上；
+   > * **跨层引用的用法**：`newCharItem` 里 `getaliasedvar hops=1 slot=16` 被当
+   >   **2 参函数**调用（`seekNodeByName(node, "pitchon")`），
+   >   而 `bindings[14]` 正是 `seekNodeByName`。
+
+   实战例子（队伍详情页为什么默认第 2 队）：`teamdetaillayer.jsc` 的模块常量
+   按这个规则解出来是
+
+   ```
+   slot2=ITEM_SIZE_WIDTH=150   slot3=SCOMBATANT_LIMIT=null  slot4=ARMATURE_LIMIT=11
+   slot5=DEFAULT_CHAR_POS="0"  slot6=DEFAULT_TEAM_IDX=1     slot7=ATTACK_SELECT_MAX=5
+   slot8=CTM=CHAR_TYPE.MECHA   slot9=HP=clone(HERO_ROLE)    slot10=CTS=CHAR_TYPE.SOLDIER
+   slot11=SP=clone(SOLDIER_POSITIONING)   …   slot16=seekNodeByName
+   ```
+
+   每一步都能和用法互证（`slot5` 被赋给 `curCharPos`、`slot6` 进了
+   `findIndex{index: …}`、`slot8/10` 当 `charGroups` 的 key、`slot9/11` 取
+   `.ALL/.FRONT/.MIDDLE/.BACK`），所以 `DEFAULT_TEAM_IDX = 1` 是可信的。
+   结论和处置见 [`differences.md`](differences.md) A3d。
+
+工具：
+
+```powershell
+python script\jsc_scope.py <file.jsc> --only "TeamDetailLayer<"   # bindings + 槽位
+python script\alias_use.py <file.jsc> 6 --func _initData          # 某槽位的所有引用 + 上下文
+```
+
 ---
 
 ## 二、运行时探测
@@ -248,6 +301,8 @@ JS 主线程被死循环卡住时，REPL 也发不出去（探针本身跑在 JS
 | `script/jsc_disasm.py` | jsc 反汇编 |
 | `script/disasm_func.py` | 按函数名反汇编 |
 | `script/jsc_strings.py` | 只扒 atom（标识符）表，按源码顺序，定位函数逻辑最快的一把 🔪 |
+| `script/jsc_scope.py` | 打印各 script 的 bindings/槽位（把 `getaliasedvar slot=N` 对回变量名，见 §1.8） |
+| `script/alias_use.py` | 列出某个槽位的全部引用 + 上下文（看它被当函数调还是被当常量用） |
 | `script/gen_opcodes.py` | 生成操作码表 |
 | `script/repl.py` | 在游戏进程里执行 JS |
 | `script/probe.py` | 重启客户端 + 批量执行 + 打日志 |
