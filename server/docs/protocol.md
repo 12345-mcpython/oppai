@@ -634,13 +634,13 @@ SignCenter.updateByServer(data):
                              else            **逐字段合并**进同一条对象
 SignNormalLayer._update():   读 sign.{signKey, count, rewardCount, rewards, canSignToday,
                                    beginTimeSec, endTimeSec, dialogue, soldierKey}
-SignNormalLayer._updateItems(): rewards 是**按天分组的二维数组**（每天一组 {type,key,count}），
+SignNormalLayer._updateItems(): rewards 是 **1 基的二维数组**（见下面第 4 条），
                                 把 `i < sign.count` 的那些天标成已领取
 SignNormalLayer.receiveRewards(): if (!sign.canSignToday) return;   // 签过了根本不发请求
                                   requestReceiveRewards({key: signKey})
 ```
 
-⚠️ 三个坑：
+⚠️ 四个坑：
 
 1. **`signs` 必须是 map**（`{signKey: 行}`）。以前这里给的是 `signs: []`
    → 客户端 `for (k in [])` 一条都拿不到 → **「点签到没用」**
@@ -648,6 +648,19 @@ SignNormalLayer.receiveRewards(): if (!sign.canSignToday) return;   // 签过了
 2. **回包要带 `data.sign` 且 `updateTime` 比上次大**：客户端按 key 逐字段合并进
    **同一个行对象**，界面上的「第 N 天 / 已领取」靠它当场刷新。
 3. 非 200 会被客户端当成 `isTimeout` → 弹 `table_dictionary[3002]`「已经过期」。
+4. **`rewards` 内外两层都是 1 基**（`[null, 第1天, …]`，每天 `[null, item1, …]`）。
+   `SignNormalLayer._updateItems` 的取数是（event/birthday/novice 三层同款）：
+
+   ```js
+   for (i = 0; i < sign.rewardCount; i++)          // i 从 0 数
+       for (j = 1; sign.rewards[i + 1][j]; j++)    // ← 外层 i+1、内层从 1
+           rewards.push(sign.rewards[i + 1][j]);
+   ```
+
+   发 0 基二维数组的后果：走到最后一天 `sign.rewards[7]` 是 undefined →
+   `TypeError: sign.rewards[(i + 1)] is undefined`（signnormallayer.js:84）。
+   实机验证的取数脚本：`out/probe_sign_shape.py`（只走数据层，不开界面）。
+   奖励里**不能放没有图标的道具**（`100101`/`100102`）—— 见 differences.md §F。
 
 排期和奖励**客户端表里没有**（`jsc_find table_sign*` 0 命中）→ 服务端自己定，
 见 `gamesrv/sign.py` 的 `SIGN_REWARDS`（7 天循环）与 differences.md §D。

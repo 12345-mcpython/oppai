@@ -885,8 +885,20 @@ def sign_check(ok: bool) -> bool:
         if field not in row:
             print(f"  BAD 签到行缺字段 {field}（客户端 _update/_updateItems 要读）")
             return False
-    if not isinstance(row.get("rewards"), list) or len(row["rewards"]) != sign.SIGN_DAYS:
-        print(f"  BAD rewards 不是 {sign.SIGN_DAYS} 天的二维数组：{str(row.get('rewards'))[:60]}")
+    reward_days = row.get("rewards")
+    if not isinstance(reward_days, list) or len(reward_days) < sign.SIGN_DAYS + 1:
+        print(f"  BAD rewards 不是 1 基的二维数组（要 rewards[1..{sign.SIGN_DAYS}]，下标 0 留空）："
+              f"{str(reward_days)[:60]}")
+        return False
+    for day_no in range(1, sign.SIGN_DAYS + 1):
+        day_rewards = reward_days[day_no]
+        if not isinstance(day_rewards, list) or not day_rewards[1:]:
+            print(f"  BAD rewards[{day_no}] 里没有 item（内层也是 1 基，下标 0 留空）："
+                  f"{str(day_rewards)[:60]}")
+            return False
+    # 客户端是 `rewards[i + 1][j]`（i 从 0、j 从 1），0 基会走到 `rewards[7]` undefined
+    if reward_days[0] is not None:
+        print(f"  BAD rewards[0] 应该留空（客户端不读，但别把第 1 天放这儿）：{reward_days[0]!r}")
         return False
 
     player = store.get_or_create_player(config.DEFAULT_ACCOUNT)

@@ -166,6 +166,7 @@
 |---|---|---|---|
 | **奖励 / 展示列表里不能出现 `table_item.ic == ""`（`q == 0`）的道具** | 2026-09-20：签到第 7 天的自造奖励用了 `100101`（表里叫「卡槽购买次数」；全表 481 条里只有它和 `100102` 没图标、品质 0） | 客户端 `ItemIcon.updateItemIcon` 只对 `bagconfig.ITEM_QUALITY`（白/绿/蓝/紫/黄）里的品质建 `_iconCase`，品质 0 一个档都匹配不上 → 循环走完 `this._iconCase` 还是 undefined，`if (iconPath) this._iconCase.addChild(sprite)` 抛 `TypeError`（itemicon.js:199；前面还有一发 `bag.getItemIcon()` 的 `cc.assert`，因为 `ic` 空串会拼出 `res/icon/item/undefined.png`）。这条链**一进游戏**就会跑（`SignRewardItem._init → rewardManager.getRewardIcon → new ItemIcon(key)`），异常打断主界面初始化 → **界面点不动、服务端一条请求都收不到**，但网络线程还活着（`boss.getbosslist` 照样每分钟轮询），特别误导 | `selftest_game.py` 的 `item_icon_check`（扫登录块 + 签到/派遣/分区成就/关卡掉落/商店/回礼）；`items.icon_of()` / `items.settle()` 里也加了 warning |
 | `items` 块里别塞客户端不认识的 key | `Bag.updateItems` 是 `this._items[key].count = n`，client 那份 `_items` 是拿 `table_item` **全表预先建行**（481 条） | 真出现陌生 key 就是 `undefined.count = n` 的 TypeError | `items.changed_block()` 只回"改动前就有的 key" |
+| 有些数组字段客户端是 **1 基**读的（下标 0 空着） | 签到奖励 `rewards`：客户端 `for (i = 0; i < rewardCount; i++) for (j = 1; sign.rewards[i + 1][j]; j++)`（i 从 0 数但取 `i+1`，j 从 1 数）。我一开始发的 0 基二维数组 | 走到最后一天 `sign.rewards[7]` 是 undefined → `TypeError: sign.rewards[(i + 1)] is undefined`（signnormallayer.js:84），和上一条一样**打断主界面初始化**（界面点不动、服务端没请求）。`count` 是 0 基而 `rewards` 是 1 基，这个错位是客户端自己的约定 | `sign._days_1based()`；`sign_check` 钉住形状；实机取数脚本 `out/probe_sign_shape.py` |
 
 ---
 

@@ -18,7 +18,7 @@ SignCenter.updateByServer(data):
                              else            **逐字段合并**进同一条对象里
 SignNormalLayer._update():  读 sign.{signKey, count, rewardCount, rewards, canSignToday,
                                  beginTimeSec, endTimeSec, dialogue, soldierKey}
-SignNormalLayer._updateItems(): rewards 是**按天分组的二维数组**，
+SignNormalLayer._updateItems(): rewards 是**1 基**的二维数组（见下面 `_days` 的注释），
                                 第 i 天那组里 item 数 > 1 时用一个通用图标
                                 （`rewardManager.getRewardIcon` 认 {type,key,count}）
                                 并把 `i < sign.count` 的那些天标成已领取
@@ -71,6 +71,29 @@ SIGN_REWARDS = (
 # `script/selftest_game.py` 的 item_icon_check）。
 
 PLAYER_KEY = "sign"
+
+
+def _day_items(day) -> list:
+    """一天的那组奖励 -> 客户端要的形状：`[null, item1, item2, …]`（**1 基**）。"""
+    return [None] + [{"type": t, "key": k, "count": c} for (t, k, c) in day]
+
+
+def _days_1based() -> list:
+    """`rewards`：`[null, 第1天, …, 第N天]` —— 内外两层都是 **1 基**。
+
+    客户端 `SignNormalLayer._updateItems`（三个层 event/birthday/novice 同款）是：
+
+        for (i = 0; i < sign.rewardCount; i++)          // i 从 0 数
+            for (j = 1; sign.rewards[i + 1][j]; j++)    // ← 外层 i+1、内层从 1
+                rewards.push(sign.rewards[i + 1][j]);
+
+    所以服务端要发 `rewards[1..rewardCount]`、每天 `[1..n]`，两边下标 0 都空着
+    （放 null 占位，客户端不读）。**发 0 基二维数组的后果**：走到最后一天时
+    `sign.rewards[7]` 是 undefined → `TypeError: sign.rewards[(i + 1)] is undefined`
+    @ signnormallayer.js:84 —— 而这个异常发生在**一进游戏**初始化主界面那一段
+    （见 §F/§6.14 同一类坑），表现同样是「界面点不动、服务端一条请求都收不到」。
+    """
+    return [None] + [_day_items(day) for day in SIGN_REWARDS]
 
 
 def state(player: dict) -> dict:
@@ -135,8 +158,7 @@ def row(player: dict) -> dict:
         "type": SIGN_TYPE_NORMAL,
         "count": count,
         "rewardCount": SIGN_DAYS,
-        "rewards": [[{"type": t, "key": k, "count": c} for (t, k, c) in day]
-                    for day in SIGN_REWARDS],
+        "rewards": _days_1based(),
         "canSignToday": 1 if can_sign_today(player) else 0,
         "beginTimeSec": start,
         "endTimeSec": end,
