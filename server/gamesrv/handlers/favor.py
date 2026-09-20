@@ -20,8 +20,13 @@
 （没有换装表，`table_constant` 里也没有对应项），这里给 0 = 换装不加好感度。
 要改成加经验，只要在 `_set_look` 里给 `gain` 一个值。
 
-尚未实现：`favorevent.seteventsunlock`（宿舍事件，`FavorEventCenter`）。
-登录块里 `favorevent` 目前还是空桩，够用 —— 没有事件就没有红点。
+尚未实现：无（`favorevent.seteventsunlock` 在 `handlers/favorevent.py` 里，登录块的
+`favorevent` 也已经是实的）。
+
+⚠️ 响应里这些 `favor` / `newFavorEvent` / `useGiftStatus` 块**要靠客户端派发才生效**，
+而引擎里 `src/util/server.js` 的 `responseConfig` 一次都没被派发 ——
+客户端 `server/client/patch.js` 的 RESP-DISPATCH 把这一层补齐了（见 protocol.md §5.2）。
+所以「改了好感度但界面不动」先去看那一层，不要改服务端。
 """
 
 from __future__ import annotations

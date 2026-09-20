@@ -447,7 +447,7 @@ quicksdk.sdkLoginCallback(1, "emulator", "emulator-token")
 | `Gacha.getGachaFullInfo` 兜底 | 缺扭蛋配置时抛异常会把 `initUserData` 后半段全打断 |
 | 数据模块构造容错 | 某个模块数据没对齐时不连累整体 |
 | `initUserData` 兜底 | 无论如何保证 `player._moduleState` 建出来（否则主界面黑屏） |
-| `RESP-DISPATCH` 响应派发 | 客户端 `responseConfig` 在这套引擎上根本没被派发，自己补一层 |
+| `RESP-DISPATCH` 响应派发 | 客户端 `responseConfig` 在这套引擎上根本没被派发，自己补一层。⚠️ **原版那张表有三类写法**（收整个 `res` 的 / `updateByServer` 的 / 方法名各不相同的），只补中间那批的话 `favor` / `newFavorEvent` / `useGiftStatus` 整条是死的 —— 详见 [`docs/protocol.md`](docs/protocol.md) §5.2 |
 | LGL-GUARD | 视频层清理 + 最后一帧回调幂等 |
 
 `probe.js` 做的事：

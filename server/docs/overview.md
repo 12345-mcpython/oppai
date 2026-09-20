@@ -177,15 +177,20 @@ vanilla 不传参 → 游戏代码 `function (eventName) { if (/began\d/.test(ev
 | `Gacha.getGachaFullInfo` 空壳兜底 | 缺扭蛋配置时会抛异常，把 `initUserData` 后半段全打断 |
 | 数据模块构造容错 | 某个模块数据没对齐时不连累整体 |
 | `initUserData` 兜底 | 无论如何保证 `player._moduleState` 建出来（否则主界面黑屏） |
-| **`RESP-DISPATCH`** | 客户端 `responseConfig` 在这套引擎上根本没被派发，自己补一层响应分发 |
+| **`RESP-DISPATCH`** | 客户端 `responseConfig` 在这套引擎上根本没被派发，自己补一层响应分发。**三类写法都要补**（收整个 `res` 的 / `updateByServer` 的 / 方法名各不相同的），只补中间那批的话好感度整条是死的 —— 见 [protocol.md §5.2](protocol.md) |
+| 宿舍互动判定框放大 | ⚠️ **这条是私服体验改动，不是修 bug**（原版 100×100 且不可见） |
 
 ### `probe.js` —— 诊断（`--no-probe` 时不打包）
 
 日志转发、`Proxy` 探字段、REPL、调用序列追踪、异常 stack、登录期/战斗期各种 hook。
 
 > ⚠️ 探针的第一原则：**只包一层，不要重写**。
-> 早先的版本把 `server.request` 整个重写了，结果把客户端原生的响应派发整条路绕掉了，
-> 害得「服务端推数据」全部失效，查了很久才反应过来。
+>
+> 早先的版本把 `server.request` 整个重写了，一度被当成「服务端推数据失效」的元凶。
+> 后来实测**不是它**：原生 `responseConfig` 在这套引擎上本来就不跑
+> （`Favor.prototype.update` 调用 0 次，见 [protocol.md §5.2](protocol.md)）。
+> 不过「只包一层」这条规矩仍然要守 —— 当初那版重写确实把响应派发绕掉了，
+> 让排查多绕了一圈。
 
 ---
 
@@ -220,6 +225,10 @@ vanilla 不传参 → 游戏代码 `function (eventName) { if (/began\d/.test(ev
 | 退出弹窗**点「确定」没反应**（「取消」正常） | `Sdk.exit()` 是 `sdk_strip/gen_stubs.py` 生成的**空桩**，按钮调它等于没调 | `patch_smali.py` → `patch_sdk_exit()` |
 | 关卡列表**不显示通关**、章节星级恒为 0；按通关解锁的功能（如「萌源增幅」）**永远锁着** | 登录包里 `instance` 被 `_module_stubs` 的桩覆盖成 `{"levels": []}` —— `data.update()` 排在真实进度**之后**，把整块顶掉。客户端 1142 个 Level 全停在 `_starMark = -1` | `agent.get_login_data` / `_module_stubs`（**桩里不要再出现 `instance`**）—— 见 §6.2 |
 | 用调试台「全部三星通关」作弊、甚至**重登都不生效** | 同一个根因：服务端存档早写对了，但**进度从没发到客户端**。客户端只在登录那一刻读一次关卡，所以"重登"也救不了没发出去的数据 | 同上 |
+| 服务端**明明发了**数据（日志里有），客户端界面不动 | 中间那层转发（`responseConfig`）在这套引擎上不跑；`patch.js` 的 RESP-DISPATCH 补了没有 | §6.12 + [protocol.md §5.2](protocol.md) |
+| 宿舍里好感度涨了，**进度条/等级要重登才动** | 同上：`data.favor` 一直没人派发给 `FavorCenter.cb4ResFavor`（`Favor.prototype.update` 调用 0 次） | 同上 |
+| 关卡结算面板**「获得物资」永远空着**、`Exp+N` 恒为 0 | 奖励块挂在 `data.level` 上了；客户端读的是 `data.rewards.levelReward`，而 `data.level` 只走 `Level.updateLevel()` | `gamesrv/instance.py` |
+| 通关后**好感度弹窗不出现/显示 +0** | 数量要回在 `rewards.levelReward.favor`（"给谁"由客户端拿自己 `table_level.favor_char_key` 算）；回了 `data.rewards.favorReward.favors` 会走到客户端一个 `.count` 写错的死分支 | `gamesrv/favor.py` + `instance.py` |
 
 ### 6.1 SDK 桩里的「死键」——一类很容易误判成 JS 层 bug 的问题
 
@@ -532,6 +541,46 @@ logcat 里只有一行 `JS ERROR: TypeError: config is undefined @ equipmentstre
 
 ---
 
+### 6.12 「服务端改了、客户端不动」——先查**推数据**有没有派发
+
+给战斗结算加好感度时撞上的：服务端 `instance.finishlevel` 回了 `rewards.levelReward.favor`
+和 `data.favor`，客户端**一点反应都没有**。原因不在数据、也不在形状，而在中间那一层
+转发（`responseConfig`）压根没跑，见 [protocol.md §5.2](protocol.md)。
+
+排查办法（照抄即可，别靠读反汇编猜）：
+
+```js
+// 1) 把「唯一入口」包一层计数。Favor.update 是把服务端那一行套到本地的唯一入口
+var f = dataManager.favorCenter.getFavorByKey('sasm');
+var p = Object.getPrototypeOf(f), o = p.update;
+p.update = function () { p.__n = (p.__n || 0) + 1; return o.apply(this, arguments); };
+// 2) 发一个**幂等**的请求（把衣服换成现在这件，状态不变但响应里带 favor 块）
+server.request('favor.setclothes', {charKey:'sasm', itemKey:f.curClothes}, cb, false);
+// 3) 读计数：0 = 没派发
+```
+
+⚠️ 探针的两个坑，都真踩过：
+
+* **第 4 个参数 `isBackstageRequest` 要和真实调用一致**。`Favor.submitSetClothes` 传的是
+  `false`；先传 `true` 测出「没派发」，结论作废，得重测（两次结果一样，但过程不严谨）。
+* **别只包 `cb4ResFavor`**：万一派发方持有的是方法引用（构造时就取好了），包它是看不见的。
+  包 `Favor.prototype.update` 这种「下游唯一入口」才与实现无关。
+
+修法同样分两层，缺一层都不生效：
+
+1. **客户端**：`patch.js` 的 RESP-DISPATCH 把 `responseConfig` 那三类写法补齐
+   （收整个 `res` 的 / `updateByServer` 的 / 方法名各不相同的）——
+   细节和「`{code, data: res.data[key]}` 为什么要包一层」见 protocol.md §5.2。
+2. **服务端**：把块放对位置。以关卡结算为例，**奖励块必须在 `data.rewards` 里**，
+   `data.level` 只走 `Level.updateLevel()`（只认星级/次数/时间三个字段）——
+   以前 `dropReward` / `levelReward` 挂在 `data.level` 上，表现就是结算面板
+   「获得物资」永远空着、`Exp+N` 恒为 0。
+
+**教训**：这类问题的症状是「服务端明明发了」，很容易反向怀疑数据形状，
+于是把形状改来改去都没用。**先量转发层有没有到**，再谈形状。
+
+---
+
 
 
 ## 7. 现状与待办
@@ -580,6 +629,15 @@ logcat 里只有一行 `JS ERROR: TypeError: config is undefined @ equipmentstre
       守护灵上限跟着**好感度等级**走（`table_favor_upgrade[lv].max_daemon_lv`，前 6 级是 0）、
       材料喂军士（`table_daemon_exp[品质]` 的同角色/同类型/其它三档）、军士真被吃掉；
       助战改 `player.asstKey`（重登靠登录包恢复）
+- [x] **战斗结算给好感度**：数值来自客户端表 `table_level.favor` /
+      `favor_char_key`（这两列**客户端一行代码都不读**，是原版留给服务端的），
+      服务端只回**数量**，给谁由客户端拿自己那张表算（没有 `favor_char_key` 就全队 +
+      主角一人一份）。顺带把奖励块从 `data.level` 挪到 `data.rewards` ——
+      那一层才是 `_dealLevelResult` 读的地方。见 §6.12
+- [x] **修好响应派发**：`patch.js` 的 RESP-DISPATCH 原来只补了 `updateByServer` 那批，
+      `favor` / `newFavorEvent` / `useGiftStatus` 这一整条一直是死的
+      （宿舍好感涨了、进度条和等级要重登才动）。现在照原版 `responseConfig` 三类写法补齐，
+      并且不再「重试 2 分钟就放弃」。见 §6.12 + [protocol.md §5.2](protocol.md)
 - [x] 文档：协议 / 逆向手法 / 打包逻辑 / 调试台 / 引擎调试 / 本总览 / **与原版的差异** / **从零复刻**
 
 ### 待办（按卡点排序）
@@ -587,16 +645,25 @@ logcat 里只有一行 `JS ERROR: TypeError: config is undefined @ equipmentstre
 1. **扭蛋 / 抽卡** —— 缺 `gachaMasterList` 运营配置；现在只保证不崩。
    `GUIDE_GACHA_KEY = 1002`（`GACHA_KEYS.GEM`）。
 2. **日常 / 成就任务** —— 只做了 `type=2`（主线）；日常 246 条 / 成就 91 条。
-3. **战果报告的「获得物资」还是空的** —— 服务端已经把通关奖励算出来了
-   （`level.dropReward / firstComplete / appraise / levelReward`，日志里能看到
-   `掉落={'100002': 593} 首通={'100001': 20} exp=60`），但客户端面板读的不是这里：
+3. **战果报告的「获得物资」还没在实机确认** —— 服务端现在把奖励块放在**对的那一层**了
+   （`data.rewards.dropReward / firstComplete / appraise / levelReward`，
+   日志里能看到 `掉落={'100002': 593} 首通={'100001': 20} exp=60`）。
 
-   `LevelWinBase._init(args)` 读的是 **`args.rewards / args.firstComplete /
-   args.appraise / args.rank / args.favorReward`**，而 `args` 是
-   `instanceManager.onBattle/</showCb` 拼的那个对象 —— 那个对象里只有
-   `againCb / backCb / battleInfo / result`（+`starMark` / `id`），**根本没有 rewards**。
-   下一步要么找出原版是从哪儿补进去的，要么在 patch.js 里包一层
-   `showCb` 的入参（把服务端回来的奖励塞进 `args`）。
+   客户端的链路是（都是反汇编钉的）：
+
+   ```
+   Instance.finishLevel/<   ret = this._dealLevelResult(res.rewards)   // 只认 data.rewards
+                            ret.rank = ...                            // 读 rewards.levelReward.playerInfo
+                            cb(undefined, ret)
+   LevelCompleteLayer.ctor(args)   this._result = args.result          // ← args.result = ret
+   LevelWinBase._init()            this._rewardsList = this._result.rewards
+   ```
+
+   所以奖励块**必须**在 `data.rewards` 里（以前挂在 `data.level` 上，`_dealLevelResult`
+   根本看不到 → 面板永远空）。⚠️ 还没实机确认的一环是
+   **`args.result` 到底是不是 finishlevel 那个 `ret`**（`instancemanager` 是反汇编里
+   少数对不齐的文件，`showCb` 的入参拼不出来）。如果实机面板还是空的，
+   下一步就是在 `patch.js` 里包 `instanceManager` 的 `showCb` 入参，把 `ret` 塞进 `args.result`。
 
 4. **助战（好友支援）列表渲染不出来** —— 服务端已经能正确回 NPC 名单
    （`friendsupport.getrecommendsoldiers` -> 20 个 `npcId`，客户端

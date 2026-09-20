@@ -23,7 +23,8 @@
 |---|---|---|---|
 | A1 | **整个服务端自研** | 原版服务端已随停服消失。纯标准库 Python，CDN/gate/login/game 四个端口 | `server/` |
 | A2 | **重建 `libcocos2djs.so`** | 原版 `.so` 是用**改过的** cocos2d-js 3.6 编的，仓库里那版对不上。按 v3.6 重建 + 13 个补丁 | `engine/`、[`engine-debug.md`](engine-debug.md) |
-| A3 | **客户端 API 适配 5 条** | 引擎换了，几个绑定名对不上，不改直接黑屏 | `server/client/patch.js` 头部 |
+| A3 | **客户端适配 7 条**（`patch.js`） | 引擎换了，几个绑定名对不上，不改直接黑屏；另外引擎里 `responseConfig` 不派发、少了几个绑定 | `server/client/patch.js` 头部 |
+| A3b | **响应派发自己补一层** | 原版靠 `src/util/server.js` 的 `responseConfig` 把响应里的模块块推给各中心，这套引擎上**一次都没跑**（实测 `Favor.prototype.update` 调用 0 次）。`patch.js` 的 RESP-DISPATCH 照它的三类写法补齐才生效 | [protocol.md §5.2](protocol.md) |
 | A4 | **Java 层绕开渠道登录** | 原版走 QuickSDK→百度登录，那两个服务器早下线了，弹窗永远登不进去。改成原生直接回调「登录成功」 | `server/client/patch_smali.py`、`ServerLoginRunnable.smali` |
 | A5 | **删掉第三方 SDK（46.6MB）** | 统计/推送/广告/渠道全下线了，留着只是体积 | `script/sdk_strip/` |
 | A6 | **登录不走真实 DH** | 原版握手用自研 DH + `hashKey`/`hmac64`，算法没还原。私服用 **DH 单位元**当共享密钥 | [`protocol.md`](protocol.md) |
@@ -80,15 +81,20 @@
 
 **已知的"能看见但不完整"：**
 
-* **战果报告的「获得物资」是空的** —— 服务端**已经**算出掉落了
-  （日志里能看到），但客户端 `LevelWinBase._init(args)` 读的 `args.rewards`
-  没人填，卡在客户端那侧
+* **战果报告的「获得物资」** —— 服务端已经把奖励块挪到客户端真正读的那一层
+  （`data.rewards.dropReward / firstComplete / appraise / levelReward`），
+  但 `instancemanager` 是少数反汇编对不齐的文件，`showCb` 的入参拼不出来，
+  所以「`args.result` 是不是 finishlevel 那个 `ret`」还没实机确认（见 `overview.md` §7 待办 3）
 * **助战（好友支援）弹窗渲染不出来** —— 服务端能正确回 20 个 `npcId`，
   客户端 `FriendSupport._recommendList` 也收到了，但 `SupportChoiceLayer` 不显示。
   **不影响战斗**（那弹窗是可选的）
 * **装备星级显示 0 颗** —— 第二属性组的选取规则没还原，`secondAttrKeys` 留空
-* **宿舍事件的红点是推下来的**，但"登录响应里能不能派发"没实机确认过
-  （见 `overview.md` §6.8）
+* **指挥部（玩家）等级不会升** —— 服务端只累加 `curExp`，没有升级逻辑；
+  经验条会涨、等级一直不变
+* **客户端表里有一条走不通的好感度分支** —— `LevelWinBase.getFavorUpCharsInfo` 的
+  `favors` 分支写的是 `favors.count`（`favors` 是数组，`.count` 恒为 `undefined`），
+  所以服务端**不能**用 `rewards.favorReward.favors` 那种形状下发好感度，
+  得用 `rewards.levelReward.favor`。这是原版客户端自己的 bug，没去改它
 
 ---
 
@@ -113,7 +119,14 @@
 好感度升级曲线（`table_favor_upgrade`，500/700/…/90000，满级 15）、
 抚摸加值（`touch_favor_add = 22`）、互动次数上限 5 / 每小时回 1、
 礼物加值（`table_favor_gift`）、回礼内容（`table_char_favor_receive_talk`）、
-军士升级公式、装备属性 key 规则、天赋升级消耗 —— 全部用的客户端原表。
+军士升级公式、装备属性 key 规则、天赋升级消耗、
+**战斗结算的好感度**（`table_level.favor` / `favor_char_key`，895 关有值）——
+全部用的客户端原表。
+
+> 最后一条值得单说：`table_level.favor` / `favor_char_key` 这两列**客户端一行代码都不读**
+> （`Level` 只把它们挂成只读属性，全库 `jsc_find getFavor` 只命中 getter 自己）。
+> 也就是说它们是**原版留给服务端的数据**，正好落在我们手里 ——
+> 这类"客户端表里没人读的列"是还原数值时最可靠的线索。
 
 ---
 

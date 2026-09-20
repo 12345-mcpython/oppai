@@ -274,6 +274,86 @@ def favor_check(ok: bool) -> bool:
     return ok
 
 
+def level_result_check(ok: bool) -> bool:
+    """`instance.finishlevel` 的回包形状（战斗结算）。
+
+    这一条只查**形状**和「好感度真的落到了对应角色头上」，规则细节在
+    `selftest_favor.py`（那个不用起服务端，断言更细）：
+
+    * 奖励块必须在 `data.rewards` 里 —— 客户端 `Instance.finishLevel/<` 读的是
+      `res.rewards.levelReward` 和 `_dealLevelResult(res.rewards)`；
+      `data.level` 只走 `Level.updateLevel()`（只认星级/次数/时间三个字段）。
+      挂错层的表现就是结算面板「获得物资」永远空着。
+    * 好感度只回**数量**（`rewards.levelReward.favor`），"给谁"是客户端拿自己
+      `table_level.favor_char_key` 算的（没有就全队军士 + 主角）。
+    * `data.favor` 必须是 `{charKey: 行}` 的 map，而且要和登录块里那份**一致**
+      （响应说涨了、存档没涨 = 撒谎）。
+
+    ⚠️ 会真的记一次通关（星级 / 次数 / 经验 / 好感都会动），所以挑的是表里
+    favor 最小、且没有 favor_char_key 的那一关（全队一人一份，顺带验多行 favor 块）。
+    """
+    from gamesrv import instance
+
+    tbl = instance._level_table().get("level") or {}
+    cands = [(int(v.get("favor") or 0), k) for k, v in tbl.items()
+             if int(v.get("favor") or 0) > 0 and not v.get("fck")]
+    if not cands:
+        print("  BAD 关卡表里没有「有 favor、没 favor_char_key」的关，抽表可能没跑")
+        return False
+    amount, level_id = min(cands)
+
+    login = call("agent.getlogindata", {}, 113)
+    before = ((login.get("data") or {}).get("favor") or {}).get("favors") or {}
+
+    res = call("instance.finishlevel",
+               {"levelId": level_id, "starMark": 7, "curTeamIdx": 0}, 114)
+    if res.get("code") != 200:
+        print(f"  BAD instance.finishlevel code={res.get('code')} {res}")
+        return False
+    data = res.get("data") or {}
+    rewards = data.get("rewards") or {}
+    level = data.get("level") or {}
+    lr = rewards.get("levelReward") or {}
+    granted = data.get("favor") or {}
+
+    bad = []
+    if lr.get("favor") != amount:
+        bad.append(f"rewards.levelReward.favor={lr.get('favor')!r} 期望 {amount}")
+    if not isinstance(granted, dict) or not granted:
+        bad.append(f"data.favor 不是非空 map：{granted!r}")
+    if "playerInfo" not in lr or "playerAttr" not in (lr.get("playerInfo") or {}):
+        bad.append("rewards.levelReward.playerInfo.playerAttr 缺了（Exp+N 会不动）")
+    if level.get("starMark") != 7:
+        bad.append(f"data.level.starMark={level.get('starMark')!r}（星级要在这一层）")
+    wrong = sorted({"dropReward", "levelReward", "appraise", "firstComplete"} & set(level))
+    if wrong:
+        bad.append(f"奖励块跑到 data.level 里了：{wrong}")
+
+    after = ((call("agent.getlogindata", {}, 115).get("data") or {})
+             .get("favor") or {}).get("favors") or {}
+    for key, row in granted.items():
+        old = before.get(key) or {}
+        new = after.get(key) or {}
+        if key not in before:
+            bad.append(f"{key} 不在登录块的好感度表里")
+            continue
+        if (int(new.get("lv") or 1), int(new.get("curExp") or 0)) != \
+           (int(row.get("lv") or 1), int(row.get("curExp") or 0)):
+            bad.append(f"{key} 响应行与存档不一致：响应 lv{row.get('lv')}/{row.get('curExp')}"
+                       f" vs 存档 lv{new.get('lv')}/{new.get('curExp')}")
+        if int(old.get("curExp") or 0) == int(new.get("curExp") or 0) and \
+           int(old.get("lv") or 1) == int(new.get("lv") or 1):
+            bad.append(f"{key} 好感度没涨（响应说涨了 {amount}）")
+
+    if bad:
+        for one in bad:
+            print(f"  BAD {one}")
+        return False
+    print(f"  OK  战斗结算：level {level_id} 好感 +{amount} 落到 "
+          f"{sorted(granted)}（奖励块在 data.rewards，data.level 只有星级/次数）")
+    return ok
+
+
 def main():
     cases = [
         ("agent.getlogindata", {}),
@@ -321,6 +401,13 @@ def main():
         restore_roster()
     except Exception as exc:  # noqa: BLE001
         print(f"  ..  收尾补军士失败（不影响结论）: {exc}")
+
+    print()
+    try:
+        ok = level_result_check(ok)
+    except Exception as exc:  # noqa: BLE001
+        print(f"  BAD 战斗结算自检异常: {exc}")
+        ok = False
 
     print()
     try:

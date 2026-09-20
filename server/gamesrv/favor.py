@@ -71,7 +71,7 @@ from __future__ import annotations
 import random
 import time
 
-from . import items, logx, store
+from . import items, logx, soldier, store
 
 log = logx.get("favor")
 
@@ -470,6 +470,17 @@ def row_block(char_key: str, row: dict) -> dict:
     return {str(char_key): row}
 
 
+def rows_block(player: dict, char_keys) -> dict:
+    """响应里的 `favor` 块，一次给多个角色（`cb4ResFavor` 本来就是按 key 遍历的）。
+
+    ⚠️ key **必须**是客户端也认识的角色：`cb4ResFavor` 里是
+    `var favor = this._favors[i]; ... favor.lv`，不认识就直接 TypeError。
+    这里只回玩家真有好感度行的那些（客户端 `_favors` 按整张表建，必然认识）。
+    """
+    favors = store.player_favors(player)
+    return {str(k): favors[str(k)] for k in (char_keys or []) if str(k) in favors}
+
+
 # ---------------------------------------------------------------------------
 # 好感度经验
 # ---------------------------------------------------------------------------
@@ -499,6 +510,71 @@ def add_exp(row: dict, amount: int) -> int:
     row["lv"] = lv
     row["curExp"] = exp
     return up
+
+
+# ---------------------------------------------------------------------------
+# 战斗结算的好感度（`instance.finishlevel`）
+# ---------------------------------------------------------------------------
+def level_favor_targets(player: dict, favor_char_key, team: dict) -> list:
+    """这次战斗的好感度**给谁**。
+
+    规则不在服务端，在客户端 —— `Instance.finishLevel/<` 把服务端回的
+    `rewards.levelReward.favor`（只有数量）配上**自己关卡表里的**
+    `table_level[levelId].favor_char_key` 打包成 `ret.favorObj`，
+    再由 `LevelWinBase.getFavorUpCharsInfo(ret)` 决定发给谁：
+
+        ret.favorObj.favorCharKey 有值 -> 只给他一个人，并记成 storyCharKey
+        没有                            -> 当前队伍**所有军士 + heroKey** 一人一份
+
+    ⚠️ 所以服务端必须复刻同一列（抽取时压成 `table_level_reward.json` 的
+    `fck`），否则会出现「弹窗说 A 涨了、存档给 B 涨了」。
+
+    ⚠️ 队伍里的 `soldierKeys` 是**军士 id**，要翻成角色 key
+    （`Team.getSoldierKeys()` 给的是 `_soldiers[i].charKey`）。
+    """
+    fck = str(favor_char_key or "")
+    if fck:
+        return [fck]
+
+    keys: list = []
+    seen: set = set()
+
+    def add(key):
+        key = str(key or "")
+        if key and key not in seen:
+            seen.add(key)
+            keys.append(key)
+
+    for soldier_id in (team or {}).get("soldierKeys") or []:
+        row = store.find_soldier(player, soldier_id)
+        add(soldier.char_key_of((row or {}).get("key")))
+    add((team or {}).get("heroKey"))
+    return keys
+
+
+def grant_level_favor(player: dict, level_info: dict, team: dict) -> dict:
+    """关卡结算加好感度，返回 `{charKey: 加了多少}`（只含**真的加上去**的）。
+
+    ⚠️ 只给**已经有好感度行**的角色加：`new_favor_row` 里 `id` 的有无就是客户端的
+    `isAcquired`，没获得过的角色不能因为「通了他出场的那一关」就凭空变成已获得。
+    所以调用方要拿返回值的**空/非空**决定要不要给客户端回 `favor`（弹窗上那个
+    `+N` 就是它，回一个没真加上去的数字就是撒谎）。
+
+    ⚠️ 每个中招的角色各加**一份**（不是一个总量大家分）—— 客户端的
+    `calcFavor(charKey, favor)` 是对每个 key 都 `+= favor`。
+    """
+    amount = int((level_info or {}).get("favor") or 0)
+    if amount <= 0:
+        return {}
+    favors = store.player_favors(player)
+    granted: dict = {}
+    for char_key in level_favor_targets(player, (level_info or {}).get("fck"), team):
+        row = favors.get(char_key)
+        if not isinstance(row, dict):
+            continue
+        add_exp(row, amount)
+        granted[char_key] = amount
+    return granted
 
 
 def sync_interact(player: dict, now: int | None = None) -> int:

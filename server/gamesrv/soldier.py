@@ -109,6 +109,16 @@ def card_cost(key: str) -> int:
     return int((tables().get("card") or {}).get(str(key), {}).get("c") or 0)
 
 
+def char_key_of(key: str) -> str:
+    """军士表的 key（`sads010101`）-> 角色 key（`sads`）。
+
+    走 `table_soldier[key].char_key`，抽取时压成了 `card.<key>.ck`。
+    好感度那条链路要用它把 `Team.soldierKeys`（**军士 id**）翻成角色 key
+    —— 客户端 `Team.getSoldierKeys()` 给的是 `_soldiers[i].charKey`。
+    """
+    return str(((tables().get("card") or {}).get(str(key)) or {}).get("ck") or "")
+
+
 # CARD_TYPE（客户端 src/data/soldier.js）
 CARD_TYPE_TEAMMATE = 1
 CARD_TYPE_ENEMY = 2

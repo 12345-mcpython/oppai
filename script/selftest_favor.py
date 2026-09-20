@@ -34,7 +34,7 @@ import _paths  # noqa: F401,E402
 
 sys.path.insert(0, _paths.SERVER)
 
-from gamesrv import favor, items, store  # noqa: E402
+from gamesrv import favor, instance, items, soldier, store  # noqa: E402
 from gamesrv.handlers import agent, favor as hfavor  # noqa: E402
 from gamesrv.handlers import favorevent as hfavor_event  # noqa: E402
 from gamesrv.handlers import load_all  # noqa: E402
@@ -601,6 +601,94 @@ def interact_check():
     check("0 次时不再扣", favor.spend_interact(player) == 0)
 
 
+def battle_favor_check():
+    """关卡结算的好感度（`instance.finishlevel` 的 `rewards.levelReward.favor`）。
+
+    规则照客户端 `LevelWinBase.getFavorUpCharsInfo` 反汇编复刻：
+    有 `favor_char_key` 就只给那一个角色，没有就全队军士 + 主角一人一份。
+    给多少在客户端表 `table_level.favor` 里（`table_level_reward.json` 的 `favor`）。
+    """
+    print("== 战斗结算好感度 ==")
+    reload_()
+    tbl = instance._level_table()["level"]
+    owns = set(store.player_favors(player))
+    story = sorted(k for k, v in tbl.items()
+                   if v.get("fck") and int(v.get("favor") or 0) > 0 and v["fck"] in owns)
+    plain = sorted(k for k, v in tbl.items()
+                   if not v.get("fck") and int(v.get("favor") or 0) > 0)
+    check("有 favor_char_key、且角色已获得的关存在", bool(story), str(story[:3]))
+    check("没有 favor_char_key、但有 favor 的关存在", bool(plain), str(plain[:3]))
+    check("客户端表里 favor / fck 两列真的抽到了（不是空表）",
+          sum(1 for v in tbl.values() if int(v.get("favor") or 0) > 0) > 500,
+          "= %d 关" % sum(1 for v in tbl.values() if int(v.get("favor") or 0) > 0))
+
+    # ---- 指定角色那条 ----
+    sid = story[0]
+    info = tbl[sid]
+    amount = int(info["favor"])
+    before = int(store.find_favor(player, info["fck"])["curExp"])
+    data = instance.finish_level(player, {"levelId": sid, "starMark": 7, "curTeamIdx": 0})
+    check("favor_char_key 那个角色拿到了 %d" % amount,
+          int(store.find_favor(player, info["fck"])["curExp"]) == before + amount,
+          "%s: %d -> %d" % (info["fck"], before,
+                            int(store.find_favor(player, info["fck"])["curExp"])))
+    check("响应里带 favor 块（给客户端 cb4ResFavor，key 是角色 key）",
+          set(data.get("favor") or {}) == {info["fck"]}, str(data.get("favor"))[:60])
+    check("数量挂在 data.rewards.levelReward.favor（客户端只读这一条）",
+          data["rewards"]["levelReward"]["favor"] == amount)
+    check("奖励块**不在** data.level 里（那层只走 Level.updateLevel）",
+          not ({"dropReward", "levelReward", "appraise"} & set(data["level"])))
+    check("data.level 只留 updateLevel 认的三个字段 + levelId",
+          set(data["level"]) == {"starMark", "challengeTimes", "lastUpdateTimeSec", "levelId"},
+          str(sorted(data["level"])))
+
+    # ---- 全队那条 ----
+    pid = plain[0]
+    pamount = int(tbl[pid]["favor"])
+    # 先往队伍里塞 3 个军士（新号默认队伍是空的，不塞就只验到主角一个人）
+    team = (player.get("teams") or [{}])[0]
+    team["soldierKeys"] = [s["id"] for s in store.ensure_soldiers(player)[:3]]
+    want = {soldier.char_key_of(store.find_soldier(player, sid2)["key"])
+            for sid2 in team["soldierKeys"]}
+    want |= {team.get("heroKey")}
+    check("全队那条至少 4 个角色（3 军士 + 主角）", len(want) >= 4, str(sorted(want)))
+    before_rows = {k: int(store.find_favor(player, k)["curExp"]) for k in want}
+    data = instance.finish_level(player, {"levelId": pid, "starMark": 7, "curTeamIdx": 0})
+    got = {k for k in want
+           if int(store.find_favor(player, k)["curExp"]) == before_rows[k] + pamount}
+    check("没有 favor_char_key -> 全队军士 + 主角一人一份 %d" % pamount,
+          got == want, "want=%s got=%s" % (sorted(want), sorted(got)))
+    check("favor 块一次给多行", set(data.get("favor") or {}) == want,
+          str(sorted(data.get("favor") or {})))
+
+    # ---- 战前快照 ----
+    reload_()
+    exp_before, lv_before = int(player["curExp"]), int(player["lv"])
+    exp_info = next(v for v in tbl.values() if int(v.get("exp") or 0) > 0)
+    eid = next(k for k, v in tbl.items() if int(v.get("exp") or 0) > 0)
+    data = instance.finish_level(player, {"levelId": eid, "starMark": 7, "curTeamIdx": 0})
+    check("levelReward.playerInfo.playerAttr 是**战前**快照（升级动画要 from != to）",
+          data["rewards"]["levelReward"]["playerInfo"]["playerAttr"]
+          == {"curExp": exp_before, "lv": lv_before},
+          str(data["rewards"]["levelReward"]["playerInfo"]["playerAttr"]))
+    check("data.player.playerAttr 是**战后**新值",
+          data["player"]["playerAttr"]["curExp"] == exp_before + int(exp_info["exp"]),
+          str(data["player"]["playerAttr"]))
+
+    # ---- 没获得的角色：不发假数字 ----
+    reload_()
+    unowned = sorted(v["fck"] for v in tbl.values()
+                     if v.get("fck") and v["fck"] not in owns and int(v.get("favor") or 0) > 0)
+    if unowned:
+        uid = next(k for k, v in tbl.items() if v.get("fck") == unowned[0])
+        data = instance.finish_level(player, {"levelId": uid, "starMark": 7, "curTeamIdx": 0})
+        check("favor_char_key 是没获得的角色 -> 不加、也不回 favor（别报假数字）",
+              "favor" not in data["rewards"]["levelReward"] and not data.get("favor"),
+              str(data["rewards"]["levelReward"])[:80])
+    else:
+        check("（没有未获得的 favor_char_key 角色，跳过）", True)
+
+
 def main() -> int:
     table_check()
     reload_()
@@ -618,6 +706,7 @@ def main() -> int:
     daemon_check()
     update_asst_check()
     favor_event_check()
+    battle_favor_check()
     interact_check()
     print()
     print("通过 %d，失败 %d" % (_ok, _fail))

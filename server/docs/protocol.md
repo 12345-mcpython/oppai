@@ -253,27 +253,61 @@ payload = unpack_request(rest)    # 再用该 session 的 secret 解
 
 ### 5.2 响应派发（responseConfig）在这套引擎上不生效
 
-`src/util/server.js` 里有一张 `responseConfig`：
+`src/util/server.js` 里有一张 `responseConfig`，本意是「响应 `data` 里出现哪个模块的
+key，就喂给对应模块的回调」：
 
 ```js
 responseConfig.quest  = function (res) { ... dataManager.questCenter.updateByServer(res.data) }
-responseConfig.player / mail / char / gacha / ...
+responseConfig.favor  = function (res) { ... dataManager.favorCenter.cb4ResFavor(...) }
+responseConfig.player / mail / char / gacha / favorEvent / useGiftStatus / ...
 ```
 
-本意是「响应 `data` 里出现哪个模块的 key，就喂给对应模块的 `updateByServer()`」。
-但实测**它没有被派发**：
+但在这套引擎上**它一次都没被派发**。两次独立实测：
 
 ```
-server.request('player.getdata')  ->  {player: {...}}
-   └─ 包了 Player.updateByServer 打日志，一次都没进
+① server.request('player.getdata') -> {player:{...}}
+     └─ 包了 Player.updateByServer 打日志，一次都没进
+
+② server.request('favor.setclothes', {charKey, itemKey}, cb, false)   // 第 4 个参数
+     -> {code:200, data:{charKey, favorValue, favor:{sasm:行}}}        // true / false 都试过
+     └─ Favor.prototype.update 调用 0 次、cb4ResFavor 调用 0 次
 ```
 
-后果是**所有「服务端推数据给客户端」都失效** —— 最直观的表现是主线任务领奖成功、
-奖励也发了，但列表不刷新（改服务端怎么改都没用）。
+②是决定性的：`Favor.update()` 是「把服务端那一行套到本地」的**唯一**入口，
+它没被调用就说明行数据（等级、经验、衣服、已读位）根本没进客户端。
 
-客户端 `server/client/patch.js` 里的 `RESP-DISPATCH` 自己补了一层：包住 `server.request`，
-成功响应里出现已知模块 key 就先 `updateByServer()`，再走原来的回调
-（顺序关键：回调里会立刻重绘列表）。
+后果是**所有「服务端推数据给客户端」都失效**：主线任务领奖后列表不刷新、
+好感度涨了进度条和等级要重登才动、宿舍事件红点推不下去。
+
+客户端 `server/client/patch.js` 里的 `RESP-DISPATCH` 补了这一层：包住 `server.request`，
+成功响应里出现已知 key 就先派发，再走原来的回调（**顺序关键**：回调里会立刻读这些
+刚更新的数据，例如 `Instance.finishLevel/<` 里 `rank = this._updatePlayer(...)`）。
+
+⚠️ 补的时候有两个坑，都不是靠「照着注释抄」能发现的：
+
+1. **不能只补 `updateByServer` 那一批**。原版 `responseConfig` 里有三条写法完全不同：
+   收**整个 `res`** 的（`favor` / `newFavor` / `favorAsstRefreshed` / `newFavorEvent` /
+   `favorEvent` / `removedFeEventKeys` / `useGiftStatus`）、调 `updateByServer(res.data)` 的、
+   以及方法名各不相同的（`bag.updateItems` / `medal.updateNewMedal` / `diary.updateDiarys`
+   / `friendSupport.updateSoldiers` …）。只补中间那批，好感度这一整条就是死的。
+
+2. **收 `res` 的那批不能把整个 `res` 直接丢过去**。它们要的 `res.data` 是**里面那一段**：
+
+   ```js
+   // favor.setclothes 的响应
+   data = {charKey:"sasm", favorValue:0, favor:{sasm:{...}}}
+   //                                  ^^^^^ 才是 cb4ResFavor 要的 data
+   ```
+
+   直接传 `res` 的话，`cb4ResFavor` 会 `for (var i in res.data)` 把 `charKey` /
+   `favorValue` / `favor` 当成三个角色 key，然后
+   `this._favors["charKey"].lv` 抛 `TypeError: favor is undefined`
+   （实测到过这条异常）。patch.js 里因此统一包一层 `{code: res.code, data: res.data[key]}`。
+
+3. 顺带：RESP-DISPATCH 原来有「重试 240 次（2 分钟）就放弃」的上限。冷启动
+   （先黑屏热更新、再登录）时 `window.server` 可能比 2 分钟更晚出现，整个补丁就**没装上**
+   —— 实测踩到过一次（表现是所有推数据又全哑、但引导跳过/WebView 这些照样生效）。
+   现在不设上限，装上自己停。
 
 ### 5.1 成功码是 200
 

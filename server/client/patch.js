@@ -30,6 +30,13 @@
 //      判定框 100×100、不可见、在角色右边，还得在 1 秒内开始搓）。
 //      原因和实测见文件末尾那段。要还原原版手感就把那一段整块删掉。
 //
+//   7. 响应派发补齐（favor 家族 + 不是 updateByServer 的那几条）
+//      引擎里 `src/util/server.js` 的 `responseConfig` **一次都没被派发**
+//      （实测：发一个响应里带 `favor` 块的请求，`Favor.prototype.update`
+//      被调用 0 次 —— 行数据、等级、红点全靠它），而 RESP-DISPATCH 原来只补了
+//      「走 updateByServer」的那批模块，favor / newFavorEvent / useGiftStatus
+//      这几条一直是**死的**。后果：宿舍里好感度涨了，进度条和等级要重登才动。
+//
 // 探针/诊断部分在 probe.js —— release 可以不打包那个文件。
 // 两个文件互相独立，这个文件不依赖 probe.js 的任何东西。
 // ===========================================================================
@@ -494,22 +501,64 @@
     // ------------------------------------------------------------------
     // 服务端推数据：客户端自己不做派发，这里补上
     //
-    // src/util/server.js 里有一张 responseConfig 表，本意是「响应 data 里出现哪个
-    // 模块的 key，就喂给对应模块的 updateByServer()」：
+    // `src/util/server.js` 里有一张 `responseConfig` 表，本意是「响应 data 里出现
+    // 哪个模块的 key，就喂给对应模块的回调」：
     //
     //     responseConfig.quest  = function (res) { ... dataManager.questCenter.updateByServer(res.data) }
+    //     responseConfig.favor  = function (res) { ... dataManager.favorCenter.cb4ResFavor(res) }
     //     responseConfig.player / mail / char / gacha / ...
     //
-    // 但在这套引擎上实测它**没有被派发**：server.request('player.getdata') 回
-    // {player:...}，Player.updateByServer() 也不会被调用。于是所有「服务端推数据给
-    // 客户端」都失效 —— 最直观的表现就是主线任务领奖成功、奖励也发了，但列表不刷新。
+    // 但在这套引擎上实测它**一次都没被派发**。两次实测（`server.request` 第 4 个参数
+    // `isBackstageRequest` 传 true / false 都试过）：
     //
-    // 这里自己补一层：包住 server.request，成功响应里出现下面的 key 就先喂给对应模块
-    // 的 updateByServer()，再走原来的回调（顺序很重要，回调里会立刻重绘列表）。
+    //     发 favor.setclothes -> 回 {code:200, data:{favor:{sasm:行}}}
+    //     全程 Favor.prototype.update 被调用 **0** 次、cb4ResFavor 被调用 **0** 次
+    //     （Favor.update 是唯一的「把行套到本地」入口，所以这个计数是决定性的）
+    //
+    // 于是所有「服务端推数据给客户端」都失效：主线任务领奖后列表不刷新、
+    // 好感度涨了进度条不动、宿舍事件红点推不下去。
+    //
+    // 这里自己补一层：包住 `server.request`，成功响应里出现下面的 key 就先派发，
+    // 再走原来的回调（**顺序很重要**，回调里会立刻读这些刚被更新的数据）。
+    //
+    // 分三张表，照抄原版 responseConfig 的三类写法：
+    //   resTargets()    收**整个 res** 的（favor / 宿舍事件 / useGiftStatus）
+    //   targets()       调 `updateByServer(res.data)` 的
+    //   customTargets() 调别的方法名（`bag.updateItems` 之类）
     // ------------------------------------------------------------------
     (function installResponseDispatch() {
-        // 只列「响应 key -> dataManager 上的模块」能一一对上、
-        // 而且模块确实有 updateByServer() 的。
+        // ① 原版里这几条回调收的是整个 res（它们自己读 res.code / res.data）
+        //
+        // ⚠️ 但**不能直接把整个 res 丢过去**：这些 `cb4Res*` 的 `res.data` 要的
+        // 是**那一段本身**，不是外面这层 data。以 `favor.setclothes` 的响应为例：
+        //
+        //     data = {charKey:"sasm", favorValue:0, favor:{sasm:{...}}}
+        //                                      ^^^^^ 要的就是这个
+        //
+        // 直接把 res 传进去的话，`cb4ResFavor` 会 `for (var i in res.data)` 拿到
+        // `charKey` / `favorValue` / `favor` 三个“角色 key”，然后
+        // `this._favors["charKey"].lv` 抛 `TypeError: favor is undefined`
+        // （这条异常实测过，所以这里包一层 `{code, data: res.data[key]}`）。
+        //
+        // key 名和 res.data 里的子键名一致，所以取哪一段由 key 自己决定。
+        function resTargets() {
+            var dm = window.dataManager;
+            if (!dm) {
+                return null;
+            }
+            return {
+                favor: [dm.favorCenter, "cb4ResFavor"],
+                newFavor: [dm.favorCenter, "cb4ResNewFavor"],
+                favorAsstRefreshed: [dm.favorCenter, "cb4ResFavorAsstRefreshed"],
+                newFavorEvent: [dm.favorEventCenter, "cb4ResNewFavorEvent"],
+                favorEvent: [dm.favorEventCenter, "cb4ResFavorEvent"],
+                removedFeEventKeys: [dm.favorEventCenter, "cb4ResRemovedFeKeys"],
+                useGiftStatus: [dm.player, "cb4UseGiftStatus"]
+            };
+        }
+
+        // ② 只列「响应 key -> dataManager 上的模块」能一一对上、
+        //    而且模块确实有 updateByServer() 的。
         function targets() {
             var dm = window.dataManager;
             if (!dm) {
@@ -536,28 +585,72 @@
             };
         }
 
+        // ③ 原版里方法名不是 updateByServer 的那几条：[模块, 方法名]
+        function customTargets() {
+            var dm = window.dataManager;
+            if (!dm) {
+                return null;
+            }
+            return {
+                items: [dm.bag, "updateItems"],
+                updateDetectSpeedCount: [dm.detect, "updateDetectSpeedCount"],
+                updatemedals: [dm.medal, "updateNewMedal"],
+                updateSubareaAchievements: [dm.subareaachievement, "updateSubareaAchievements"],
+                updatediarys: [dm.diary, "updateDiarys"],
+                updatediarysbuyinfo: [dm.diary, "updateDiarysBuyInfo"],
+                deletelevels: [dm.instance, "deleteLevels"],
+                updateFriendSupportSoldiers: [dm.friendSupport, "updateSoldiers"],
+                deleteFriendSupportSoldiers: [dm.friendSupport, "deleteSoldiers"],
+                receiveSoldierReward: [dm.friendSupport, "updateReceiveSoldierReward"],
+                updateUseRecord: [dm.friendSupport, "updateUseRecord"]
+            };
+        }
+
+        function call(key, pair, arg, n) {
+            var mod = pair && pair[0];
+            var fn = pair && pair[1];
+            if (!mod || typeof mod[fn] !== "function") {
+                return n;
+            }
+            try {
+                mod[fn](arg);
+                return n + 1;
+            } catch (e) {
+                emit("RESP-DISPATCH " + key + " 失败: " + e);
+                return n;
+            }
+        }
+
         function applyResponse(res) {
             if (!res || res.code !== 200 || !res.data) {
                 return 0;
             }
-            var map = targets();
-            if (!map) {
-                return 0;
-            }
             var n = 0;
-            for (var key in map) {
-                if (res.data[key] === undefined) {
-                    continue;
+            var map;
+            // ①②③ 里哪张表没建出来（dataManager 还没好）就整批跳过，等下一次响应
+            map = resTargets();
+            if (map) {
+                for (var k1 in map) {
+                    if (res.data[k1] !== undefined) {
+                        // 包一层：这些 cb4Res* 认的是 {code, data:<那一段>}
+                        n = call(k1, map[k1], { code: res.code, data: res.data[k1] }, n);
+                    }
                 }
-                var mod = map[key];
-                if (!mod || typeof mod.updateByServer !== "function") {
-                    continue;
+            }
+            map = targets();
+            if (map) {
+                for (var k2 in map) {
+                    if (res.data[k2] !== undefined) {
+                        n = call(k2, [map[k2], "updateByServer"], res.data[k2], n);
+                    }
                 }
-                try {
-                    mod.updateByServer(res.data[key]);
-                    n++;
-                } catch (e) {
-                    emit("RESP-DISPATCH " + key + " 失败: " + e);
+            }
+            map = customTargets();
+            if (map) {
+                for (var k3 in map) {
+                    if (res.data[k3] !== undefined) {
+                        n = call(k3, map[k3], res.data[k3], n);
+                    }
                 }
             }
             return n;
@@ -594,10 +687,13 @@
         if (patch()) {
             return;
         }
-        var tries = 0;
+        // ⚠️ 这里**不能**设重试上限。上一版是 `++tries > 240`（2 分钟）就放弃，
+        // 结果冷启动（先黑屏热更新、再登录）时 `window.server` 出现得比 2 分钟晚，
+        // 整个 RESP-DISPATCH 就没装上 —— 实测到过一次，表现是所有服务端推数据又全哑。
+        // 500ms 查一次 `window.server` 的成本可以忽略，装上了自己就停。
         if (!window.__oppaiDispatchTimer) {
             window.__oppaiDispatchTimer = setInterval(function () {
-                if (patch() || ++tries > 240) {
+                if (patch()) {
                     clearInterval(window.__oppaiDispatchTimer);
                     window.__oppaiDispatchTimer = null;
                 }

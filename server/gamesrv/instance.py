@@ -46,7 +46,7 @@ import random
 import threading
 import time
 
-from . import logx, quests, store
+from . import favor, logx, quests, store
 
 log = logx.get("instance")
 
@@ -175,6 +175,30 @@ def finish_level(player: dict, msg: dict) -> dict | None:
 
         {levelId, starMark, rewards, battleInfo, subareaInfo,
          curTeamIdx, curExp, lv, actionPoint}
+
+    ## 回包形状（照客户端 `Instance.finishLevel/<` 逐条对出来的）
+
+        data.level      只喂 `_updateResult(levelId, level)` -> `Level.updateLevel()`，
+                        它只挑 starMark / challengeTimes / lastUpdateTimeSec
+        data.rewards    ★ **奖励块全在这一层**，`_dealLevelResult(rewards)` 才看得到：
+                        dropReward / firstComplete / appraise / levelReward
+                        （还有 favorReward / friendSupportReward 两个没用上）
+        data.quest      主线任务进度（客户端 RESP-DISPATCH 派发）
+        data.player     新值 —— `Player.updateByServer` -> `updatePlayerAttr`
+        data.favor      这一关涨了好感的角色行 -> `FavorCenter.cb4ResFavor`
+
+    ⚠️ 奖励块以前挂在 `data.level` 上，那是错的：`finishLevel/<` 读的是
+    `res.rewards.levelReward`，而 `data.level` 只走 `updateLevel()`（只认那三个字段）。
+    表现就是结算面板「获得物资」永远空着、经验也不动。
+
+    ⚠️ `levelReward.playerInfo.playerAttr` 要放**战前**快照：客户端
+
+        rank = this._updatePlayer(playerInfo.playerAttr)      // from = 快照
+        rank.to = {curExp: player.curExp, lv: player.lv, ...} // 本地值（已被 data.player 更新）
+        rank.exp = rewards.levelReward.exp
+
+    拿来算「Exp+N」和升级动画。以前给的是加完之后的 lv/curExp，from == to，
+    那个 +N 恒等于 0。
     """
     level_id = str((msg or {}).get("levelId") or "")
     if not level_id:
@@ -197,15 +221,16 @@ def finish_level(player: dict, msg: dict) -> dict | None:
     team_size = len(team.get("soldierKeys") or team.get("soldiers") or [])
     quests.on_level_result(player, victory=star_mark > 0, team_size=team_size)
 
-    # ---- 通关奖励 ----
+    # ---- 奖励 ----
     #
-    # 「获得物资」那一栏原本永远是空的，因为服务端没回奖励。
-    # 客户端 `Instance._dealLevelResult(level)` 会读这几个字段，
-    # 每个都是 `{items: {道具key: 数量}}` 这种形状
-    # （`_getRewardTotal` 是按 key 累加的 map）：
-    #     dropReward    普通掉落（table_level.level_reward_id）
-    #     firstComplete 首通奖励（first_complete_reward_ids）
-    #     appraise      星级评价奖励（appraise_reward_ids）
+    # 数值来自客户端表 `table_level`：
+    #     level_reward_id          普通掉落
+    #     first_complete_reward_ids 首通奖励
+    #     appraise_reward_ids      星级评价奖励
+    #     exp                      指挥部经验
+    #     favor / favor_char_key   ★ 这一关给多少好感度、给谁（见 favor.py）
+    # 每个奖励块的形状都是 `{items: {道具key: 数量}}`
+    # （客户端 `_getRewardTotal` 是按 key 累加的 map，`_getItemsBySort` 再排成数组）。
     info = (_level_table().get("level") or {}).get(level_id) or {}
     drop = _rewards_for(info.get("lvr"))
     appraise = _rewards_for(info.get("ap"))
@@ -215,29 +240,55 @@ def finish_level(player: dict, msg: dict) -> dict | None:
     exp = int(info.get("exp") or 0)
 
     # 经验真的加上去（客户端 Player.updatePlayerAttr 只认 curExp / lv）
-    old_exp = int(player.get("curExp") or 0)
-    new_exp = old_exp + exp
+    old_attr = {"curExp": int(player.get("curExp") or 0), "lv": int(player.get("lv") or 1)}
+    new_exp = old_attr["curExp"] + exp
     player["curExp"] = new_exp
     player_attr = {"curExp": new_exp, "lv": player.get("lv") or 1}
 
-    log.info("关卡结算 %s starMark=%s 第 %s 次（上阵 %s 人）掉落=%s 首通=%s exp=%s",
-             level_id, lv["starMark"], lv["challengeTimes"], team_size, drop, first, exp)
+    # ---- 好感度 ----
+    #
+    # ⚠️ 服务端只回**数量**（`rewards.levelReward.favor`），"给谁"是客户端拿
+    # 自己 `table_level` 的 `favor_char_key` 算的。这里必须按同一条规则记存档，
+    # 否则弹窗和存档会对不上（规则见 favor.level_favor_targets）。
+    favor_add = int(info.get("favor") or 0)
+    favor_gain = favor.grant_level_favor(player, info, team)
+    if favor_gain:
+        # 好感涨了 -> 可能跨过某条宿舍事件的解锁等级，顺带把新解锁的推下去
+        new_events = favor.sync_events(player)
+    else:
+        new_events = []
 
-    level_payload = dict(lv, levelId=level_id)
-    level_payload["dropReward"] = {"items": drop}
-    level_payload["appraise"] = {"items": appraise}
+    log.info("关卡结算 %s starMark=%s 第 %s 次（上阵 %s 人）掉落=%s 首通=%s exp=%s 好感=%s",
+             level_id, lv["starMark"], lv["challengeTimes"], team_size, drop, first, exp, favor_gain)
+
+    rewards: dict = {}
+    if drop:
+        rewards["dropReward"] = {"items": drop}
     if first:
-        level_payload["firstComplete"] = {"items": first}
-    # levelReward 只影响结算面板上那个 "Exp+N"（以及升级动画的前后快照）
-    level_payload["levelReward"] = {"exp": exp, "playerInfo": {"playerAttr": player_attr}}
+        rewards["firstComplete"] = {"items": first}
+    if appraise:
+        rewards["appraise"] = {"items": appraise}
+    level_reward = {"exp": exp, "playerInfo": {"playerAttr": old_attr}}
+    if favor_gain:
+        # 客户端 `Instance.finishLevel/<` 读 `rewards.levelReward.favor` 填 `ret.favorObj`
+        # （只有真的加上去了才回，见 favor.grant_level_favor）
+        level_reward["favor"] = favor_add
+    rewards["levelReward"] = level_reward
 
     # data.level 会走客户端的 _updateResult -> level.updateLevel()，
     # 所以星级/次数必须放在这里；
-    # data.quest / data.player 由客户端的 RESP-DISPATCH 派发。
-    return {
+    # data.quest / data.player / data.favor 由客户端的响应派发处理。
+    data = {
         "levels": {level_id: lv},
-        "level": level_payload,
-        "rewards": [],
+        "level": dict(lv, levelId=level_id),
+        "rewards": rewards,
         "quest": quests.block(player),
         "player": {"playerAttr": player_attr},
     }
+    if favor_gain:
+        data["favor"] = favor.rows_block(player, favor_gain)
+        block = favor.new_event_block(new_events)
+        if block:
+            data["newFavorEvent"] = block
+    return data
+

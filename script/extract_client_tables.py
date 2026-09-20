@@ -153,7 +153,15 @@ SHOP_JS = r"""
 #       {"key_1":"100002","min_count_1":540,"max_count_1":900,"span_1":1}
 #   table_level[levelId].first_complete_reward_ids -> "id#id#id"
 #   table_level[levelId].exp
+#   table_level[levelId].favor               通关给多少好感度
+#   table_level[levelId].favor_char_key      这份好感度给谁
 # 服务端只需要「关卡 -> 掉什么」这一份，所以这里压成一棵小表。
+#
+# ⚠️ `favor` / `favor_char_key` 这两列**客户端一行代码都不读**（`Level` 只把
+# 它们挂成只读属性 `_favor` / `_favorCharKey`，全库 `jsc_find getFavor` 只有
+# getter 自己命中）。它们是原版**服务端**的数值 —— 结算面板上的好感上涨弹窗
+# （`LevelWinBase._showOtherRewards` → `CharFavorUpLayer.pop`）要求服务端回
+# `rewards.favorReward = {favors: {charKey: 数量}}`，数量只能从这两列来。
 LEVEL_JS = r"""
 (function () {
     var out = {level: {}};
@@ -164,7 +172,9 @@ LEVEL_JS = r"""
             exp: r.exp || 0,
             lvr: r.level_reward_id || "",
             fc: r.first_complete_reward_ids || "",
-            ap: r.appraise_reward_ids || ""
+            ap: r.appraise_reward_ids || "",
+            favor: r.favor || 0,
+            fck: r.favor_char_key || ""
         };
     }
     out.reward = {};
