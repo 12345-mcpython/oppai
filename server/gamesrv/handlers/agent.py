@@ -80,8 +80,6 @@ def _module_stubs(player: dict | None = None) -> dict:
         # 三个都是 **map**，`Gacha.update(data)` 直接吃。见 gamesrv/gacha.py。
         "gacha": gacha.login_block(player) if player else {
             "gachaData": {}, "gachaInfoList": {}, "gachaMasterList": {},
-            "gachaLibCards": {}, "lastUpdateInfoTime": t,
-            "freeGachaTip": {}, "activityTimes": {},
         },
         "mail": {"mails": [], "updateTime": t, "remindCount": 0},
         # 任务（主线）单独算：见 gamesrv/quests.py

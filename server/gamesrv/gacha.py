@@ -4,21 +4,56 @@
 
 `assets/src/table/` 里 176 张表**一张 gacha 的都没有**（`jsc_find table_gacha*` 0 命中）：
 「有哪些池子、消耗什么、概率多少、能出哪些卡」全是**运营配置**，原版从服务端下发，
-随停服一起没了。所以这里自己造一套池子，但**池子 id 和枚举严格照客户端**：
+随停服一起没了。所以这里自己造一套池子，但 id / 枚举 / 形状严格照客户端：
 
     config/gachaconfig.jsc：
         GACHA_TYPE    = {10:FREE, 20:GEM, 30:FRAGMENT, 40:TIME_LIMIT, 50:WELFARE, 60:COMMON}
-        GACHA_KEYS    = {FREE:"1001", GEM:"1002", FRAGMENT:"1003"}
-        GACHA_NAMES   = {1001:"免费抽卡", 2001:"碎片单抽", 2010:"碎片十连",
-                         4001:"钻石单抽", 4010:"钻石十连"}
+        GACHA_KEYS    = {FREE:"1001", GEM:"1002", FRAGMENT:"1003"}     ← ★ 池子 id 就是这三个
         GACHA_FORM    = {DEFAULT:"0", TIMES_CHANGEABLE:"1"}
-        GACHA_SALE_TYPE = {TOTAL_TIMES, DAILY_TIMES, WEEKLY_TIMES, MONTHLY_TIMES}
+        GACHA_SALE_TYPE = {t:TOTAL_TIMES, d:DAILY_TIMES, w:WEEKLY_TIMES, m:MONTHLY_TIMES}
+        GACHA_TIMES_LIMIT = {d:DAILY, a:ACTIVITY, t:TOTAL}
         SOLDIER_S_QUALITY = 3 / SOLDIER_SR_QUALITY = 4
+        GUIDE_GACHA_KEY = 1002        ← 新手引导指向钻石池
         GACHA_ERROR_DICT = {201 参数错误 / 202 找不到抽卡信息 / 203 军士库满员 /
-                            204 次数用完 / 205 倒计时中 / 206 资源不够 / 207 资源错误 /
-                            210 非活动期 / 211/212/213 次数用完 / 405 更新数据错误}
+                            204 次数用完 / 205 倒计时 / 206 资源不够 / 207 资源错误 /
+                            210 非活动期 / 211~213 次数用完 / 405 更新数据错误}
 
-  也就是说**池子 id 我不用编**：`GACHA_NAMES` 里那 5 个就是原版的池子 key。
+    ⚠️ `GACHA_NAMES`（"1001:免费抽卡 / 2001:碎片单抽 / 2010:碎片十连 / 4001:钻石单抽 /
+    4010:钻石十连"）在客户端**全库零引用**（`jsc_find --exact GACHA_NAMES` = 0 命中），
+    是张死表，只是原始命名习惯 —— **别照它做池子**（我第一版照它做了 5 个池子，错的）。
+    真正的模型是：**3 个 4 位池子 key，各自带「×1 / ×10」两个按钮**
+    （`master.infoKeysObj = {"1": …, "10": …}`，`Gacha.getGachaTimes` 就是
+    `_.keys(infoKeysObj).sort()`，按钮 1/2 分别取 `[0]`/`[1]`）。
+
+## 客户端那条链（反汇编 + 活客户端实测）
+
+    Gacha.update(data)          ← 登录块 `data.gacha`：{gachaData, gachaInfoList, gachaMasterList}
+                                   **三个都是 map**，直接赋给 `_gachaDataObj/_gachaInfoObj/_gachaMasterObj`
+    Gacha.gacha(key, times)     → `gacha.gacha {key, times}`；回包读 `result.gachaData`（**那一行**，
+                                   不是 map！`updateGachaData(dataKey, result.gachaData)`）
+                                   + `result.cards`（**角色 key 字符串数组**）
+    Gacha.getLibraryShow(key)   → `gacha.getlibraryshow {key}`；回包 `{cards, upRate}`
+                                   ⚠️ `upRate` 必须是**字符串**（`upRate.split("#")`），
+                                   没有 UP 就发 `""`（发 `{}` 会 TypeError，图鉴层直接起不来）
+    Gacha.updateGachaInfo()     → `gacha.getgacha`，回包**扁平**给 update() 那三件套
+
+    卡池 master 字段（`_getGachaInfoByMaster` / `getGachaSale` / `getGachaFullInfo` /
+    `_checkGachaVaild` / `getGachaResIdx` / `getGachaMasterList`）：
+        {key, name, type, form, resIdx, showPriority, infoKeysObj | infoKeysArr,
+         startTime?, endTime?}
+        resIdx 1..54 → `res/ui/gacha/src/gachatypelayer<resIdx>.csb`、
+                       `res/icon/gacha/gachabtnidx<resIdx>.png`（**GachaButton 硬 assert**）、
+                       `res/bg/gachabg/gachabgidx<resIdx>.png`
+        showPriority 决定轮盘顺序（**降序**）
+        form=DEFAULT("0") → `_gachaInfoObj[infoKeysObj[times]]`
+        form=TIMES_CHANGEABLE("1") → `_gachaInfoObj[infoKeysArr[min(len-1, total)].infoKey]`
+        （只有 `type == 40` 才校验 startTime/endTime，普通池不填也永远有效）
+    info 行：{itemKey, itemCount, voucherKey, voucherCount, receiveKey, receiveCount,
+              limitTimesObj:{d,a,t}, saleInfoObj:{第几次:折扣%}, saleTypeObj:{type}}
+        `isFreeGacha()` = itemCount 与 voucherCount 都为 0
+        `getGachaConsume()` = itemCount * (saleInfoObj[次数] || saleInfoObj[0] || 100) / 100
+    data 行（玩家次数，key = `masterKey + "0"+times`，见 `data_key()`）：
+        {masterKey, todayTimes, totalTimes, lastGachaTimeSec, lastFreeTimeSec}
 
 ## 卡池内容（从客户端表里挑）
 
@@ -32,22 +67,6 @@
 
 **全是自己定的**（原版运营配置无从考证，见 `differences.md` §B/§D）：见下面 `POOLS`
 和 `RARITY_WEIGHT`，都是单旋钮。
-
-## 客户端那条链（读响应的地方）
-
-    Gacha.update(data)          ← 登录块 `data.gacha`：{gachaData, gachaInfoList, gachaMasterList}
-    Gacha.gacha(key, times)     → `gacha.gacha {key, times}`，回包读 `data.gachaData` + `cards`
-    Gacha.getLibraryShow(key)   → `gacha.getlibraryshow {key}`，回包读 `data.{cards, upRate, gachaInfo}`
-    Gacha.updateGachaInfo()     → `gacha.getgacha`，回包**扁平**给 update() 那五件套
-
-    卡池 master 形状（反汇编 `Gacha._getGachaInfoByMaster` / `getGachaSale` / `getGachaFullInfo`）：
-        master = {key, name, form, infoKeysObj | infoKeysArr, saleTypeObj, …}
-            form == GACHA_FORM.DEFAULT("0")  → 用 `infoKeysObj[times]` 找 infoKey
-            form == TIMES_CHANGEABLE("1")    → 用 `infoKeysArr[min(times-1, len-1)].infoKey`
-        info   = {itemKey, itemCount, voucherKey, voucherCount, useVoucher,
-                  receiveKey, receiveCount, saleInfoObj:{saleTimes, sale, defaultSale}}
-            —— `itemKey/itemCount` 就是"抽一次花什么、花多少"，
-               `Gacha.getGachaConsume` = `itemCount * sale / 100`（sale 是百分比折扣）。
 """
 
 from __future__ import annotations
@@ -93,12 +112,8 @@ RARITY_WEIGHT = {"n": 560, "r": 300, "s": 110, "sr": 30}
 # sr 那一档里再抽一次"是不是大奖（英雄/机甲）"，千分比。
 PRIZE_WEIGHT = 150               # 15% 的 sr → 英雄/机甲，其余是 sr 军士卡
 
-# 保底：十连至少一张 S+
-TEN_GUARANTEE = "s"
-
-
-def _pool(key: str) -> dict | None:
-    return POOLS.get(str(key))
+ONE = "1"
+TEN = "10"
 
 
 def _now() -> int:
@@ -106,36 +121,56 @@ def _now() -> int:
 
 
 # ---------------------------------------------------------------------------
-# 池子定义（id 照 `GACHA_NAMES`；消耗/概率是自己定的）
+# 池子定义（3 个 4 位 key 照 `GACHA_KEYS`；消耗/概率是自己定的）
 # ---------------------------------------------------------------------------
 POOLS = {
     # 免费抽卡：**每天 1 次**（`limitTimesObj.d = 1`），不花钱
-    # （客户端 `isFreeGacha()` 判定"免费"的依据就是 info 行里 `itemCount`/`voucherCount` 都是 0）
+    # （客户端 `isFreeGacha()` 判定"免费"的依据就是 info 行里 itemCount/voucherCount 都是 0）
     "1001": {
-        "key": "1001", "name": "免费抽卡", "type": "10", "times": 1,
-        "dailyLimit": 1, "cost": [], "sort": 1,
+        "key": "1001", "name": "免费抽卡", "type": "10",
+        "resIdx": 1, "showPriority": 100, "dailyLimit": 1,
+        "cost": {ONE: [], TEN: []},
     },
-    # 碎片（好人卡）单抽 / 十连
-    "2001": {
-        "key": "2001", "name": "碎片单抽", "type": "30", "times": 1,
-        "cost": [(TYPE_ITEM, FRAGMENT_KEY, 1)], "sort": 20,
+    # 钻石扭蛋（金条）：×1 100 / ×10 900，十连保底一张 S+
+    "1002": {
+        "key": "1002", "name": "钻石扭蛋", "type": "20",
+        "resIdx": 2, "showPriority": 90,
+        "cost": {ONE: [(TYPE_ITEM, GEM_KEY, 100)],
+                 TEN: [(TYPE_ITEM, GEM_KEY, 900)]},
+        "guarantee": TEN,
     },
-    "2010": {
-        "key": "2010", "name": "碎片十连", "type": "30", "times": 10,
-        "cost": [(TYPE_ITEM, FRAGMENT_KEY, 9)],       # 十连打 9 折
-        "guarantee": TEN_GUARANTEE, "sort": 21,
-    },
-    # 钻石（金条）单抽 / 十连
-    "4001": {
-        "key": "4001", "name": "钻石单抽", "type": "20", "times": 1,
-        "cost": [(TYPE_ITEM, GEM_KEY, 100)], "sort": 10,
-    },
-    "4010": {
-        "key": "4010", "name": "钻石十连", "type": "20", "times": 10,
-        "cost": [(TYPE_ITEM, GEM_KEY, 900)],          # 十连打 9 折
-        "guarantee": TEN_GUARANTEE, "sort": 11,
+    # 碎片扭蛋（好人卡）：×1 1 / ×10 9，十连保底一张 S+
+    "1003": {
+        "key": "1003", "name": "碎片扭蛋", "type": "30",
+        "resIdx": 3, "showPriority": 80,
+        "cost": {ONE: [(TYPE_ITEM, FRAGMENT_KEY, 1)],
+                 TEN: [(TYPE_ITEM, FRAGMENT_KEY, 9)]},
+        "guarantee": TEN,
     },
 }
+
+
+def _pool(key) -> dict | None:
+    return POOLS.get(str(key or ""))
+
+
+def times_list(conf: dict) -> list:
+    """这个池子的按钮次数：**永远是 `["1", "10"]`**（客户端按 `_.keys(infoKeysObj).sort()`
+    建两个按钮，键只能是字符串 "1"/"10" —— 键会被喂给 `getGachaTimesIconUrl(times)`，
+    那里 `times<1 || times>10` 直接报错，而且 `"1","2","10"` 会排成 `["1","10","2"]`）。"""
+    return [ONE, TEN]
+
+
+def data_key(pool_key: str, times) -> str:
+    """客户端 `Gacha.getGachaDataKey`：form=0（我们用的一直是）时
+    `masterKey + (times < 10 ? "0" + times : times)` ⇒ `1001` + `"01"` = `100101`、
+    `1001` + `"10"` = `100110`。"""
+    t = str(times)
+    return pool_key if t == "-1" else pool_key + ("0" + t if len(t) < 2 else t)
+
+
+def info_key(pool_key: str, times) -> str:
+    return "%s#%s" % (pool_key, times)
 
 
 # ---------------------------------------------------------------------------
@@ -214,20 +249,20 @@ def _pick_card(rarity: str, rng: random.Random) -> dict:
     return {"type": TYPE_SOLDIER, "key": pool[rng.randrange(len(pool))], "rarity": rarity}
 
 
-def roll(pool_key: str, times: int, rng: random.Random | None = None) -> list:
+def roll(pool_key: str, times, rng: random.Random | None = None) -> list:
     """抽 `times` 次，返回 `[{type, key, rarity}, …]`（**不发货**）。"""
     conf = _pool(pool_key) or {}
     rng = rng or random.Random()
     out = []
-    for _ in range(max(1, int(times))):
+    for _ in range(max(1, int(str(times) or 1))):
         out.append(_pick_card(_roll_rarity(rng), rng))
     guarantee = conf.get("guarantee")
-    if guarantee and out and not any(c["rarity"] in SR_RARITY for c in out):
-        # 保底：把最后一张换成至少 S 档（优先 S，其次 SR）
-        pool = card_pool().get(guarantee) or card_pool().get("s") or []
-        if pool:
-            out[-1] = {"type": TYPE_SOLDIER,
-                       "key": pool[rng.randrange(len(pool))], "rarity": guarantee}
+    if guarantee and str(guarantee) == str(times) and out:
+        if not any(c["rarity"] in SR_RARITY for c in out):
+            pool = card_pool().get("s") or []
+            if pool:
+                out[-1] = {"type": TYPE_SOLDIER,
+                           "key": pool[rng.randrange(len(pool))], "rarity": "s"}
     return out
 
 
@@ -238,8 +273,8 @@ def state(player: dict) -> dict:
     """`player["gacha"] = {<dataKey>: {masterKey, todayTimes, lastGachaTimeSec, totalTimes}}`。
 
     dataKey 照客户端 `Gacha.getGachaDataKey` 算（见 `data_key()`）；
-    客户端自己也会 `resetData()` 按 `table_constant.common_reset_time` 清 `todayTimes`，
-    服务端这份才是真存档，两边都得清（和 sign/arena 一个套路）。
+    客户端自己也会 `resetData()` 按 `table_constant.common_reset_time`（05:00:00）
+    清 `todayTimes`，服务端这份才是真存档，两边都得清（和 sign/arena 一个套路）。
     """
     st = player.get(PLAYER_KEY)
     if not isinstance(st, dict):
@@ -248,99 +283,98 @@ def state(player: dict) -> dict:
     return st
 
 
-def data_key(pool_key: str, times: int) -> str:
-    """客户端 `Gacha.getGachaDataKey`：`form == TIMES_CHANGEABLE("1")` 直接用 masterKey，
-    否则 `masterKey + ("0" + times)`（times < 10 补一个 0，我们所有池子都是这一种）。"""
-    times = int(times)
-    return pool_key if times < 0 else pool_key + ("0%d" % times if times < 10 else str(times))
-
-
-def reset_daily(player: dict, pool_key: str, times: int) -> dict:
-    """跨天把 `todayTimes` 清掉（05:00 口径，跟签到/演习场一致）。"""
-    row = state(player).setdefault(data_key(pool_key, times), {})
+def reset_daily(player: dict, pool_key: str, times) -> dict:
+    """跨天把 `todayTimes` 清掉（05:00 口径，跟签到/演习场一致）。返回那一行。"""
+    key = data_key(pool_key, times)
+    st = state(player)
+    row = st.get(key)
     if not isinstance(row, dict):
         row = {}
-        state(player)[data_key(pool_key, times)] = row
+        st[key] = row
     row["masterKey"] = str(pool_key)
     today = time.strftime("%Y-%m-%d", time.localtime(_now() - 5 * 3600))
     if str(row.get("todayDay") or "") != today:
         row["todayDay"] = today
         row["todayTimes"] = 0
-    for field in ("todayTimes", "totalTimes"):
+    for field in ("todayTimes", "totalTimes", "lastGachaTimeSec", "lastFreeTimeSec"):
         try:
             row[field] = int(row.get(field) or 0)
         except (TypeError, ValueError):
             row[field] = 0
-    try:
-        row["lastGachaTimeSec"] = int(row.get("lastGachaTimeSec") or 0)
-    except (TypeError, ValueError):
-        row["lastGachaTimeSec"] = 0
     return row
 
 
-def info_key(pool_key: str, times: int) -> str:
-    return "info_%s_%d" % (pool_key, int(times))
+def row_view(row: dict) -> dict:
+    """回包 / 登录块里那一行的形状（客户端的字段名）。"""
+    return {
+        "masterKey": str(row.get("masterKey") or ""),
+        "todayTimes": int(row.get("todayTimes") or 0),
+        "lastGachaTimeSec": int(row.get("lastGachaTimeSec") or 0),
+        "lastFreeTimeSec": int(row.get("lastFreeTimeSec") or 0),
+        "totalTimes": int(row.get("totalTimes") or 0),
+    }
 
 
+# ---------------------------------------------------------------------------
+# 三份下发的数据
+# ---------------------------------------------------------------------------
 def info_rows() -> dict:
     """`gachaInfoList`：infoKey → 消耗行（客户端 `_gachaInfoObj`）。
 
-    字段是反汇编出来的：`itemKey/itemCount`（抽一次花什么、花多少；都为 0 时
-    客户端 `isFreeGacha()` 判定为免费池）、`voucherKey/voucherCount/useVoucher`（代金券）、
-    `receiveKey/receiveCount`、`limitTimesObj`（`{d:每日, a:活动, t:总计}`，
-    对应 `GACHA_TIMES_LIMIT = {DAILY:"d", ACTIVITY:"a", TOTAL:"t"}`）、
-    `saleInfoObj`（**按次数索引**的折扣表：`saleInfoObj[第几次]` 是那一次的折扣百分比，
-    `saleInfoObj[0]` 是基准价，100 = 原价；客户端 `getGachaSale` 就是
-    `saleInfoObj[次数] || saleInfoObj[0] || 100`）、`saleTypeObj`（可选，决定按
-    总计/每日/周期哪个次数去索引）。
+    字段（反汇编 + 实机核对）：`itemKey/itemCount`（抽一次花什么、花多少；都为 0 时
+    客户端 `isFreeGacha()` 判定为免费池）、`voucherKey/voucherCount`（代金券）、
+    `receiveKey/receiveCount`（额外赠送）、`limitTimesObj`（`{d:每日, a:活动, t:总计}`）、
+    `saleTypeObj`（`{type:"t"|"d"|"w"|"m"}`）、`saleInfoObj`（**按次数索引**的折扣表：
+    `saleInfoObj[第几次]` 是那次的折扣百分比、`[0]` 是基准价，100 = 原价）、
+    `freeInterval`（"HH:MM:SS"，免费 CD，不发就是无 CD）。
 
-    ⚠️ 一开始把 `saleInfoObj` 写成了 `{saleTimes, sale, defaultSale}` 对象 ——
-    客户端取的是 `saleInfoObj[次数]`，拿不到就是 undefined → `getGachaConsume()` 算出
-    `itemCount * undefined / 100 = NaN` → 「价格」显示不出来（实机量到 `consume: null`）。
+    ⚠️ `saleInfoObj` 写成 `{saleTimes, sale, defaultSale}` 那种对象是**错的**：
+    客户端取 `saleInfoObj[次数]`，拿不到就是 undefined →
+    `getGachaConsume = itemCount * undefined / 100 = NaN` → 界面上价格显示不出来
+    （实机量到 `consume: null`）。
     """
     out = {}
     for key, conf in POOLS.items():
-        times = int(conf["times"])
-        cost = conf.get("cost") or []
-        item_key = cost[0][1] if cost else ""
-        item_count = int(cost[0][2]) if cost else 0
-        limit = {"d": int(conf["dailyLimit"])} if conf.get("dailyLimit") else {}
-        out[info_key(key, times)] = {
-            "itemKey": str(item_key),
-            "itemCount": item_count,
-            "voucherKey": "",
-            "voucherCount": 0,
-            "useVoucher": 0,
-            "receiveKey": "",
-            "receiveCount": 0,
-            "limitTimesObj": limit,
-            "saleInfoObj": {"0": 100},
-            "saleTypeObj": {"type": "TOTAL_TIMES"},
-            "freeInterval": "",
-        }
+        for times in times_list(conf):
+            cost = (conf.get("cost") or {}).get(times) or []
+            item_key = cost[0][1] if cost else ""
+            item_count = int(cost[0][2]) if cost else 0
+            limit = {"d": int(conf["dailyLimit"])} if conf.get("dailyLimit") else {}
+            out[info_key(key, times)] = {
+                "itemKey": str(item_key),
+                "itemCount": item_count,
+                "voucherKey": "",
+                "voucherCount": 0,
+                "useVoucher": 0,
+                "receiveKey": "",
+                "receiveCount": 0,
+                "limitTimesObj": limit,
+                "saleInfoObj": {"0": 100},
+                "saleTypeObj": {"type": "t"},
+                "freeInterval": "",
+            }
     return out
 
 
 def master_rows() -> dict:
     """`gachaMasterList`：池子 key → master（客户端 `_gachaMasterObj`）。
 
-    字段（反汇编 `_getGachaInfoByMaster` / `getGachaSale` / `getGachaFullInfo` /
-    `_checkGachaVaild`）：`key` / `name` / `type`(GACHA_TYPE) / `form`(GACHA_FORM，
-    我们全用 "0" DEFAULT) / `infoKeysObj`（`{times: infoKey}`）/ `saleTypeObj`。
-    没有 `startTime`/`endTime` 就不是活动池；`type != 40`（TIME_LIMIT）不校验时间
-    （`_checkGachaVaild` 直接 true）→ 池子一定显示得出来。
+    `resIdx` **必须给**（1..54）：客户端拿它选
+    `res/ui/gacha/src/gachatypelayer<resIdx>.csb` + `res/icon/gacha/gachabtnidx<resIdx>.png`
+    （按钮图标是**硬 assert**，缺文件直接崩）；`showPriority` 决定轮盘顺序（降序）。
+    `infoKeysObj` 的键只能是字符串 "1"/"10"（两个按钮）。
     """
     out = {}
     for key, conf in POOLS.items():
-        times = int(conf["times"])
         out[str(key)] = {
             "key": str(key),
             "name": str(conf["name"]),
             "type": str(conf["type"]),
             "form": "0",                                  # GACHA_FORM.DEFAULT
-            "infoKeysObj": {str(times): info_key(key, times)},
-            "saleTypeObj": {"type": "TOTAL_TIMES"},
-            "sort": int(conf.get("sort") or 0),
+            "resIdx": int(conf.get("resIdx") or 1),
+            "showPriority": int(conf.get("showPriority") or 0),
+            "infoKeysObj": {t: info_key(key, t) for t in times_list(conf)},
+            "saleTypeObj": {"type": "t"},
         }
     return out
 
@@ -349,48 +383,35 @@ def data_rows(player: dict) -> dict:
     """`gachaData`：dataKey → 玩家次数行（客户端 `_gachaDataObj`）。"""
     out = {}
     for key, conf in POOLS.items():
-        row = reset_daily(player, key, int(conf["times"]))
-        out[data_key(key, int(conf["times"]))] = {
-            "masterKey": str(key),
-            "todayTimes": row["todayTimes"],
-            "lastGachaTimeSec": row["lastGachaTimeSec"],
-            "totalTimes": row["totalTimes"],
-        }
+        for times in times_list(conf):
+            row = reset_daily(player, key, times)
+            out[data_key(key, times)] = row_view(row)
     return out
 
 
 def login_block(player: dict) -> dict:
-    """登录块 `data.gacha`（`Gacha.update(data)` 读前三个键，都是 **map**）。
+    """登录块 `data.gacha`（`Gacha.update(data)` 只读前三个键，都是 **map**）。
 
-    ⚠️ `gachaInfoList` / `gachaMasterList` 是关键：以前只发 `gachaData`/`gachaLibCards`，
+    ⚠️ `gachaInfoList` / `gachaMasterList` 是关键：以前只发 `gachaData`，
     所以客户端一个池子都没有（`getGachaMasterList()` 空 → 界面显示「没有卡池」）。
+    `gachaLibCards` / `lastUpdateInfoTime` / `activityTimes` 客户端**零引用**
+    （libCards 只由 `gacha.getlibraryshow` 灌），所以不再发。
     """
     return {
         "gachaData": data_rows(player),
         "gachaInfoList": info_rows(),
         "gachaMasterList": master_rows(),
-        "gachaLibCards": {},
-        "lastUpdateInfoTime": store.now_ms(),
-        "freeGachaTip": {},
-        "activityTimes": {},
     }
 
 
 # ---------------------------------------------------------------------------
 # 抽卡：校验 → 抽 → 发货
 # ---------------------------------------------------------------------------
-def _times_list(conf: dict) -> list:
-    return [int(conf["times"])]
-
-
-def consume_of(pool_key: str, times: int) -> list:
-    """这一次抽卡要扣什么（`[(type, key, count)]`，空 = 免费）。
-
-    单抽池和十连池是**两个独立的 key**（`GACHA_NAMES` 里 4001/4010 分开列），
-    所以消耗直接取池子自己的配置，不用按次数乘。
-    """
+def consume_of(pool_key: str, times) -> list:
+    """这一次抽卡要扣什么（`[(type, key, count)]`，空 = 免费）。"""
     conf = _pool(pool_key) or {}
-    return [(typ, key, int(count)) for (typ, key, count) in (conf.get("cost") or [])]
+    return [(typ, key, int(count))
+            for (typ, key, count) in ((conf.get("cost") or {}).get(str(times)) or [])]
 
 
 def grant(player: dict, cards: list) -> dict:
@@ -420,53 +441,51 @@ def grant(player: dict, cards: list) -> dict:
     return out
 
 
-def card_view(card: dict) -> dict:
-    """`cards` 数组里的一个元素（客户端拿去播翻牌动画）。
-
-    `type` 用客户端的 `REWARD_TYPE`（2 道具 / 3 英雄 / 4 机甲 / 5 军士），
-    `key` 是要发的东西的 key；军士卡再带一个 `quality`（`table_soldier.card[key].q`），
-    因为动画是按类型 + 品质挑特效的（见 `gachaconfig.GACHA_EFFECT_FILE`：
-    HERO/MECHA/SKILL/EXP 各有 S/SR 档特效）。
-    """
-    out = {"type": card.get("type"), "key": card.get("key")}
-    if card.get("count"):
-        out["count"] = int(card["count"])
-    if card.get("type") == TYPE_SOLDIER:
-        row = ((items.table("table_soldier") or {}).get("card") or {}).get(str(card["key"])) or {}
-        out["quality"] = int(row.get("q") or 0)
+def char_block(player: dict, granted: dict) -> dict:
+    """回包里捎给 `CharCenter.updateByServer` 的块（抽到英雄/机甲/军士才带）。"""
+    out = {}
+    if granted.get("soldiers"):
+        out["soldiers"] = store.ensure_soldiers(player)
+    if granted.get("heros"):
+        out["heros"] = [h for h in store.player_heros(player)
+                        if h.get("key") in granted["heros"]]
+    if granted.get("mechas"):
+        out["mechas"] = [m for m in store.player_mechas(player)
+                         if m.get("key") in granted["mechas"]]
     return out
 
 
 def draw(player: dict, pool_key, times) -> dict:
     """`gacha.gacha {key, times}` 的业务体。
 
-    失败回 `GACHA_ERROR_DICT` 里的码（客户端按码弹文案），成功回 200 +
-    `{gachaData, cards, itemKey, extraReward, gemGachaTimes}`（客户端 `Gacha.gacha/<` 读的）。
+    回包（客户端 `Gacha.gacha/<` 读的）：
+        gachaData    **那一行**（不是 map！`updateGachaData(dataKey, result.gachaData)`）
+        cards        **角色 key 字符串数组**（客户端拿 key 查表画卡、播特效、埋点）
+        extraReward  （可选）map，值形如 `{type,key,count}`；不发就不弹
+        gemGachaTimes 累计抽数（写进 `player.gemGachaTimes`）
+    失败用 `GACHA_ERROR_DICT` 里的码。
     """
     pool_key = str(pool_key or "")
     conf = _pool(pool_key)
     if conf is None:
         log.warning("gacha.gacha 没有这个池子 key=%s", pool_key)
         return {"code": ERR_NO_INFO, "msg": "找不到抽卡信息", "data": {}}
-    try:
-        times = int(times or conf["times"])
-    except (TypeError, ValueError):
-        return {"code": ERR_PARAM, "msg": "参数错误", "data": {}}
-    if times not in _times_list(conf):
-        # 池子只有固定次数（单抽池 / 十连池各是一个 key）
-        times = int(conf["times"])
+    times = str(times or ONE)
+    if times not in times_list(conf):
+        times = ONE
 
     row = reset_daily(player, pool_key, times)
     limit = conf.get("dailyLimit")
     if limit and row["todayTimes"] + 1 > int(limit):
-        log.info("gacha.gacha %s 今天次数用完（%s/%s）", pool_key, row["todayTimes"], limit)
+        log.info("gacha.gacha %s x%s 今天次数用完（%s/%s）",
+                 pool_key, times, row["todayTimes"], limit)
         return {"code": ERR_TIMES_OUT, "msg": "次数用完了呢~明天趁早哟~", "data": {}}
 
     cost = consume_of(pool_key, times)
     for (_typ, key, count) in cost:
         if int(count) > 0 and items.count_of(player, key) < int(count):
-            log.info("gacha.gacha %s 资源不够：要 %s x%s 有 %s",
-                     pool_key, key, count, items.count_of(player, key))
+            log.info("gacha.gacha %s x%s 资源不够：要 %s x%s 有 %s",
+                     pool_key, times, key, count, items.count_of(player, key))
             return {"code": ERR_NO_RESOURCE, "msg": "资源不够啦……OAQ", "data": {}}
     for (_typ, key, count) in cost:
         if int(count) > 0:
@@ -478,6 +497,8 @@ def draw(player: dict, pool_key, times) -> dict:
     row["todayTimes"] = row["todayTimes"] + 1
     row["totalTimes"] = row["totalTimes"] + 1
     row["lastGachaTimeSec"] = _now()
+    if not cost:
+        row["lastFreeTimeSec"] = _now()
     log.info("gacha.gacha 池子 %s x%s → 军士 %s / 英雄 %s / 机甲 %s / 道具 %s",
              pool_key, times, granted["soldiers"], granted["heros"],
              granted["mechas"], granted["items"])
@@ -485,15 +506,9 @@ def draw(player: dict, pool_key, times) -> dict:
         "code": CODE_OK,
         "msg": "",
         "data": {
-            "gachaData": {data_key(pool_key, times): {
-                "masterKey": pool_key,
-                "todayTimes": row["todayTimes"],
-                "lastGachaTimeSec": row["lastGachaTimeSec"],
-                "totalTimes": row["totalTimes"],
-            }},
-            "cards": [card_view(c) for c in cards],
-            "itemKey": (cost[0][1] if cost else ""),
-            "extraReward": [],
+            "gachaData": row_view(row),
+            "cards": [str(c["key"]) for c in cards],
+            "extraReward": {},
             "gemGachaTimes": row["totalTimes"],
             "items": items.changed_block(player, known),
             "char": char_block(player, granted),
@@ -501,34 +516,18 @@ def draw(player: dict, pool_key, times) -> dict:
     }
 
 
-def char_block(player: dict, granted: dict) -> dict:
-    """回包里捎给 `CharCenter.updateByServer` 的块（抽到英雄/机甲/军士才带）。"""
-    out = {}
-    if granted.get("soldiers"):
-        out["soldiers"] = store.ensure_soldiers(player)
-    if granted.get("heros"):
-        out["heros"] = [h for h in store.player_heros(player) if h.get("key") in granted["heros"]]
-    if granted.get("mechas"):
-        out["mechas"] = [m for m in store.player_mechas(player)
-                         if m.get("key") in granted["mechas"]]
-    return out
-
-
 def library_show(player: dict, pool_key) -> dict:
-    """`gacha.getlibraryshow {key}` → `{cards, upRate, gachaInfo}`。
+    """`gacha.getlibraryshow {key}` → `{cards, upRate}`。
 
-    客户端 `updateLibCards(cards, upRate)` 会拿 `cards[].type/quality` 排序
-    （`charManager.getCharType` → `CHAR_TYPE.HERO/MECHA`、`getSoldierQuality`），
-    所以每张卡要带 `key` + `type`，军士卡带 `quality`。
+    `cards` 是**角色 key 数组**（客户端 `updateLibCards` 会拿 key 查
+    `charManager.getCharType/getSoldierQuality` 排序，再 `createCharCardNode(key)` 画）。
+    ⚠️ `upRate` **必须是字符串**（客户端 `upRate.split("#")`）—— 没有 UP 就发 `""`，
+    发 `{}` 会 TypeError，整个图鉴层起不来。格式（若以后要显示概率）是
+    `"1@30#2@25#3@25#4@20"`（1..4 = 白/绿/紫/金）。
     """
-    conf = _pool(pool_key)
     cards = []
     for _rarity, pool in card_pool().items():
-        for card_key in pool:
-            row = ((items.table("table_soldier") or {}).get("card") or {}).get(card_key) or {}
-            cards.append({"key": card_key, "type": TYPE_SOLDIER,
-                          "quality": int(row.get("q") or 0)})
-    for (typ, key) in prize_pool():
-        cards.append({"key": key, "type": typ, "quality": 5})
-    return {"cards": cards, "upRate": {}, "gachaInfo": master_rows().get(str(pool_key)) or {}}
-
+        cards.extend(pool)
+    for (_typ, key) in prize_pool():
+        cards.append(key)
+    return {"cards": cards, "upRate": ""}

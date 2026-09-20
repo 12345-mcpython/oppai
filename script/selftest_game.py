@@ -1405,75 +1405,108 @@ def gacha_check(ok: bool) -> bool:
             if not isinstance(master, dict):
                 bad.append(f"没有池子 {key}（{conf['name']}）")
                 continue
-            for field in ("key", "name", "type", "form", "infoKeysObj"):
+            for field in ("key", "name", "type", "form", "infoKeysObj",
+                          "resIdx", "showPriority"):
                 if field not in master:
                     bad.append(f"池子 {key} 的 master 缺 {field}")
-            info_key = (master.get("infoKeysObj") or {}).get(str(conf["times"]))
-            if not info_key or info_key not in infos:
-                bad.append(f"池子 {key} 的 infoKeysObj[{conf['times']}]={info_key!r} "
-                           f"在 gachaInfoList 里找不到（价格/消耗会读不到）")
-                continue
-            info = infos[info_key]
-            if not isinstance(info.get("saleInfoObj"), dict) or "0" not in info["saleInfoObj"]:
-                bad.append(f"{info_key} 的 saleInfoObj 要是按次数索引的 map 且带 0 基准价"
-                           f"（写成 {{saleTimes,sale}} 会让 getGachaConsume 变 NaN）："
-                           f"{info.get('saleInfoObj')!r}")
-            if conf.get("cost"):
-                if int(info.get("itemCount") or 0) != int(conf["cost"][0][2]):
+            # resIdx 选 gachatypelayer<idx>.csb + gachabtnidx<idx>.png（按钮图标硬 assert）
+            idx = master.get("resIdx")
+            if not isinstance(idx, int) or not (1 <= idx <= 54):
+                bad.append(f"池子 {key} 的 resIdx={idx!r} 必须在 1..54"
+                           f"（选 csb/png 用的，客户端缺图标会 assert 崩）")
+            times_keys = sorted((master.get("infoKeysObj") or {}).keys())
+            if times_keys != ["1", "10"]:
+                bad.append(f"池子 {key} 的 infoKeysObj 键要是 ['1','10']"
+                           f"（两个按钮；键会被喂给 getGachaTimesIconUrl，只能 1..10）："
+                           f"{times_keys}")
+            for times in ("1", "10"):
+                info_key = (master.get("infoKeysObj") or {}).get(times)
+                if not info_key or info_key not in infos:
+                    bad.append(f"池子 {key} x{times} 的 infoKey={info_key!r} 在 gachaInfoList "
+                               f"里找不到（价格/消耗会读不到）")
+                    continue
+                info = infos[info_key]
+                if not isinstance(info.get("saleInfoObj"), dict) or "0" not in info["saleInfoObj"]:
+                    bad.append(f"{info_key} 的 saleInfoObj 要是按次数索引的 map 且带 0 基准价"
+                               f"（写成 {{saleTimes,sale}} 会让 getGachaConsume 变 NaN）："
+                               f"{info.get('saleInfoObj')!r}")
+                cost = (conf.get("cost") or {}).get(times) or []
+                if cost and int(info.get("itemCount") or 0) != int(cost[0][2]):
                     bad.append(f"{info_key} 的 itemCount={info.get('itemCount')!r} "
-                               f"跟配置 {conf['cost'][0][2]} 对不上")
-            elif int(info.get("itemCount") or 0):
-                bad.append(f"免费池 {key} 的 itemCount 应该是 0（客户端 isFreeGacha 靠它判断）")
-            if gacha.data_key(key, int(conf["times"])) not in datas:
-                bad.append(f"gachaData 里没有 {gacha.data_key(key, int(conf['times']))}"
-                           f"（客户端 getGachaDataKey 就是这么拼的）")
+                               f"跟配置 {cost[0][2]} 对不上")
+                if not cost and int(info.get("itemCount") or 0):
+                    bad.append(f"免费池 {key} 的 itemCount 应该是 0"
+                               f"（客户端 isFreeGacha 靠它判断）")
+                if gacha.data_key(key, times) not in datas:
+                    bad.append(f"gachaData 里没有 {gacha.data_key(key, times)}"
+                               f"（客户端 getGachaDataKey 就是这么拼的）")
 
-        # getgacha 回扁平三件套（不是套一层 gacha）
+        # getgacha 回扁平三件套（不是套一层 gacha），并顺手点亮黑市红点
         gg = call("gacha.getgacha", {}, 191)
         gd = gg.get("data") or {}
         if not isinstance(gd.get("gachaMasterList"), dict):
             bad.append(f"gacha.getgacha 回包不对（要扁平的 gachaMasterList）：{str(gg)[:90]}")
+        if not isinstance((gd.get("gacha") or {}).get("freeGachaTip"), bool):
+            bad.append("gacha.getgacha 的 data.gacha.freeGachaTip 要是布尔"
+                       "（黑市按钮红点靠 RESP-DISPATCH 写 _freeGachaTip）")
 
-        # 图鉴
-        lib = call("gacha.getlibraryshow", {"key": "4001"}, 192)
+        # 图鉴：cards 是角色 key 数组、upRate 必须是**字符串**
+        lib = call("gacha.getlibraryshow", {"key": "1002"}, 192)
         ld = lib.get("data") or {}
         if not isinstance(ld.get("cards"), list) or not ld["cards"]:
             bad.append(f"gacha.getlibraryshow 没给 cards：{str(lib)[:90]}")
-        elif "type" not in ld["cards"][0] or "key" not in ld["cards"][0]:
-            bad.append(f"图鉴 card 元素缺 type/key（客户端拿它分类排序）：{ld['cards'][0]!r}")
+        elif not all(isinstance(c, str) for c in ld["cards"]):
+            bad.append(f"图鉴 cards 元素要是**角色 key 字符串**：{ld['cards'][:3]!r}")
+        if not isinstance(ld.get("upRate"), str):
+            bad.append(f"upRate={ld.get('upRate')!r} 必须是字符串"
+                       f"（客户端 upRate.split('#')，发 {{}} 会 TypeError 让图鉴层起不来）")
 
         # 抽一张付费单抽：扣钱 + 真发卡
         bag0 = dict(items.items_of(store.get_or_create_player(config.DEFAULT_ACCOUNT)))
-        cost = gacha.consume_of("4001", 1)
+        cost = gacha.consume_of("1002", "1")
         soldiers0 = len(store.ensure_soldiers(store.get_or_create_player(config.DEFAULT_ACCOUNT)))
-        one = call("gacha.gacha", {"key": "4001", "times": 1}, 193)
+        one = call("gacha.gacha", {"key": "1002", "times": "1"}, 193)
         d1 = one.get("data") or {}
         if one.get("code") != 200:
-            bad.append(f"gacha.gacha 4001 code={one.get('code')} {str(one)[:90]}")
-        if len(d1.get("cards") or []) != 1:
-            bad.append(f"抽一次却回了 {len(d1.get('cards') or [])} 张卡")
-        if not isinstance(d1.get("gachaData"), dict) or not d1["gachaData"]:
-            bad.append("gacha.gacha 回包没带 gachaData（客户端要更新次数）")
+            bad.append(f"gacha.gacha 1002 code={one.get('code')} {str(one)[:90]}")
+        cards = d1.get("cards") or []
+        if len(cards) != 1:
+            bad.append(f"抽一次却回了 {len(cards)} 张卡")
+        if not all(isinstance(c, str) for c in cards):
+            bad.append(f"cards 元素要是**角色 key 字符串**（客户端拿 key 查表画卡/播特效）："
+                       f"{cards!r}")
+        # gachaData 是**那一行**，不是 map
+        gd_row = d1.get("gachaData")
+        if not isinstance(gd_row, dict) or "totalTimes" not in gd_row:
+            bad.append(f"gacha.gacha 的 gachaData 要是那一行（客户端 updateGachaData(key, "
+                       f"result.gachaData)）：{str(gd_row)[:80]}")
         bag1 = dict(items.items_of(store.get_or_create_player(config.DEFAULT_ACCOUNT)))
         for (_t, k, c) in cost:
             if int(bag1.get(k) or 0) != int(bag0.get(k) or 0) - int(c):
                 bad.append(f"抽卡没扣 {k}：{bag0.get(k)} -> {bag1.get(k)}")
         soldiers1 = len(store.ensure_soldiers(store.get_or_create_player(config.DEFAULT_ACCOUNT)))
-        kinds = {c.get("type") for c in (d1.get("cards") or [])}
-        if gacha.TYPE_SOLDIER in kinds and soldiers1 <= soldiers0:
-            bad.append(f"抽到军士卡但名单没加（{soldiers0} -> {soldiers1}）"
+        if soldiers1 <= soldiers0:
+            bad.append(f"抽到的东西没进存档（军士 {soldiers0} -> {soldiers1}）"
                        f"—— 多半是 items._add_soldier 查错表（应是 table_soldier.card）")
 
         # 免费池每天 1 次：第一次 200、第二次 204
-        free1 = call("gacha.gacha", {"key": "1001", "times": 1}, 194)
-        free2 = call("gacha.gacha", {"key": "1001", "times": 1}, 195)
+        free1 = call("gacha.gacha", {"key": "1001", "times": "1"}, 194)
+        free2 = call("gacha.gacha", {"key": "1001", "times": "1"}, 195)
         if free1.get("code") != 200:
             bad.append(f"免费池第一次 code={free1.get('code')}（应该 200）")
         if free2.get("code") != 204:
             bad.append(f"免费池第二次 code={free2.get('code')}（应该 204 次数用完）")
 
+        # 十连：次数 = 10、保底至少一张 S+
+        ten = call("gacha.gacha", {"key": "1003", "times": "10"}, 196)
+        td = ten.get("data") or {}
+        if ten.get("code") != 200:
+            bad.append(f"碎片十连 code={ten.get('code')} {str(ten)[:90]}")
+        if len(td.get("cards") or []) != 10:
+            bad.append(f"十连回了 {len(td.get('cards') or [])} 张卡")
+
         # 错误码
-        if call("gacha.gacha", {"key": "9999", "times": 1}, 196).get("code") != 202:
+        if call("gacha.gacha", {"key": "9999", "times": "1"}, 197).get("code") != 202:
             bad.append("抽不存在的池子应该回 202（找不到抽卡信息）")
     finally:
         player = store.get_or_create_player(config.DEFAULT_ACCOUNT)
@@ -1488,8 +1521,9 @@ def gacha_check(ok: bool) -> bool:
         for one in bad:
             print(f"  BAD {one}")
         return False
-    print(f"  OK  抽卡：{len(masters)} 个池子（{', '.join(sorted(masters))}）三件套都是 map、"
-          f"价格能算出来、抽一次真发卡并扣钱、免费池每日 1 次、错误码 202/204 都对"
+    print(f"  OK  抽卡：{len(masters)} 个池子（{', '.join(sorted(masters))}，各带 ×1/×10 两个按钮、"
+          f"resIdx 合法）三件套都是 map、价格能算出来、抽一次真扣钱真发卡（cards 是角色 key、"
+          f"gachaData 是那一行）、免费池每日 1 次、图鉴 upRate 是字符串、错误码 202/204 都对"
           f"（收尾已还原）")
     return ok
 

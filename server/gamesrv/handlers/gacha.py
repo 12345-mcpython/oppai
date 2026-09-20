@@ -34,13 +34,25 @@ def _player(session: dict) -> dict:
 
 @route("gacha.getgacha")
 def get_gacha(session: dict, msg: dict, req_id):
-    """刷新卡池信息（回扁平五件套，客户端 `_this.update(data.data)`）。"""
+    """刷新卡池信息（回扁平三件套，客户端 `_this.update(data.data)`）。
+
+    顺手带一个顶层 `gacha` 块：主界面「黑市」按钮的红点读的是
+    `Gacha.isNeedShowReminded()` = `_freeGachaTip`，而它**只有 RESP-DISPATCH
+    的 `updateByServer` 能写**（登录块里发是死键 —— 那时 `dataManager.gacha` 还没建）。
+    免费抽卡次数还在就点亮红点（也顺便让玩家找得到入口）。
+    """
     player = _player(session)
     block = gacha.login_block(player)
+    free_left = False
+    for key, conf in gacha.POOLS.items():
+        if conf.get("dailyLimit"):
+            row = gacha.reset_daily(player, key, gacha.ONE)
+            free_left = row["todayTimes"] < int(conf["dailyLimit"])
+    block["gacha"] = {"freeGachaTip": bool(free_left)}
     store.save_player(player)
-    log.info("gacha.getgacha：%d 个池子 / %d 行消耗 / %d 行次数",
+    log.info("gacha.getgacha：%d 个池子 / %d 行消耗 / %d 行次数，免费红点=%s",
              len(block["gachaMasterList"]), len(block["gachaInfoList"]),
-             len(block["gachaData"]))
+             len(block["gachaData"]), free_left)
     return {"code": CODE_OK, "msg": "", "data": block}
 
 

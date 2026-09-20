@@ -161,6 +161,54 @@ def _record(player: dict) -> dict:
     return player.setdefault("levels", {})
 
 
+# 「按关卡解锁」的功能按钮：客户端 `MainLayer` 的按钮可见性看
+# `table_function_open[<功能key>].unlock_level_key` 指定的关卡通没通关
+# （`levels[关卡].starMark >= 1`）。**建号 30 级也不会解锁这 6 个** ——
+# 表里它们只有 `lk` 没有 `lv`：
+#
+#     100006 宿舍系统   → 100110      100007 黑市系统（抽卡入口）→ 100105
+#     100011 活动副本   → 100204      100014 天赋系统  → 100316
+#     100019 困难副本   → 100110      100023 公会系统  → 100213
+#
+# 不打通就意味着主界面**少 6 个按钮**（实机表现：玩家问「卡池入口在哪」，
+# 因为黑市按钮压根没画出来）。私服取舍：登录时把这几个解锁关卡直接标成通关，
+# 和 `store.MIN_PLAYER_LV = 30`（建号满级）是同一类。要还原原版就把
+# `MODULE_UNLOCK_VERSION` 清掉并别再调它。
+MODULE_UNLOCK_VERSION = 1
+
+
+def unlock_module_levels(player: dict) -> list:
+    """把「解锁功能按钮」需要的关卡标成通关，返回这次改动的关卡列表。"""
+    if int(player.get("moduleUnlockVersion") or 0) >= MODULE_UNLOCK_VERSION:
+        return []
+    from . import items as items_mod   # 局部 import：items ← store ← instance 是循环依赖
+
+    need = set()
+    for row in (items_mod.table("table_function_open") or {}).values():
+        lk = str((row or {}).get("lk") or "")
+        if lk:
+            need.add(lk)
+    rec = _record(player)
+    changed = []
+    for level_id in sorted(need):
+        row = rec.get(level_id)
+        if not isinstance(row, dict):
+            row = {"starMark": -1, "challengeTimes": 0, "lastUpdateTimeSec": 0}
+            rec[level_id] = row
+        try:
+            star = int(row.get("starMark") or -1)
+        except (TypeError, ValueError):
+            star = -1
+        if star < 1:
+            row["starMark"] = 1          # 1 = 通关（星级细节客户端自己算）
+            changed.append(level_id)
+    player["moduleUnlockVersion"] = MODULE_UNLOCK_VERSION
+    if changed:
+        log.info("玩家 %s 解锁功能按钮所需的 %d 关标成通关：%s",
+                 player.get("account"), len(changed), changed)
+    return changed
+
+
 def login_block(player: dict) -> dict:
     """拼出 `data.instance`。
 
@@ -171,8 +219,11 @@ def login_block(player: dict) -> dict:
 
     ⚠️ 发之前先 `sync_subarea_plays`：分区关卡的 `challengeTimes` 是**今日已打次数**，
     跨天（05:00）要清零，而客户端自己不会清（`isCanBattle` 是裸比较）。
+    ⚠️ 还要 `unlock_module_levels`：不然「黑市（抽卡）/宿舍/天赋/活动副本/困难副本/公会」
+    这 6 个按钮根本不显示（见那个函数的注释）。
     """
     sync_subarea_plays(player)
+    unlock_module_levels(player)
     return {
         "levels": _record(player),
         "chapters": {},

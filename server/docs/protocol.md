@@ -834,29 +834,42 @@ differences.md §B/§D），但所有 id/枚举都照客户端：
 ```js
 config/gachaconfig.jsc:
   GACHA_TYPE  = {10:FREE, 20:GEM, 30:FRAGMENT, 40:TIME_LIMIT, 50:WELFARE, 60:COMMON}
-  GACHA_KEYS  = {FREE:"1001", GEM:"1002", FRAGMENT:"1003"}
-  GACHA_NAMES = {1001:"免费抽卡", 2001:"碎片单抽", 2010:"碎片十连",
-                 4001:"钻石单抽", 4010:"钻石十连"}       // ★ 池子 id 不用编，原版就这几个
+  GACHA_KEYS  = {FREE:"1001", GEM:"1002", FRAGMENT:"1003"}   // ★ 池子 id 就是这三个
   GACHA_FORM  = {DEFAULT:"0", TIMES_CHANGEABLE:"1"}
-  GACHA_TIMES_LIMIT = {DAILY:"d", ACTIVITY:"a", TOTAL:"t"}
+  GACHA_SALE_TYPE   = {t:TOTAL_TIMES, d:DAILY_TIMES, w:WEEKLY_TIMES, m:MONTHLY_TIMES}
+  GACHA_TIMES_LIMIT = {d:DAILY, a:ACTIVITY, t:TOTAL}
   SOLDIER_S_QUALITY = 3 / SOLDIER_SR_QUALITY = 4
+  GUIDE_GACHA_KEY   = 1002                     // 新手引导指向钻石池
   GACHA_ERROR_DICT  = {201 参数错误 / 202 找不到抽卡信息 / 203 军士库满员 / 204 次数用完 /
                        205 倒计时 / 206 资源不够 / 207 资源错误 / 210 非活动期 /
                        211~213 次数用完 / 405 更新数据错误}
 ```
 
+⚠️ `GACHA_NAMES`（`{"1001":"免费抽卡","2001":"碎片单抽","2010":"碎片十连","4001":"钻石单抽",
+"4010":"钻石十连"}`）在客户端**全库零引用**（`jsc_find --exact GACHA_NAMES` 0 命中）——
+是张**死表**，只反映原始命名习惯。**别照它做池子**：真正的模型是
+**3 个 4 位池子 key（1001/1002/1003），每个池子带「×1 / ×10」两个按钮**
+（`master.infoKeysObj = {"1": …, "10": …}`；`Gacha.getGachaTimes(key)` 就是
+`_.keys(infoKeysObj).sort()`，按钮 1/2 分别取 `[0]`/`[1]`）。
+（第一版照 `GACHA_NAMES` 做了 5 个池子 + 单 key，实机表现是**点进抽卡层卡在
+`LoadingLayer#loadinglayer`** —— 见下面第 6 条。）
+
+**入口**：主界面「黑市」按钮（`table_main_layer` 里 `module_key=100007`，`name=heishibutton`，
+`node_name=heishi`）→ `MODULE_FUN.heishi` → `GachaLayer`。它属于「按关卡解锁」的 6 个功能之一
+（`table_function_open["100007"].unlock_level_key = "100105"`），没通关那一关按钮不出现 ——
+服务端 `instance.unlock_module_levels()` 会把这 6 关直接标成通关（私服取舍）。
+
 **登录块 `data.gacha`**（`Gacha.update(data)` 是直接赋值，所以这三份必须是 **map**）：
 
 ```js
-{gachaData:      {"<dataKey>": {masterKey, todayTimes, lastGachaTimeSec, totalTimes}},
+{gachaData:      {"<dataKey>": {masterKey, todayTimes, totalTimes, lastGachaTimeSec, lastFreeTimeSec}},
  gachaInfoList:  {"<infoKey>": {itemKey, itemCount, voucherKey, voucherCount, useVoucher,
                                 receiveKey, receiveCount, limitTimesObj, saleInfoObj,
                                 saleTypeObj, freeInterval}},
- gachaMasterList:{"<poolKey>": {key, name, type, form, infoKeysObj, saleTypeObj}},
- gachaLibCards: {}, lastUpdateInfoTime: 毫秒, freeGachaTip: {}, activityTimes: {}}
+ gachaMasterList:{"<poolKey>": {key, name, type, form, resIdx, showPriority, infoKeysObj}}}
 ```
 
-⚠️ **五个坑**：
+⚠️ **六个坑**：
 
 1. **`gachaInfoList` / `gachaMasterList` 缺了就是「没有卡池」**：早期只发 `gachaData`，
    `getGachaMasterList()` 返回空数组 → 界面显示没有卡池（`Gacha.update` 只认这三个键，
@@ -870,28 +883,52 @@ config/gachaconfig.jsc:
    界面上价格显示不出来）。正确形状如 `{"0": 100}`。
 3. **`dataKey` 怎么拼**：`Gacha.getGachaDataKey(masterKey, times)` 是
    `form == TIMES_CHANGEABLE ? masterKey : masterKey + ("0" + times)`（times < 10 补 0）
-   —— 所以"钻石单抽"是 `4001` → dataKey `400101`；服务端 `gachaData` 的 key 要照这个来。
-4. **`infoKeysObj` 要指向真有的 infoKey**：`_getGachaInfoByMaster` 是
-   `form == DEFAULT ? _gachaInfoObj[master.infoKeysObj[times]]
-                    : _gachaInfoObj[master.infoKeysArr[min(times-1, len-1)].infoKey]`。
+   ⇒ 钻石池 ×1 = `100201`、×10 = `100210`。
+4. **`infoKeysObj` 的键只能是字符串 `"1"` / `"10"`**：客户端按它建按钮、
+   还会喂给 `getGachaTimesIconUrl(times)`（`times<1 || times>10` 直接报错，
+   而且 `"1","2","10"` 会被 `_.keys().sort()` 排成 `["1","10","2"]` → 第 2 个按钮变十连、
+   第 3 个不存在）。
 5. **免费池的判定是「没有消耗」**：`isFreeGacha()` = `info.itemCount` 和
    `info.voucherCount` 都是 0；每日次数走 `info.limitTimesObj.d`
    （`GACHA_TIMES_LIMIT.DAILY`），客户端 `getRemainTimes` 拿它减 `gachaData[key].todayTimes`。
+6. **`master.resIdx` 必须给（1..54）**：客户端拿它选
+   `res/ui/gacha/src/gachatypelayer<resIdx>.csb`、`res/icon/gacha/gachabtnidx<resIdx>.png`
+   （按钮图标是**硬 assert**）、`res/bg/gachabg/gachabgidx<resIdx>.png`。
+   **不给 `resIdx` 的实机表现是**：点「黑市」进得去 `GachaLayer`，但一直卡在
+   `LoadingLayer#loadinglayer` 上（`getGachaTypeLayerUrl(undefined)` 加载不出来）。
+   `showPriority` 决定轮盘顺序（**降序**）。
 
 **三条路由**：
 
 | route | 请求 | 回包 |
 |---|---|---|
-| `gacha.getgacha` | `{}` | **扁平**三件套 + `gachaData/gachaInfoList/gachaMasterList`（⚠️ 不是 `{"gacha":…}`，它不走响应派发） |
-| `gacha.getlibraryshow` | `{key}` | `{cards: [{key, type, quality}], upRate: {}, gachaInfo: master}` |
-| `gacha.gacha` | `{key, times}` | `{gachaData, cards: [{type, key, quality?}], itemKey, extraReward, gemGachaTimes}`；失败用 `GACHA_ERROR_DICT` 的码 |
+| `gacha.getgacha` | `{}` | **扁平**三件套 `gachaData/gachaInfoList/gachaMasterList`（⚠️ 不是 `{"gacha":…}`，它不走响应派发）；可另带一个顶层 `gacha: {freeGachaTip: bool}` 用 RESP-DISPATCH 点亮「黑市」红点 |
+| `gacha.getlibraryshow` | `{key, isShowAll?}` | `{cards: ["<角色key>", …], upRate: "<字符串>"}` |
+| `gacha.gacha` | `{key, times}`（`times` 是 `"1"`/`"10"`，可能是字符串） | `{gachaData: <那一行>, cards: ["<角色key>", …], extraReward: {}, gemGachaTimes}`；失败用 `GACHA_ERROR_DICT` 的码 |
+
+⚠️ 三个字段级细节（反汇编 + 活客户端实测）：
+
+* **`gacha.gacha` 的 `gachaData` 是「那一行」不是 map**：客户端是
+  `updateGachaData(dataKey, result.gachaData)`（`_gachaDataObj[key] = data`），
+  而**登录块**里的 `gachaData` 才是 map（整个赋给 `_gachaDataObj`）。
+* **`cards` 的元素是「角色 key 字符串」**（如 `"lfcz01"`），不是对象：
+  客户端 `new NewCardEffect(cards[0])` / `GachaBeganEffect.getEffectFile(cards)` /
+  `TenGachaShow._updateCardHeadList` 都拿 key 去 `charManager.getCharType(key)` /
+  `getImageFullPath(key)` / `createCharCardNode(key)` 现查表。发对象会直接崩。
+* **`getlibraryshow` 的 `upRate` 必须是字符串**：`GachaLibraryShowLayer._initUpRate` 是
+  `if (!upRate) { 隐藏概率面板; return; }` 然后 `upRate.split("#")` —— 发 `{}` 会
+  **TypeError 让整个图鉴层起不来**。没有 UP 就发 `""`；要显示概率的话格式是
+  `"1@30#2@25#3@25#4@20"`（1..4 = 白/绿/紫/金，1..4 对应 `UP_RATE_NAME` 里那四个面板）。
 
 **卡池内容**（服务端从客户端表里挑，见 `gacha.card_pool()`）：自军卡看
 `table_soldier_master[charKey].card_type == 1`，一共 **152 张 = 每个角色的 4 档卡**
 （`quality` 1/2/3/4，`template` 就是档位；q3 = S、q4 = SR）；大奖是
 `table_hero`（2 个，带 `gacha_name`）+ `table_mecha`（6 个，同样带 `gacha_name`）。
 抽到的英雄/机甲进 `player["heros"]`/`player["mechas"]`，随登录块 `char.heros`/`char.mechas`
-下发（`CarCenter._initHeros/_initMechas` 按 `{key, ownFlag}` 建对象）。
+下发（`CharCenter._initHeros/_initMechas` 按 `{key, ownFlag}` 建对象）。
+⚠️ 抽卡前客户端还有一道自己的 `gachaJudge()`：军士库满、池子不存在、次数用完、
+资源不够（`isConsumeEnough` 查**本地背包**）都会**直接不发请求** —— 所以服务端给的
+消耗道具必须玩家真的持有。
 
 ---
 
