@@ -97,9 +97,14 @@ $env:GS_ADB_SERIAL  = "127.0.0.1:21503"
 
 ```powershell
 mkdir E:\code\zcsmw\game\original -Force
-copy <你的APK> E:\code\zcsmw\game\original\zcsmw.apk
+copy <你的APK> E:\code\zcsmw\game\original\zcsmw-original.apk
 ```
 
+> ⚠️ **文件名必须是 `zcsmw-original.apk`**：`script\build_apk.py` 每次打包都要从它里面
+> 恢复 4 个「带地址的文件」（默认的运行时改写路子靠这个保证每次打包都是干净的），
+> 找不到会**直接报错中止**。要放别处就用环境变量指定：
+> `$env:GS_ORIGINAL_APK = "D:\apk\oppai-2.2.0.apk"`。
+>
 > 解包目录是**工作副本**，后面几步会反复改它（删 SDK、改 assets、替换 `.so`）。
 > 备份丢了就得重新找一份原版包。
 
@@ -114,7 +119,7 @@ E:\code\zcsmw\
 ├── build.ps1                    一键构建
 ├── README.md  REPRODUCE.md      本文
 ├── game\                        ★ apktool 解包目录（工作副本）
-│   └── original\zcsmw.apk       ★ 原版 APK 备份
+│   └── original\zcsmw-original.apk  ★ 原版 APK 备份（文件名别改，见 §2.1）
 ├── server\                      Python 服务端
 ├── script\                      工具脚本
 │   └── apktool_3.0.3.jar        ★
@@ -134,7 +139,7 @@ E:\code\zcsmw\
 
 ```powershell
 cd E:\code\zcsmw
-script\apktool.bat d game\original\zcsmw.apk -o game -f
+script\apktool.bat d game\original\zcsmw-original.apk -o game -f
 ```
 
 **验证点**：`game\` 下出现 `AndroidManifest.xml` / `apktool.yml` / `assets\` /
@@ -147,6 +152,42 @@ Get-ChildItem game\lib -Recurse -Filter *.so | Select-Object Name   # 有 libcoc
 
 > 顺手把第 7 项外部资源取出来：
 > `copy game\lib\armeabi\libcocos2djs.so engine\ref\libcocos2djs-original.so`
+
+---
+
+### Step 1b · 客户端树的一次性处理（**只有重新解包过才需要跑**）
+
+⚠️ **`build.ps1` 不含这几步**，但少了它们，从零解包出来的包**装不上 / 连不上服务端**：
+
+```powershell
+cd E:\code\zcsmw
+# 1) 一次性迁移：补 <uses-sdk>（原版压根没有这个节点）、usesCleartextTraffic、
+#    extractNativeLibs、投放 PermissionHelper.smali 并在 AppActivity 里注入一次调用
+python server\client\modernize.py
+
+# 2) 删掉 2016 年那套渠道 SDK（QuickSDK / 百度 / 微博 / 信鸽 / TalkingData …）
+python script\sdk_strip\analyze.py --json script\sdk_strip\needed.json   # 重新算「谁还必须留」；没动过可跳过
+python script\sdk_strip\strip.py
+python script\sdk_strip\gen_native_stubs.py                              # 补 .so 硬依赖的桩类
+python server\client\patch_smali.py                                      # 必须最后（strip.py 会重建 com\quicksdk 的桩）
+```
+
+不跑的后果（都验证过）：
+
+| 少了哪步 | 后果 |
+|---|---|
+| `modernize.py` | 原版清单里**没有 `<uses-sdk>`**，而 `build_apk.py` 的规范化只改**已存在**的节点 → 打出来的包没有 targetSdk（等同 minSdk 9）→ **Android 14+ 直接拒装**；另外少了 `usesCleartextTraffic` / `PermissionHelper` |
+| `strip.py` | 2016 年的渠道 SDK 还留在包里，它们的 Java 类会跟 targetSdk 33 打架（历史上就是它们逼得 targetSdk 只能停在 23） |
+
+> 顺序不能颠倒：`strip.py` 会把 `smali\com\quicksdk` 整个删掉再按 `needed.json` 重建桩类，
+> **`patch_smali.py` 必须排在它后面**。细节与完整命令见
+> [`server/docs/build.md`](server/docs/build.md) §「完整重建命令」。
+>
+> ⚠️ 已知的一处**手工痕迹**（暂未脚本化）：`GameShare.smali` / `XGAdapter.smali` 被改写成
+> 「保留签名、实现清空」的桩，`AppActivity.smali` 删掉了 3 处 TalkingData 调用 ——
+> 这三处是手工改的，原件备份在 `out\removed-smali-20260920\`（**不进 git**）。
+> 重新解包后不重做这三处，`build_apk.py` 的可达性闸门会把那几个 SDK 包判成「还有人引用」
+> 而**拒绝删除**（包变大，且运行时 `NoClassDefFoundError`）。
 
 ---
 
