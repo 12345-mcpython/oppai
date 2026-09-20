@@ -326,7 +326,7 @@ adb -s 127.0.0.1:21503 logcat -d -v brief | Select-String "OPPAIPATCH|JS ERROR"
 | 卡点 | 结论 | 怎么办 |
 |---|---|---|
 | **装得上** | `targetSdkVersion=23`（原版就这样）。Android 14 起禁装 `<23`（23 恰好能装），**Android 15 起禁装 `<24`** | `adb install -r --bypass-low-target-sdk-block <apk>`（Android 14+ 的官方开关，**不需要 root**）；或者把 manifest 里那个数字抬到 24 重打包 |
-| **跑得起来** | 包里只有 `armeabi` + `x86` | 先量：`adb shell getprop ro.product.cpu.abilist`。含 `armeabi-v7a`/`armeabi` 就能跑（绝大多数手机）；**只有 `arm64-v8a` 的跑不了** —— 引擎的预编译依赖（curl/websockets/png/freetype…）只有 armeabi / armeabi-v7a / x86 三份，没有 arm64 |
+| **跑得起来** | 包里只有 `armeabi` + `x86`（引擎的预编译依赖 curl/websockets/png/freetype… 也只有 armeabi / armeabi-v7a / x86，**没有 arm64**） | **别只看属性，直接装一个试** —— `ro.product.cpu.abilist` / `ro.zygote` 说只有 64 位，不代表跑不了：**实测一加 PLZ110（Android 16，`abilist32` 为空、`ro.zygote=zygote64`）能正常跑**，靠的是厂商自带的 32 位兼容层（该机有 `app_process32`、32 位 `linker`/bionic、`init.svc.zygote_tango`）。没有这层兼容层的机器（例如 Pixel 7 以后）才会 `UnsatisfiedLinkError` |
 | **连得上** | 地址烘在包里 → 换 IP 就要重打包 | 见下面，**改成运行时改写**，连局域网都不需要 |
 
 ```powershell
@@ -344,9 +344,28 @@ python script\serve.py
 # 3) 打包 + 装到真机（-Serial 指到手机；不带任何地址参数，读服务端配置）
 .\build.ps1 -Install -Serial <手机序列号>
 
-# 4) Android 15+ 若报 INSTALL_FAILED_DEPRECATED_SDK_VERSION，换这条装法
+# 4) Android 14+ 装不上（targetSdk=23 < 门槛）时，用这条（官方开关，不需要 root）：
 adb -s <手机序列号> install -r --bypass-low-target-sdk-block out\zcsmw-mod-signed.apk
+#    实测：一加 PLZ110（Android 16）就是靠它装上的
 ```
+
+**实测结论（一加 PLZ110，Android 16 / SDK 36）**：
+
+```
+ro.product.cpu.abilist    arm64-v8a        ← 只有 64 位
+ro.product.cpu.abilist32  （空）
+ro.zygote                 zygote64
+```
+
+看着像"跑不了"，但**实际能跑**：装上后 cocos 层正常起来、`isLogin:true`、`lv:30`，
+`__oppaiFixUrl()` 把 CDN 域名改到 `127.0.0.1:18080`，WS 握手四个帧齐全。
+原因是这条 ROM 带**厂商 32 位兼容层**（`/system/bin/app_process32`、32 位
+`linker`/bionic、`init.svc.zygote_tango` 在跑），32 位 `libcocos2djs.so` 能加载。
+没有这层兼容层的机器（如 Pixel 7 以后）才会 `UnsatisfiedLinkError` —— 那种情况
+才需要为 arm64 重编引擎依赖。
+
+> 屏幕适配：该机日志里 `OplusDisplayCompatUtils: maxAspectRatio 1.86 >>> 1.7778`
+> —— 系统按 16:9 给这个老包**加黑边**（不拉伸），属于预期行为。
 
 **为什么不用 root / 不用改 hosts**：
 

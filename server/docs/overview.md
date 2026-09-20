@@ -229,6 +229,8 @@ vanilla 不传参 → 游戏代码 `function (eventName) { if (/began\d/.test(ev
 | 服务端**明明发了**数据（日志里有），客户端界面不动 | 中间那层转发（`responseConfig`）在这套引擎上不跑；`patch.js` 的 RESP-DISPATCH 补了没有 | §6.12 + [protocol.md §5.2](protocol.md) |
 | 宿舍里好感度涨了，**进度条/等级要重登才动** | 同上：`data.favor` 一直没人派发给 `FavorCenter.cb4ResFavor`（`Favor.prototype.update` 调用 0 次） | 同上 |
 | 关卡结算面板**「获得物资」永远空着**、`Exp+N` 恒为 0 | 奖励块挂在 `data.level` 上了；客户端读的是 `data.rewards.levelReward`，而 `data.level` 只走 `Level.updateLevel()` | `gamesrv/instance.py` |
+| 真机/新系统**装不上**报 `INSTALL_FAILED_DEPRECATED_SDK_VERSION` | 原版 `targetSdkVersion=23`，Android 14+ 卡门槛 | `adb install --bypass-low-target-sdk-block`（官方开关，不需要 root） |
+| 看 `abilist32` 为空就以为**跑不了** 32 位的 `armeabi` | **不一定** —— 有些 ROM 带厂商 32 位兼容层。实测一加 PLZ110（Android 16、`zygote64`、`abilist32` 空）能正常跑 | 直接装一个试；见 [`REPRODUCE.md`](../../REPRODUCE.md) Step 4b |
 | 通关后**好感度弹窗不出现/显示 +0** | 数量要回在 `rewards.levelReward.favor`（"给谁"由客户端拿自己 `table_level.favor_char_key` 算）；回了 `data.rewards.favorReward.favors` 会走到客户端一个 `.count` 写错的死分支 | `gamesrv/favor.py` + `instance.py` |
 
 ### 6.1 SDK 桩里的「死键」——一类很容易误判成 JS 层 bug 的问题
