@@ -861,9 +861,28 @@ def module_open_check(ok: bool) -> bool:
             print(f"  BAD {tag}：data.player.moduleOpenMark 不是 map（{type(marks).__name__}）"
                   f"→ 客户端 `_moduleOpenMark` 是空的，isOpened 全 false，一进游戏连弹")
             return False
-        missing = [mi for mi in want if not marks.get(mi)]
+        if not marks:
+            print(f"  BAD {tag}：moduleOpenMark 是空 map → 一进游戏连弹")
+            return False
+        # ⚠️⚠️ 客户端 `Player.initModuleState` 开头是
+        #     for (var k in _moduleOpenMark) copy[_moduleOpenMark[k]] = _moduleOpenMark[k];
+        # —— **拿值当新键**。所以"客户端实际认得的 mark"是 `{值: 值}`，
+        # 而不是 map 自己的键。全发 1 会被塌缩成单个 {"1": 1}（实机 isOpened 只有 1/32）。
+        effective = {}
+        for v in marks.values():
+            try:
+                effective[int(v)] = int(v)
+            except (TypeError, ValueError):
+                continue
+        missing = [mi for mi in want if not effective.get(int(mi))]
         if missing:
-            print(f"  BAD {tag}：缺 {len(missing)} 个 mark（{missing[:6]}…）→ 这些功能的开启弹窗还会弹")
+            print(f"  BAD {tag}：按客户端那套拷贝算下来缺 {len(missing)} 个 mark"
+                  f"（{missing[:6]}…）→ 这些功能的开启弹窗还会弹")
+            return False
+        wrong = [k for k, v in marks.items() if str(v) != str(k)]
+        if wrong:
+            print(f"  BAD {tag}：值不等于键（{wrong[:4]}… 例如 {wrong[0]}={marks[wrong[0]]}）"
+                  f"—— 客户端拷贝时会被塌缩，等于没发")
             return False
         return True
 
@@ -902,8 +921,9 @@ def module_open_check(ok: bool) -> bool:
 
     if bad:
         return False
-    print(f"  OK  功能开启弹窗：**玩家块**里的 moduleOpenMark 覆盖 {len(want)} 个 mark"
-          f"（存档只标过 1 号时也会补齐 → 一进游戏不弹）；player.setmoduleopenmark 可回写")
+    print(f"  OK  功能开启弹窗：**玩家块**里的 moduleOpenMark 是 `{{markIndex: markIndex}}`、"
+          f"覆盖 {len(want)} 个 mark（存档只标过 1 号 / 值全是 1 时都会补齐 → 一进游戏不弹）；"
+          f"player.setmoduleopenmark 可回写")
     return ok
 
 

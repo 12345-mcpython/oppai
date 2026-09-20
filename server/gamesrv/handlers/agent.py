@@ -212,7 +212,16 @@ def _module_open_mark(player: dict) -> dict:
         # 老存档里存的是客户端直接报上来的**数组** `[1,2,3,…]`。
         # ⚠️ 不能原样回给客户端：它读的是 `moduleOpenMark[module.markIndex]`
         # （markIndex 从 1 起），拿数组当下标会整体错一位。
-        out = {str(mi): 1 for mi in marks}
+        out = {str(mi): mi for mi in marks}
+    # ⚠️⚠️ **每项的值必须等于它自己的键**（`{"7": 7}`，不是 `{"7": 1}`）。
+    # 客户端 `Player.initModuleState` 开头是这么拷贝的（反汇编 + 实机都验过）：
+    #     var moduleOpenMark = {};
+    #     for (var k in this._moduleOpenMark) moduleOpenMark[this._moduleOpenMark[k]] = this._moduleOpenMark[k];
+    # 也就是说它拿**值**当新键 —— 全发 1 会被塌缩成单个 `{"1": 1}`，
+    # 于是 32 个模块里只有 1 号算"已开"，其余 31 个照弹。
+    # 实机对照：`{i: 1}` → isOpened 1/32、`{i: i+6}` → 26/32、`{i: i}` → 32/32。
+    out = {str(k): int(k) for k, v in out.items()
+           if v and str(k).lstrip("-").isdigit()}
     if not store.MODULE_OPEN_POPUP_SKIP:
         return out
     from .. import items as items_mod
@@ -220,7 +229,7 @@ def _module_open_mark(player: dict) -> dict:
     for row in (items_mod.table("table_function_open") or {}).values():
         mi = (row or {}).get("mi")
         if mi is not None:
-            out[str(mi)] = 1
+            out[str(mi)] = int(mi)
     return out
 
 

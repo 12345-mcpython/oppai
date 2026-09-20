@@ -108,9 +108,10 @@ def set_module_open_mark(session: dict, msg: dict, req_id):
     之后紧接着就是 `Player<.initTeams` —— 调用点**没读响应**，是发完不管的。
 
     所以这里两件事：
-      1. 把客户端报上来的这批编号记到存档里（`moduleOpenMark`，**存成 `{markIndex: 1}` map**
-         —— 登录块要把它回给客户端，而客户端读的是 `moduleOpenMark[module.markIndex]`，
-         markIndex 从 1 起，回数组会整体错一位）；
+      1. 把客户端报上来的这批编号记到存档里（`moduleOpenMark`，**存成
+         `{markIndex: markIndex}` map** —— 登录块要把它回给客户端；
+         客户端读的是 `moduleOpenMark[module.markIndex]`，markIndex 从 1 起，
+         回数组会整体错一位；而**值必须是它自己**，见下面那段注释）；
       2. 回一个**带 `player` 块**的响应 —— `player` 在客户端的 responseConfig 里，
          带上它客户端会顺手 `Player.updateByServer(player)`，
          把 `moduleState` 这种权威状态再对齐一次。
@@ -132,9 +133,15 @@ def set_module_open_mark(session: dict, msg: dict, req_id):
         stored = {}
     for mi in marks:
         try:
-            stored[str(int(mi))] = 1
+            mi = int(mi)
         except (TypeError, ValueError):
             continue
+        # ⚠️⚠️ 值要存成**它自己**（`{"7": 7}`），不是 1。
+        # 客户端 `Player.initModuleState` 的拷贝循环是
+        # `copy[_moduleOpenMark[k]] = _moduleOpenMark[k]`（拿值当新键），
+        # 全存 1 会被塌缩成 `{"1": 1}` → 只有 1 号算"已开"，其余照弹。
+        # 详见 gamesrv/handlers/agent.py 的 `_module_open_mark()`。
+        stored[str(mi)] = mi
     player["moduleOpenMark"] = stored
     store.save_player(player)
     log.info("player.setmoduleopenmark account=%s 收到 %d 个编号（存档里现在 %d 个）",
