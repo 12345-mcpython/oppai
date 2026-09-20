@@ -155,6 +155,27 @@ def is_teammate(key: str) -> bool:
     return value in (0, CARD_TYPE_TEAMMATE)
 
 
+def class_type(key: str) -> int:
+    """这个军士的**兵种**（`table_soldier_master[charKey].type`：2/4/8/16/64）。
+
+    任务派遣的上阵条件比的就是它（`table_detect_chapter.soldierType`：
+    神秘基地-甲=16 / 荒凉野郊-弹=4 / 废弃研究所-生=8）。
+    表没抽出来时回 0，调用方自己兜（别因为缺表把人卡死）。
+    """
+    row = (tables().get("card") or {}).get(str(key))
+    if not isinstance(row, dict):
+        return 0
+    char_key = row.get("ck") or ""
+    if not char_key:
+        return 0
+    try:
+        from . import items as items_mod   # 局部 import：soldier ← items 是循环依赖
+
+        return int((items_mod.table("table_soldier_type") or {}).get(char_key) or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
 def _qkey(quality, star) -> str:
     return "quality_%s_%s" % (quality, star)
 

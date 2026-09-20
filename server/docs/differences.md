@@ -111,6 +111,7 @@
 
 | 项 | 私服取值 | 依据 / 不确定性 |
 |---|---|---|
+| 派遣掉落内容 | 用 `table_detect_chapter.gainIcon2`（界面那排「可能掉落」图标）当奖池，按 `groupWeight*` 挑档位 | `gainItemGroup<i>` 指向的**真实道具组表客户端里没有**（把 `"101111"` 当 key 扫遍所有 `table_*` 都 0 命中）→ 只能拿客户端有的东西凑；掉几个（`probability<i>` 千分比）与档位权重是照表算的。单旋钮 `detect.roll_rewards` |
 | 签到排期 / 奖励 | **7 天循环**，每天 1~2 件（金条 / 萌钞 / 行动力 / 礼物 / BP，第 7 天给卡槽） | 客户端表里**没有**签到奖励表（`jsc_find table_sign*` 0 命中）→ 排期和奖励全是服务端数据，原版怎么发的无从考证。单旋钮 `sign.SIGN_REWARDS` / `sign.SIGN_DAYS` |
 | 好感度生日加成 | **×2**（额外再加一份等量经验） | `birthdayAdd` 这个字段得有含义，但**没有任何表能佐证倍数**（2026-09-20 又整表翻了一遍客户端 `table_constant` 的 223 项，没有生日/倍数相关的键）。单旋钮 `favor.FAVOR_BIRTHDAY_MULTIPLE` |
 | 送礼物加好感 | 喜欢→`favor_love` / 讨厌→`favor_hate` / 普通→`favor` | 偏好档位是**实机问客户端**问出来的（`getPreferenceWithSendGift` 返回 2/4/3），但三个字段的用法是推的 |

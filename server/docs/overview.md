@@ -240,7 +240,8 @@ vanilla 不传参 → 游戏代码 `function (eventName) { if (/began\d/.test(ev
 | 宿舍**换完衣服整个界面点不动**（画面在动、音乐照放，屏幕上留着「着裝中…」） | **不是卡顿、也不是服务端**：客户端 `FavorLayer._playChangeClothes` 会把全局触摸闸 `op.touchEnabled = false`，而**唯一开闸的地方是 `end` 动画的最后一帧回调**；引擎 `ActionTimeline::step()` 在回调返回后又执行 `_playing = _loop`（用刚播完那段的 loop）并把新动画直接拽到最后一帧（`_currentFrame = _endFrame`）→ `end` 一帧没播、它的回调永远不响 ⇒ 闸门再也开不回来。探针实测：`touchEnabled=false`、时间轴停在新动画的 `endFrame`、trace 里只有 `FIRE …anim=began` 没有 `end`。换背景 `_replaceBg` / `LoadingLayer.show` 等同款写法都会中招 | 引擎补丁 **③b**（`engine/build/fix_lastframe_replay.py`，见 [`ENGINE_PATCHES.md`](../../engine/ENGINE_PATCHES.md)）；**引擎还没重编时：重启游戏**（回到登录）即可恢复 |
 | 刚进游戏**连弹一堆「功能开启」**（32 个功能挨个弹） | 客户端 `MainLayer._updateAnimation()` 里有 `moduleManager.popModuleOpen()`：它遍历 `player.updateModuleState()`，把「已解锁但 `isOpened` 还是假」的模块挨个弹动画；而 `isOpened` 是 `Player.initModuleState()` 从**登录块的 `moduleOpenMark[mark_index]`** 读的（`table_function_open` 32 条，我们建号就 30 级 + 全解锁）。我们原来**没发这个字段** → 全被当"没弹过" | `handlers/agent.py` 的 `_module_open_mark()`（默认全标已弹过，`store.MODULE_OPEN_POPUP_SKIP = False` 还原）；表抽在 `table_function_open.json` |
 | **点签到没用**（界面里一条签到都没有） | 登录块的 `sign.signs` 给成了**空数组**，而客户端 `SignCenter` 是 `this._signs = data.signs` + `for (k in _signs)` —— 要的是 **map**（`{signKey: 行}`）；另外 `normalSigns`/`eventSigns` 那几个键客户端**压根不读**。领奖回包还要带 `data.sign`（`updateTime` 变大）让客户端把新 `count` 合并进同一行 | `gamesrv/sign.py`（排期/奖励是自定的，见 §D）+ [protocol.md §6.7](protocol.md) |
-| **领了东西背包/货币条不刷新**（要重登才变） | 客户端 `Bag` 是登录时缓存的；服务端改了背包却**不在响应里带 `items` 块**，界面就不会刷（`patch.js` 的 RESP-DISPATCH 里有 `items -> bag.updateItems`）。⚠️ 但**新入手的道具不能塞进去**：`Bag.updateItems` 对未知 key 是 `undefined.count = n` → TypeError | `items.changed_block(player, known_keys)`（只回客户端本来就有的 key）；送礼那条已经用上，见 [protocol.md §5.2](protocol.md) |
+| **点派遣没用**（面板里一个任务都没有） | 登录块 `detect` 原来是 `{completeCount, allDetect, dropInfo, speedCount}` —— 客户端 `Detect.ctor` 读的是 `detect.speedInfo`（分类→已用免费加速次数，**数字**）和 `detect.detect`（章节key→`{beginTimeSec, waitTime, subCD}`，**秒**），两个都没有；6 条 `detect.*` 路由也没实现 | `gamesrv/detect.py` + [protocol.md §6.8](protocol.md) |
+| 领了东西背包/货币条不刷新（要重登才变） | 客户端 `Bag` 是登录时缓存的；服务端改了背包却**不在响应里带 `items` 块**，界面就不会刷（`patch.js` 的 RESP-DISPATCH 里有 `items -> bag.updateItems`）。⚠️ 但**新入手的道具不能塞进去**：`Bag.updateItems` 对未知 key 是 `undefined.count = n` → TypeError | `items.changed_block(player, known_keys)`（只回客户端本来就有的 key）；见 [protocol.md §5.2](protocol.md) |
 | 宿舍**送礼面板一件礼物都没有**（道具栏里也看不到礼物） | 礼物（47 种，`table_item.type == 30`）原版从抽卡/活动来，私服一件都没发 | `store.top_up_gifts()` + `GIFT_STOCK`（建号发、老存档按 `giftStockVersion` 补一次）；想还原就把 `GIFT_STOCK` 改 0 并把版本号 +1 |
 | 送礼**回礼弹窗闪一下东西就没了** | 客户端 `giveAwayGift/<` 只把 `data.returnItems` 丢进 `popupRewardWithItems` **弹窗**，自己不加道具 —— 服务端算完必须自己 `add_item`，否则那个弹窗就是在撒谎 | `handlers/favor.py` 的 `use_gift`（已修，自检见 `selftest_favor.py` 的「回礼入账」段） |
 | 商店里**金条换萌钞点下去弹不出东西/提示"资源不够啦……OAQ"** | 兑换的档位和「补满」规则都在客户端（`exchange_key_<次数>` + `receive_count = -1`），服务端要按同一套算：`times = todayExchangeTimes + 1` → 档位 → `table_resource_exchange[档位]`；`-1` 要补到上限而不是发 -1；失败码必须用客户端 `EXCHANGE_ERR_CODE_DICT` 里真有的（205 = 资源不够、204 = 今天次数用完），自己编的码会 `toast(undefined)` | `gamesrv/exchange.py` + [protocol.md §6.5](protocol.md) |
@@ -758,6 +759,15 @@ WS 侧要替换构造函数（就出事）。定位靠的是**脱离游戏逻辑
       排期/奖励客户端表里**没有** → 自己定了一套 7 天循环（§D，旋钮 `sign.SIGN_REWARDS`）。
       顺带修了「领了东西背包不刷新」：回包带 `items` 块（`items.changed_block`，
       新道具不能塞进去，见 [protocol.md §5.2](protocol.md)）
+- [x] **任务派遣**（`detect.*` 6 条，路由 80→86）：主界面「派遣」。登录块
+      `{speedInfo: {分类: 已用免费加速次数}, detect: {章节key: {beginTimeSec, waitTime, subCD}}}`
+      —— **都是秒**（`detectItem` 里 `(begin+wait-subCD)*1000 - util.time()` 就是剩余毫秒）。
+      六条路由都实现，失败回 **HTTP 200** + `data.code = DETECT_ERROR_CODE`
+      （204 在跑 / 206 没选人 / 207 数量上限 / 208 等级不够 / 210 没到时间 / 213 加速次数用完…）。
+      上阵条件（人数/等级/兵种）照 `table_detect_chapter` 校验，兵种比的是
+      `table_soldier_master[charKey].type`（新抽了 `table_soldier_type.json`）。
+      ⚠️ 表里 15 个派遣全要 20/30 级军士，建号发的 18 个是 1 级 → 得先培养军士才能派（原版设计）。
+      掉落内容见 §D（`gainItemGroup` 的真实道具组客户端没有）
 - [x] 文档：协议 / 逆向手法 / 打包逻辑 / 调试台 / 引擎调试 / 本总览 / **与原版的差异** / **从零复刻**
 
 ### 待办（按卡点排序）

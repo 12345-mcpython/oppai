@@ -938,6 +938,139 @@ def sign_check(ok: bool) -> bool:
     return ok
 
 
+def detect_check(ok: bool) -> bool:
+    """任务派遣（`detect.*` 6 条）：面板列表 / 主界面列表 / 上阵校验 / 派一次 / 加速 / 领取。
+
+    客户端看的是响应里的 `data.code`（`DETECT_ERROR_CODE`），**不是 HTTP 码** ——
+    失败也回 200，所以这里断言的是 `data.code`。
+
+    ⚠️ 表里 15 个派遣都要 20/30 级军士，而默认名单是 1 级 —— 用例临时把 3 个军士
+    抬到 20 级再跑（收尾连等级一起还原），所以可反复跑。
+    """
+    from gamesrv import config, detect, items, store
+
+    table = detect.chapter_table()
+    if not table:
+        print("  BAD 没有 table_detect_chapter，抽表没跑？")
+        return False
+
+    login = call("agent.getlogindata", {}, 160)
+    block = (login.get("data") or {}).get("detect") or {}
+    if not isinstance(block.get("speedInfo"), dict) or not isinstance(block.get("detect"), dict):
+        print(f"  BAD data.detect 形状不对：{str(block)[:80]}")
+        return False
+
+    r = call("detect.checkdetectmain", {"idlist": ["10001", "10002", "10003"]}, 161)
+    d = r.get("data") or {}
+    if d.get("code") != detect.OK or len(d.get("detectMainList") or []) != 3:
+        print(f"  BAD checkdetectmain: {str(r)[:120]}")
+        return False
+
+    r = call("detect.getdetectlist", {"id": "10001"}, 162)
+    d = r.get("data") or {}
+    lst = d.get("detectList") or []
+    if d.get("code") != detect.OK or not lst:
+        print(f"  BAD getdetectlist: {str(r)[:120]}")
+        return False
+    if not all("index" in x and isinstance(x.get("data"), dict) for x in lst):
+        print(f"  BAD detectList 元素形状：{str(lst)[:120]}")
+        return False
+
+    # 挑一个「任意兵种 + 只要 20 级」的派遣
+    key = None
+    for k, row in sorted(table.items()):
+        if int(row.get("soldierType") or 0) == 0 and int(row.get("soldierLv") or 0) <= 20 \
+           and int(row.get("soldierNum") or 0) <= 3:
+            key = k
+            break
+    if key is None:
+        print("  BAD 表里没有「任意兵种 20 级 3 人」的派遣")
+        return False
+    row = table[key]
+    need = int(row.get("soldierNum") or 0)
+
+    player = store.get_or_create_player(config.DEFAULT_ACCOUNT)
+    before_items = dict(items.items_of(player))
+    before_runs = json.loads(json.dumps(detect.state(player).get("runs") or {}))
+    before_speed = dict(detect.state(player).get("speedInfo") or {})
+    before_count = int(detect.state(player).get("completeCount") or 0)
+    # ⚠️ 就地改这一份存档再 save（`get_or_create_player` 每次都重新 load，
+    #    改旧对象再存新对象是白改 —— 这里踩过一次）
+    soldiers = list(player.get("soldiers") or [])[:need]
+    before_lv = {int(s["id"]): int(s.get("lv") or 1) for s in soldiers}
+    ids = []
+    for s in soldiers:
+        s["lv"] = max(int(s.get("lv") or 1), 20)
+        ids.append(int(s["id"]))
+    store.save_player(player)
+
+    bad = []
+    try:
+        # 先测「没选军士」：把选人记录清掉再派 → 206
+        st = detect.state(player)
+        st["runs"].pop(key, None)
+        store.save_player(player)
+        r = call("detect.godetect", {"detectkey": key}, 163)
+        if (r.get("data") or {}).get("code") != detect.GODETECT_NOTSELECT:
+            bad.append(f"没选军士应回 {detect.GODETECT_NOTSELECT}，实回 {str(r)[:100]}")
+
+        r = call("detect.selectsolders", {"detectkey": key, "solders": ids}, 164)
+        if (r.get("data") or {}).get("code") != detect.OK:
+            bad.append(f"selectsolders: {str(r)[:100]}")
+        r = call("detect.godetect", {"detectkey": key}, 165)
+        if (r.get("data") or {}).get("code") != detect.OK:
+            bad.append(f"godetect: {str(r)[:140]}")
+        # 再派一次 → 已经在跑
+        r = call("detect.godetect", {"detectkey": key}, 166)
+        if (r.get("data") or {}).get("code") not in (detect.GODETECT_RUNNING,
+                                                     detect.GODETECT_COMPLETE):
+            bad.append(f"重复派遣应回 RUNNING/COMPLETE，实回 {str(r)[:100]}")
+        # 没到时间不能领
+        r = call("detect.godetectcomplete", {"detectkey": key}, 167)
+        if (r.get("data") or {}).get("code") != detect.GODETECT_NOTCOMPLETE:
+            bad.append(f"没到时间应回 {detect.GODETECT_NOTCOMPLETE}，实回 {str(r)[:100]}")
+        # 加速跳过整段等待
+        r = call("detect.subtime", {"detectkey": key, "timesed": 999999}, 168)
+        if (r.get("data") or {}).get("code") != detect.OK:
+            bad.append(f"subtime: {str(r)[:120]}")
+        # 领
+        r = call("detect.godetectcomplete", {"detectkey": key}, 169)
+        d = r.get("data") or {}
+        if d.get("code") != detect.OK:
+            bad.append(f"godetectcomplete: {str(r)[:140]}")
+        rewards = d.get("rewards") or {}
+        if not rewards:
+            bad.append(f"领取没有任何掉落：{str(d)[:120]}")
+        after = ((call("agent.getlogindata", {}, 170).get("data") or {}).get("item") or {})
+        for k, c in rewards.items():
+            if int(after.get(k) or 0) != int(before_items.get(k) or 0) + int(c):
+                bad.append(f"掉落 {k} 没到账：{before_items.get(k)} -> {after.get(k)}")
+        if int(d.get("complateDetectCount") or 0) != before_count + 1:
+            bad.append(f"complateDetectCount={d.get('complateDetectCount')!r} 期望 {before_count + 1}")
+    finally:
+        p = store.get_or_create_player(config.DEFAULT_ACCOUNT)
+        st = detect.state(p)
+        st["runs"] = before_runs
+        st["speedInfo"] = before_speed
+        st["completeCount"] = before_count
+        for s in (p.get("soldiers") or []):
+            sid = int(s.get("id") or 0)
+            if sid in before_lv:
+                s["lv"] = before_lv[sid]
+        got = items.items_of(p)
+        for k, v in before_items.items():
+            got[k] = v
+        store.save_player(p)
+
+    if bad:
+        for one in bad:
+            print(f"  BAD {one}")
+        return False
+    print(f"  OK  派遣：面板 {len(lst)} 个任务 / 未选军士被拒 / 派 {key}"
+          f"（{row.get('name')}）→ 加速 → 领取到手（收尾已还原）")
+    return ok
+
+
 def main():
     cases = [
         ("agent.getlogindata", {}),
@@ -1024,6 +1157,13 @@ def main():
         ok = exchange_check(ok)
     except Exception as exc:  # noqa: BLE001
         print(f"  BAD 交易所自检异常: {exc}")
+        ok = False
+
+    print()
+    try:
+        ok = detect_check(ok)
+    except Exception as exc:  # noqa: BLE001
+        print(f"  BAD 派遣自检异常: {exc}")
         ok = False
 
     print()

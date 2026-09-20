@@ -652,6 +652,59 @@ SignNormalLayer.receiveRewards(): if (!sign.canSignToday) return;   // 签过了
 排期和奖励**客户端表里没有**（`jsc_find table_sign*` 0 命中）→ 服务端自己定，
 见 `gamesrv/sign.py` 的 `SIGN_REWARDS`（7 天循环）与 differences.md §D。
 
+### 6.8 任务派遣（`detect.*`）
+
+主界面「派遣」按钮（模块 `100025`）。客户端 `src/data/detect.jsc` + `src/ui/detect/*`。
+
+**登录块** `data.detect`：
+
+```js
+{"speedInfo": {"10001": 已用免费加速次数, ...},        // 值是**数字**（不是对象）
+ "detect":    {"<章节key>": {beginTimeSec, waitTime, subCD, speedCount}}}
+```
+
+`Detect.ctor` 读 `detect.speedInfo` 与 `detect.detect`；
+`getSpeedCountInfo(type) = (table_detect[type].speed_count - speedInfo[type]) + "/" + speed_count`。
+
+**计时口径**（`detectItem._getGoDetectTime`）：
+
+```js
+剩余毫秒 = (beginTimeSec + waitTime - subCD) * 1000 - util.time()
+```
+
+⇒ `beginTimeSec` / `waitTime` / `subCD` **都是秒**；`subCD` 是「已经跳过多少秒」，
+加速就是把它加上去（不用改 `beginTimeSec`）。
+
+**六条路由 + 错误码**：失败也回 **HTTP 200**，客户端看的是 `data.code`
+（`DETECT_ERROR_CODE`）—— 回非 200 反而会走网络失败分支。
+
+| route | 请求 | 回包 |
+|---|---|---|
+| `detect.getdetectlist` | `{id}`（分类 10001/10002/10003） | `{code, detectList: [{index: 章节key, data: {beginTimeSec,…}}]}` |
+| `detect.checkdetectmain` | `{idlist}` | `{code, detectMainList: [{id, isOpen}]}` |
+| `detect.selectsolders` | `{detectkey, solders:[军士id]}` | `{code}` |
+| `detect.godetect` | `{detectkey}` | `{code, detect:{…}}` |
+| `detect.godetectcomplete` | `{detectkey}` | `{code, complateDetectCount, detect, rewards, items}` |
+| `detect.subtime` | `{detectkey, timesed}` | `{code, speedInfo, detect:{…}}` |
+
+```
+200 OK / 202 PARAM_ERROR / 203 TIME_CLOSE / 204 GODETECT_RUNNING / 205 GODETECT_COMPLETE
+206 GODETECT_NOTSELECT / 207 GODETECT_COUNTMAX / 208 GODETECT_SOLV / 209 GODETECT_NOTGO
+210 GODETECT_NOTCOMPLETE / 211 GODETECT_SOISGO / 212 GODETECT_SOTYPE / 213 SPEED_MAX
+214 SPEED_ITEM_MAX
+```
+
+**上阵条件**来自 `table_detect_chapter`：`soldierNum`（人数）、`soldierLv`（等级门槛）、
+`soldierType`（兵种 = `table_soldier_master[charKey].type`：4/8/16，0 = 任意）。
+⚠️ 表里 15 个派遣**全要 20/30 级**军士，而私服建号发的 18 个军士是 1 级 ——
+所以刚建号时点进去会看到「需求 3 个 20 级以上任意军士」而派不了，得先培养军士
+（这是原版设计，不是 bug；想放宽就改 `gamesrv/detect.py` 的 `_check_soldiers`）。
+
+**掉落**：`table_detect_chapter_reward_group[gainItemGroup<i>]` 给 `group1..4` + 权重，
+但**「组里到底有哪些道具」那张表客户端没有**（把 `"101111"` 当 key 扫遍所有 `table_*`
+都 0 命中）→ 服务端用表里就有的 `gainIcon2`（界面上「可能掉落」那排图标）当奖池，
+按权重挑档位取一件。见 differences.md §D。
+
 ---
 
 ## 7. 切主场景

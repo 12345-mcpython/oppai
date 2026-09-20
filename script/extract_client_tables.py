@@ -265,6 +265,82 @@ SUBAREA_ACHIEVEMENT_REWARD_JS = r"""
 """
 
 
+# 军士的**兵种**（`table_soldier_master[charKey].type`：2/4/8/16/64）。
+#
+# 为什么单独抽一张：`SOLDIER_JS` 里的 `master` 只留了 `card_type`（1=自军/2=敌方），
+# 而**任务派遣**的上阵条件是 `table_detect_chapter.soldierType`（4/8/16），
+# 比的就是这个 `type`（神秘基地-甲=16 / 荒凉野郊-弹=4 / 废弃研究所-生=8）。
+SOLDIER_TYPE_JS = r"""
+(function () {
+    var out = {};
+    for (var k in table_soldier_master) {
+        var r = table_soldier_master[k] || {};
+        if (r.type !== undefined) { out[k] = r.type; }
+    }
+    return JSON.stringify(out);
+})()
+"""
+
+
+# 任务派遣（`detect.*`）。
+#
+# 客户端 `src/data/detect.jsc` 的数据模型（反汇编）：
+#   * `table_detect`（3 条）= **分类**：礼物 10001 / 卡牌 10002 / 材料 10003，
+#     每条有 `detectMax`（同时能派几队）和 `speed_count`（免费加速次数上限）
+#   * `table_detect_chapter`（15 条）= **具体任务**：`key` 就是分类 id（10001…），
+#     另有 `soldierNum`/`soldierLv`/`soldierType`（上阵要求）、`waitTime`（秒）、
+#     `subCD`、`probability1..6`（千分比）、`gainItemGroup1..6`、`gainIcon`/`gainIcon2`（图标）
+#   * `table_detect_chapter_reward_group` = 掉落档位权重：`group1..4` + `groupWeight1..4`
+#     （还有一组 `groupWeightP*`，含义没定，暂时没用）
+#
+# 计时口径（`detectItem._getGoDetectTime`）：
+#     剩余毫秒 = (beginTimeSec + waitTime - subCD) * 1000 - util.time()
+# ⇒ `beginTimeSec` / `waitTime` / `subCD` **都是秒**（×1000 才是毫秒）。
+#
+# 客户端的 `DETECT_ERROR_CODE`（响应里 `data.code` 用它，不是 HTTP 码）：
+#     200 OK / 202 PARAM_ERROR / 203 TIME_CLOSE / 204 GODETECT_RUNNING /
+#     205 GODETECT_COMPLETE / 206 GODETECT_NOTSELECT / 207 GODETECT_COUNTMAX /
+#     208 GODETECT_SOLV / 209 GODETECT_NOTGO / 210 GODETECT_NOTCOMPLETE /
+#     211 GODETECT_SOISGO / 212 GODETECT_SOTYPE / 213 SPEED_MAX / 214 SPEED_ITEM_MAX
+DETECT_JS = r"""
+(function () {
+    var out = {};
+    for (var k in table_detect) {
+        var r = table_detect[k] || {};
+        out[k] = {n: r.name, max: r.detectMax, sc: r.speed_count};
+    }
+    return JSON.stringify(out);
+})()
+"""
+
+DETECT_CHAPTER_JS = r"""
+(function () {
+    var out = {};
+    for (var k in table_detect_chapter) {
+        var r = table_detect_chapter[k];
+        if (!r) { continue; }
+        var row = {};
+        for (var f in r) {
+            if (f === "sceneDec" || f === "conditionDesc") { continue; }   // 长文案，服务端不用
+            if (f.indexOf("gainItemGroup") === 0 || f.indexOf("probability") === 0 ||
+                f === "key" || f === "name" || f === "waitTime" || f === "subCD" ||
+                f === "soldierNum" || f === "soldierLv" || f === "soldierType" ||
+                f === "gainIcon" || f === "gainIcon2" || f === "priority" ||
+                f.indexOf("needUnlock") === 0) {
+                row[f] = r[f];
+            }
+        }
+        out[k] = row;
+    }
+    return JSON.stringify(out);
+})()
+"""
+
+DETECT_GROUP_JS = r"""
+(function () { return JSON.stringify(table_detect_chapter_reward_group); })()
+"""
+
+
 # 功能开启表（`table_function_open`，32 条）。
 #
 # 客户端两处读它：
@@ -683,6 +759,10 @@ def main() -> int:
         ("table_exchange_item.json", EXCHANGE_ITEM_JS),
         ("table_resource_exchange.json", EXCHANGE_RESOURCE_JS),
         ("table_function_open.json", FUNCTION_OPEN_JS),
+        ("table_detect.json", DETECT_JS),
+        ("table_detect_chapter.json", DETECT_CHAPTER_JS),
+        ("table_detect_chapter_reward_group.json", DETECT_GROUP_JS),
+        ("table_soldier_type.json", SOLDIER_TYPE_JS),
         ("table_soldier.json", SOLDIER_JS),
         ("table_shelf.json", SHELF_JS),
         ("table_shop.json", SHOP_JS),

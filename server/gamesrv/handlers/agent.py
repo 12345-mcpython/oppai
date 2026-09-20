@@ -9,7 +9,7 @@ route 名字来自客户端 src/manager/datamanager.js：
 from __future__ import annotations
 
 from ..gameproto import CODE_OK
-from .. import config, exchange, favor, instance, logx, quests, sign, store, subarea
+from .. import config, detect, exchange, favor, instance, logx, quests, sign, store, subarea
 from . import route
 
 log = logx.get("handler.agent")
@@ -138,7 +138,10 @@ def _module_stubs(player: dict | None = None) -> dict:
             "bossKillRewardList": [],
         },
         "chat": {"channels": [], "panels": []},
-        "detect": {"completeCount": 0, "allDetect": [], "dropInfo": {}, "speedCount": {}},
+        # 任务派遣（主界面「派遣」）。形状 `{speedInfo: {分类: 已用免费加速次数},
+        # detect: {章节key: {beginTimeSec, waitTime, subCD, speedCount}}}` —— 都是**秒**，
+        # 客户端 `Detect.ctor` 读 `detect.speedInfo` + `detect.detect`（见 gamesrv/detect.py）。
+        "detect": detect.block(player),
         "medal": {"medals": [], "clothes": [], "bgs": [], "heads": []},
         # 装备。形状见 store.equipment_block() —— 是 maxEquipmentCount / equipments /
         # equipmentGroups 三个键。以前这里是 `{equipments: [], suits: {}}`，两个问题：
