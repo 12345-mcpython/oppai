@@ -178,6 +178,7 @@ vanilla 不传参 → 游戏代码 `function (eventName) { if (/began\d/.test(ev
 | 数据模块构造容错 | 某个模块数据没对齐时不连累整体 |
 | `initUserData` 兜底 | 无论如何保证 `player._moduleState` 建出来（否则主界面黑屏） |
 | **`RESP-DISPATCH`** | 客户端 `responseConfig` 在这套引擎上根本没被派发，自己补一层响应分发。**三类写法都要补**（收整个 `res` 的 / `updateByServer` 的 / 方法名各不相同的），只补中间那批的话好感度整条是死的 —— 见 [protocol.md §5.2](protocol.md) |
+| **`URL-REWRITE`** | jsc 里的官方地址只能**等长**替换（`<host>:18080` 必须 19 字节 → LAN IP 必须 13 字符），而且换 IP 会静默跳过、整包作废。改成运行时改写 `cc.loader.getXMLHttpRequest()` 与 `window.WebSocket`，地址不再有长度约束 —— 配合 `adb reverse` 连局域网/root/hosts 都不需要（见 [`REPRODUCE.md`](../../REPRODUCE.md) Step 4b） |
 | 宿舍互动判定框放大 | ⚠️ **这条是私服体验改动，不是修 bug**（原版 100×100 且不可见） |
 
 ### `probe.js` —— 诊断（`--no-probe` 时不打包）
@@ -578,6 +579,44 @@ server.request('favor.setclothes', {charKey:'sasm', itemKey:f.curClothes}, cb, f
 
 **教训**：这类问题的症状是「服务端明明发了」，很容易反向怀疑数据形状，
 于是把形状改来改去都没用。**先量转发层有没有到**，再谈形状。
+
+---
+
+### 6.13 包一层**原生构造函数**时，静态常量要一起抄
+
+给「真机不用 root」做 URL 改写时踩的，症状极具误导性：
+
+```
+客户端：WS connect "ws://127.0.0.1:8080" → WS connected
+        randomKey / dhExchange / hashKey / base64Encode 全算完了
+        GAMELOG cc.log: WebSocket readState:1        ← 就停在这
+服务端：WS 会话开始 → 发欢迎包 →（一直阻塞在 recv，一个帧都没收到）
+```
+
+看起来像「网络不通」或「加密算错」，其实两边都没问题 —— 是**根本没调 send**。
+
+根因：客户端 `wsFactory` 是在**模块加载时**把 `window.WebSocket` **捕获**下来的
+（`var WebSocket = window.WebSocket || window.MozWebSocket`），而
+`wsHandle.send` 的判定是：
+
+```js
+if (this.socket.readyState === WebSocket.OPEN) { ...this.socket.send(data)... }
+else { cc.log("WebSocket readState:" + this.socket.readyState); }
+```
+
+我包出来的 `W` **没有抄静态常量**，于是 `WebSocket.OPEN === undefined`，
+`1 === undefined` 恒假 → 走 else 分支，只打一条日志就返回。
+（那行 `readState:1` 就是 else 分支打的，看着像"状态正常"，实际是"没发"。）
+
+**规矩**：包装原生构造函数时，除了 `prototype`，静态成员也要照抄 ——
+至少 `CONNECTING/OPEN/CLOSING/CLOSED` 这类常量，稳妥点
+`for (var k in orig) W[k] = orig[k];` 再补一遍白名单（JSB 的原生构造函数
+不一定可枚举）。
+
+**教训**：同一个「单点拦截」的设计，XHR 侧只是包一个实例方法（没事），
+WS 侧要替换构造函数（就出事）。定位靠的是**脱离游戏逻辑的最小复现**：
+直接用客户端环境手动 `new WebSocket(...)` + `send(...)`，服务端立刻收到
+`WS <- #1` —— 一步就把「包装坏了」和「游戏逻辑坏了」分开了。
 
 ---
 

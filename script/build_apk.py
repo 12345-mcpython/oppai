@@ -39,6 +39,7 @@ import re
 import shutil
 import subprocess
 import sys
+import zipfile
 # --- 路径自举（项目已重排：脚本在 script/、服务端在 server/）---
 # 从自己往上找带 _paths.py 的那一层，把它和 server/ 都塞进 sys.path。
 _d = os.path.dirname(os.path.abspath(__file__))
@@ -66,6 +67,19 @@ OLD_HOST = b"cdn.shuangmawei.net"          # 19 字节
 OLD_WWW = b"www.shuangmawei.net"           # 19 字节
 OLD_OAUTH = b"http://114.55.66.97:16840"   # 25 字节
 OLD_SHARE = b"http://114.55.66.97:14589"   # 25 字节
+
+# 原始包（`--no-url-patch` 要拿它恢复「带地址的那几个文件」）
+ORIGINAL_APK = os.environ.get(
+    "GS_ORIGINAL_APK", os.path.join(APK_DIR, "original", "zcsmw-original.apk"))
+
+# 打包时会改地址的文件（相对 APK_DIR）。前三个是**编译过的 jsc**，只能等长替换；
+# 最后一个是纯文本 JSON（热更新读的，走原生 curl，运行时拦不到）。
+URL_FILES = (
+    "assets/srcex/urlconfig.jsc",
+    "assets/src/util/server.jsc",
+    "assets/src/data/share.jsc",
+    "assets/src/patch/project.manifest",
+)
 
 # 直接删掉的资源（已经停服/用不到）
 DROP_ASSETS = (
@@ -317,6 +331,57 @@ def _replace_in_file(path: str, pairs, what: str) -> int:
     return done
 
 
+def restore_pristine_urls() -> None:
+    """把带地址的那几个文件从**原始包**恢复回来。
+
+    `--no-url-patch` 用。为什么必须恢复：这几个文件是**就地改写**的，
+    换地址时 `_replace_in_file` 找不到旧串会**静默跳过** —— 实测踩过：
+    DHCP 换了 PC 的 IP 之后，`game/` 里那三个 jsc + manifest 卡在旧 IP 上，
+    重打包出来的包还是旧地址，整包作废。恢复成原始串之后，运行时改写
+    （`patch.js` 的 URL-REWRITE）才有东西可改。
+    """
+    if not os.path.exists(ORIGINAL_APK):
+        raise SystemExit(
+            f"!! 找不到原始包 {ORIGINAL_APK}\n"
+            f"   --no-url-patch 需要它来恢复地址（可用 GS_ORIGINAL_APK 指定）")
+    with zipfile.ZipFile(ORIGINAL_APK) as z:
+        for rel in URL_FILES:
+            data = z.read(rel)
+            dst = os.path.join(APK_DIR, rel.replace("/", os.sep))
+            os.makedirs(os.path.dirname(dst), exist_ok=True)
+            with open(dst, "wb") as fh:
+                fh.write(data)
+    log(f"  已从原始包恢复 {len(URL_FILES)} 个带地址的文件（交给运行时改写）")
+
+
+def rewrite_manifest(base: str) -> None:
+    """`project.manifest` 按 **JSON** 重写（只换 host，路径原样保留）。
+
+    ⚠️ 它是**热更新**读的，走的是原生 curl 而不是 JS —— `patch.js` 的
+    URL-REWRITE 拦不到，所以必须在这里改对。
+    好处：纯文本 JSON 不受「等长替换」约束，所以域名/IP/端口随便填，
+    换服务器也不会出现「找不到旧串就跳过」那类静默失败。
+    """
+    path = os.path.join(APK_DIR, "assets/src/patch/project.manifest")
+    with open(path, "r", encoding="utf-8") as fh:
+        raw = fh.read()
+    try:
+        cfg = json.loads(raw)
+    except Exception as exc:  # noqa: BLE001
+        raise SystemExit(f"!! project.manifest 不是合法 JSON：{exc}") from exc
+    n = 0
+    for key in ("packageUrl", "remoteManifestUrl", "remoteVersionUrl"):
+        value = cfg.get(key)
+        if isinstance(value, str) and value:
+            new = re.sub(r"^[a-z]+://[^/]+", base, value, count=1)
+            if new != value:
+                cfg[key] = new
+                n += 1
+    with open(path, "w", encoding="utf-8", newline="\n") as fh:
+        fh.write(json.dumps(cfg, indent=4))
+    log(f"  project.manifest: 改写 {n} 个地址 -> {base}")
+
+
 # res/<dir> -> 资源类型。只列「能按文件删」的；values*/ 是定义处，不参与。
 RES_DIR_TYPE = {
     "drawable": "drawable", "layout": "layout", "anim": "anim", "color": "color",
@@ -556,20 +621,33 @@ def prune_stale_dex() -> None:
 
 
 def prepare_assets(host: str, port: int, login_port: int, patch_path: str,
-                   probe_path: str, with_probe: bool) -> None:
-    token = make_host_token(host, port)
-    login_base = make_login_base(host, login_port)
-    log(f"CDN      -> {token.decode()}")
-    log(f"登录服务 -> {login_base.decode()}")
+                   probe_path: str, with_probe: bool,
+                   patch_urls: bool = True) -> None:
+    cdn_base = f"http://{host}:{port}"
+    login_url = f"http://{host}:{login_port}"
 
-    _replace_in_file(os.path.join(APK_DIR, "assets/srcex/urlconfig.jsc"),
-                     [(OLD_HOST, token)], "urlconfig.jsc")
-    _replace_in_file(os.path.join(APK_DIR, "assets/src/util/server.jsc"),
-                     [(OLD_OAUTH, login_base)], "server.jsc")
-    _replace_in_file(os.path.join(APK_DIR, "assets/src/data/share.jsc"),
-                     [(OLD_SHARE, login_base)], "share.jsc")
-    _replace_in_file(os.path.join(APK_DIR, "assets/src/patch/project.manifest"),
-                     [(OLD_HOST, token), (OLD_WWW, token)], "project.manifest")
+    if patch_urls:
+        # 老路子：把 jsc 里的地址**等长**替换掉（<host>:<port> 必须 19 字节
+        # → host 必须 13 个字符）。留着是为了兼容老流程与「包里不留官方地址」。
+        token = make_host_token(host, port)
+        login_base = make_login_base(host, login_port)
+        log(f"CDN      -> {token.decode()}（等长替换 jsc）")
+        log(f"登录服务 -> {login_base.decode()}（等长替换 jsc）")
+        _replace_in_file(os.path.join(APK_DIR, "assets/srcex/urlconfig.jsc"),
+                         [(OLD_HOST, token)], "urlconfig.jsc")
+        _replace_in_file(os.path.join(APK_DIR, "assets/src/util/server.jsc"),
+                         [(OLD_OAUTH, login_base)], "server.jsc")
+        _replace_in_file(os.path.join(APK_DIR, "assets/src/data/share.jsc"),
+                         [(OLD_SHARE, login_base)], "share.jsc")
+    else:
+        # 新路子：jsc 保留原始地址，运行时由 patch.js 的 URL-REWRITE 改写。
+        # 好处是没有长度约束（127.0.0.1 也行），换服务器只要重打包 assets。
+        restore_pristine_urls()
+        log(f"CDN      -> {cdn_base}（运行时改写，jsc 保持原始地址）")
+        log(f"登录服务 -> {login_url}（运行时改写）")
+
+    # manifest 走原生 curl，运行时拦不到 → 一律在这里按 JSON 改对
+    rewrite_manifest(cdn_base)
 
     # project.json：jsList 里加入 patch.js（必需）和 probe.js（可选）
     #
@@ -611,15 +689,24 @@ def prepare_assets(host: str, port: int, login_port: int, patch_path: str,
                 os.remove(stale)
                 log(f"  已删除 assets/src/patch/{name}")
 
-    # 写 patch.js / probe.js（__CDN_BASE__ 换成真实地址）
+    # 写 patch.js / probe.js，把占位符换成真实地址
+    #
+    #   __CDN_BASE__          probe.js 的 REPL/hook 地址
+    #   __OPPAI_CDN_BASE__    patch.js 的 URL-REWRITE：CDN 目标
+    #   __OPPAI_LOGIN_BASE__  patch.js 的 URL-REWRITE：登录/oauth 目标
+    # （`--no-url-patch` 时后两个才是真正的地址来源，长度随便）
     sources = [("patch.js", patch_path)]
     if with_probe:
         sources.append(("probe.js", probe_path))
     for name, src in sources:
         with open(src, "rb") as fh:
             body = fh.read()
-        if b"__CDN_BASE__" in body:
-            body = body.replace(b"__CDN_BASE__", f"http://{host}:{port}".encode())
+        reps = [(b"__CDN_BASE__", cdn_base.encode()),
+                (b"__OPPAI_CDN_BASE__", cdn_base.encode()),
+                (b"__OPPAI_LOGIN_BASE__", login_url.encode())]
+        for old_b, new_b in reps:
+            if old_b in body:
+                body = body.replace(old_b, new_b)
         dst = os.path.join(APK_DIR, "assets/src/patch", name)
         os.makedirs(os.path.dirname(dst), exist_ok=True)
         with open(dst, "wb") as fh:
@@ -753,6 +840,11 @@ def main():
     ap.add_argument("--probe", default=DEFAULT_PROBE)
     ap.add_argument("--no-probe", action="store_true",
                     help="不打包 probe.js（release 构建）")
+    ap.add_argument("--no-url-patch", action="store_true",
+                    help="不改 jsc 里的地址，改用 patch.js 的 URL-REWRITE 在运行时改写"
+                         "（jsc 会先从原始包恢复）。好处：--host 不再受 19/25 字节约束，"
+                         "可以填 127.0.0.1:18080 配合 adb reverse；换服务器也不会因为"
+                         "「找不到旧串」而静默失败")
     ap.add_argument("--out", default=os.path.join(WORK, "zcsmw-mod.apk"))
     ap.add_argument("--skip-prepare", action="store_true", help="只打包，不重新改资源")
     ap.add_argument("--keep-intermediate", action="store_true", help="保留 aligned 中间产物")
@@ -762,7 +854,8 @@ def main():
 
     if not args.skip_prepare:
         prepare_assets(args.host, args.port, args.login_port, args.patch,
-                   args.probe, not args.no_probe)
+                       args.probe, not args.no_probe,
+                       patch_urls=not args.no_url_patch)
         prune_stale_dex()
 
     apktool_build(args.out)

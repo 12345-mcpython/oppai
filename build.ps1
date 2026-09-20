@@ -30,7 +30,18 @@ param(
     [switch]$Install,
     [switch]$Launch,
     [switch]$NoProbe,
-    [string[]]$Abi = @("armeabi", "x86")
+    [string[]]$Abi = @("armeabi", "x86"),
+    # 打包用的对外地址。默认沿用老值（模拟器 + 局域网 IP）。
+    #   -HostName 127.0.0.1 -RuntimeUrlRewrite  → 配合 adb reverse，真机插 USB 就能跑
+    #                                             （不需要局域网/防火墙/root/hosts）
+    # ⚠️ 参数名不能叫 -Host：那会盖掉 PowerShell 的自动变量 $Host。
+    [string]$HostName = "10.110.29.230",
+    [int]$Port = 18080,
+    [int]$LoginPort = 8080,
+    # 地址交给 patch.js 在运行时改写：jsc 保持原始地址，-HostName 不再受 19/25 字节约束
+    [switch]$RuntimeUrlRewrite,
+    # 安装目标（真机：-Serial <手机序列号>，或环境变量 GS_ADB_SERIAL）
+    [string]$Serial = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -43,7 +54,8 @@ $Eng     = Join-Path $Root "engine"
 $Out     = Join-Path $Root "out"
 
 $Adb     = if ($env:GS_ADB) { $env:GS_ADB } else { "D:\Android\android-sdk\platform-tools\adb.exe" }
-$Serial  = if ($env:GS_ADB_SERIAL) { $env:GS_ADB_SERIAL } else { "127.0.0.1:21503" }
+# -Serial 优先，其次 GS_ADB_SERIAL，最后默认模拟器
+$Serial  = if ($Serial) { $Serial } elseif ($env:GS_ADB_SERIAL) { $env:GS_ADB_SERIAL } else { "127.0.0.1:21503" }
 $Pkg     = "com.cm.zcsmw.baidu"
 $Act     = "org.cocos2dx.javascript.SplashActivity"
 
@@ -171,7 +183,9 @@ if ($LASTEXITCODE -ne 0) { Warn "patch_smali 失败，继续" } else { Ok "ok" }
 # ---------------------------------------------------------------------------
 Step 4 "打包 APK（apktool 完整打包 + zipalign + 签名）"
 $buildArgs = @((Join-Path $Script "build_apk.py"))
+$buildArgs += @("--host", $HostName, "--port", "$Port", "--login-port", "$LoginPort")
 if ($NoProbe) { $buildArgs += "--no-probe" }
+if ($RuntimeUrlRewrite) { $buildArgs += "--no-url-patch" }
 & python @buildArgs
 if ($LASTEXITCODE -ne 0) { throw "build_apk.py 退出码 $LASTEXITCODE" }
 $apk = Join-Path $Out "zcsmw-mod-signed.apk"

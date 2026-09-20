@@ -37,6 +37,12 @@
 //      「走 updateByServer」的那批模块，favor / newFavorEvent / useGiftStatus
 //      这几条一直是**死的**。后果：宿舍里好感度涨了，进度条和等级要重登才动。
 //
+//   8. 地址改写（URL-REWRITE）
+//      jsc 里的官方地址打包时只能**等长**替换（`<host>:18080` 必须 19 字节
+//      → LAN IP 必须 13 个字符），而且换 IP 时会静默跳过、整包作废。
+//      这里改成运行时改写 XHR / WebSocket 的 URL，jsc 保留原始地址 ——
+//      地址不再有长度约束，配合 `adb reverse` 连局域网都不需要（真机适配走这条）。
+//
 // 探针/诊断部分在 probe.js —— release 可以不打包那个文件。
 // 两个文件互相独立，这个文件不依赖 probe.js 的任何东西。
 // ===========================================================================
@@ -55,6 +61,131 @@
             emit(line);
         }
     }
+
+    // ------------------------------------------------------------------
+    // 地址改写：把客户端里烘死的官方地址在**运行时**换掉
+    //
+    // 为什么需要它 —— 客户端那几个地址是**编译进 .jsc 的原子**（长度前缀存的），
+    // 打包时只能做**等长**替换，于是：
+    //   * `<host>:18080` 必须正好 19 字节，也就是 **LAN IP 必须 13 个字符**
+    //     （`10.210.22.230` 可以、`192.168.1.5` 不行）
+    //   * 更糟的是那几个文件是**就地改写**的：换地址时替换逻辑「找不到旧串」
+    //     会静默跳过。实测踩过 —— DHCP 换了 IP，整包就废了，
+    //     只能从 `game/original/zcsmw-original.apk` 把文件恢复回来
+    //
+    // 这里改成：jsc 里**保留原始地址**（打包时不再改），网络层统一改写到下面的 base。
+    // 于是：
+    //   * 没有 19/25 字节约束，地址想填什么填什么（`127.0.0.1:18080` 也行）
+    //   * 换服务器只改这两个常量重打包，不需要再动 jsc
+    //   * 配合 `adb reverse tcp:18080 tcp:18080`（四个端口都转发）连局域网、
+    //     防火墙、真机 root/hosts 全都不需要 —— 插 USB 就能跑（真机适配推荐这条）
+    //
+    // 拦截点（都实测过）：
+    //   ① `cc.loader.getXMLHttpRequest()` —— `httpc` 全部走它，
+    //      游戏服 / 调试台 hook / 公告 的请求都能拦到
+    //   ② `window.WebSocket` —— 登录握手（`wsFactory` 用 window.WebSocket||MozWebSocket）
+    //
+    // ⚠️ 热更新那份 `project.manifest` 走的是**原生 curl**，这里拦不到 ——
+    //    那份由 `script/build_apk.py` 按 JSON 重写（它是纯文本，本来就不受等长约束）。
+    // ------------------------------------------------------------------
+    (function installUrlRewrite() {
+        var CDN = "__OPPAI_CDN_BASE__";
+        var LOGIN = "__OPPAI_LOGIN_BASE__";
+
+        // 占位符没被替换（比如手工跑了这个文件）就什么都别做，免得把人搞坏
+        if (CDN.indexOf("__OPPAI") === 0 || LOGIN.indexOf("__OPPAI") === 0) {
+            emit("URL-REWRITE 占位符没被替换，跳过（build_apk.py 没带 base？）");
+            return;
+        }
+
+        // 原始地址里的片段 -> 换到哪个 base；scheme（http/ws）跟着原 URL 走
+        var MAP = [
+            ["cdn.shuangmawei.net", CDN],
+            ["www.shuangmawei.net", CDN],
+            ["114.55.66.97:16840", LOGIN],     // oauth / 登录
+            ["114.55.66.97:14589", LOGIN]      // 分享（用不到，一起换掉）
+        ];
+
+        function fix(url) {
+            if (!url || typeof url !== "string") {
+                return url;
+            }
+            for (var i = 0; i < MAP.length; i++) {
+                var at = url.indexOf(MAP[i][0]);
+                if (at < 0) {
+                    continue;
+                }
+                var hp = MAP[i][1].replace(/^[a-z]+:\/\//i, "");
+                var out = url.slice(0, at) + hp + url.slice(at + MAP[i][0].length);
+                vlog("URL-REWRITE " + url + " -> " + out);
+                return out;
+            }
+            return url;
+        }
+        window.__oppaiFixUrl = fix;            // 给探针/调试用
+
+        // ① XHR
+        var loader = (typeof cc !== "undefined") ? cc.loader : null;
+        if (loader && typeof loader.getXMLHttpRequest === "function") {
+            if (!loader.__oppaiUrlRewrite) {
+                loader.__oppaiUrlRewrite = true;
+                var origGet = loader.getXMLHttpRequest;
+                loader.getXMLHttpRequest = function () {
+                    var xhr = origGet.apply(this, arguments);
+                    try {
+                        var origOpen = xhr.open;
+                        xhr.open = function (method, url) {
+                            var a = Array.prototype.slice.call(arguments);
+                            a[1] = fix(url);
+                            return origOpen.apply(this, a);
+                        };
+                    } catch (e) {
+                        emit("URL-REWRITE XHR 包装失败 " + e);
+                    }
+                    return xhr;
+                };
+                emit("URL-REWRITE 已接管 XHR -> " + CDN);
+            }
+        } else {
+            emit("URL-REWRITE 找不到 cc.loader.getXMLHttpRequest");
+        }
+
+        // ② WebSocket
+        (function () {
+            var OW = window.WebSocket;
+            if (typeof OW !== "function" || OW.__oppaiUrlRewrite) {
+                return;
+            }
+            var W = function (url, proto) {
+                var u = fix(url);
+                return proto === undefined ? new OW(u) : new OW(u, proto);
+            };
+            // ⚠️⚠️ **静态常量必须抄过来**。客户端 `wsHandle.send` 判的是
+            //
+            //     if (this.socket.readyState === WebSocket.OPEN) { ...send... }
+            //     else { cc.log("WebSocket readState:" + this.socket.readyState) }
+            //
+            // 而那个 `WebSocket` 是 `wsFactory` 在**模块加载时捕获**的构造函数。
+            // 包出来的 W 不抄 OPEN 的话它等于 undefined，判定恒为 false ——
+            // send 走 else 分支只打一条日志就返回，**登录握手一个字节都发不出去**。
+            // 实测症状：WS 连上了、randomKey/dhExchange/hashKey 都算完了、
+            // 服务端发完欢迎包就一直阻塞在 recv，客户端停在 "WebSocket readState:1"。
+            for (var k in OW) {
+                try { W[k] = OW[k]; } catch (e) { }
+            }
+            var CONSTS = ["CONNECTING", "OPEN", "CLOSING", "CLOSED"];
+            for (var i = 0; i < CONSTS.length; i++) {
+                if (OW[CONSTS[i]] !== undefined) {
+                    W[CONSTS[i]] = OW[CONSTS[i]];
+                }
+            }
+            W.prototype = OW.prototype;
+            W.__oppaiUrlRewrite = true;
+            window.WebSocket = W;
+            emit("URL-REWRITE 已接管 WebSocket -> " + LOGIN +
+                 "（OPEN=" + W.OPEN + "）");
+        })();
+    })();
 
     // ------------------------------------------------------------------
     // ccui.helper.seekNodeByName / seekNodeByTag polyfill

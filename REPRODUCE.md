@@ -297,6 +297,59 @@ adb -s 127.0.0.1:21503 logcat -d -v brief | Select-String "OPPAIPATCH|JS ERROR"
 
 ---
 
+### Step 4b · 真机（**不用 root**）：`adb reverse` + 运行时地址改写
+
+真机上有三条硬约束，按「装得上 → 跑得起来 → 连得上」确认：
+
+| 卡点 | 结论 | 怎么办 |
+|---|---|---|
+| **装得上** | `targetSdkVersion=23`（原版就这样）。Android 14 起禁装 `<23`（23 恰好能装），**Android 15 起禁装 `<24`** | `adb install -r --bypass-low-target-sdk-block <apk>`（Android 14+ 的官方开关，**不需要 root**）；或者把 manifest 里那个数字抬到 24 重打包 |
+| **跑得起来** | 包里只有 `armeabi` + `x86` | 先量：`adb shell getprop ro.product.cpu.abilist`。含 `armeabi-v7a`/`armeabi` 就能跑（绝大多数手机）；**只有 `arm64-v8a` 的跑不了** —— 引擎的预编译依赖（curl/websockets/png/freetype…）只有 armeabi / armeabi-v7a / x86 三份，没有 arm64 |
+| **连得上** | 地址烘在包里 → 换 IP 就要重打包 | 见下面，**改成运行时改写**，连局域网都不需要 |
+
+```powershell
+# 1) 手机插 USB、开 USB 调试，拿到序列号
+adb devices
+
+# 2) 四个端口全部反向转发（手机上的 127.0.0.1:<port> -> PC 的 <port>）
+foreach ($p in 18080,8080,10001,10003) { adb -s <手机序列号> reverse "tcp:$p" "tcp:$p" }
+adb -s <手机序列号> reverse --list
+
+# 3) 服务端对外宣告 127.0.0.1（服务器列表和 gameServUrl 都从它来）
+$env:GS_PUBLIC_HOST='127.0.0.1'; python script\serve.py
+
+# 4) 打包 + 装到真机：-RuntimeUrlRewrite = 地址交给 patch.js 运行时改写
+.\build.ps1 -RuntimeUrlRewrite -HostName 127.0.0.1 -Install -Serial <手机序列号>
+
+# 5) Android 15+ 若报 INSTALL_FAILED_DEPRECATED_SDK_VERSION，换这条装法
+adb -s <手机序列号> install -r --bypass-low-target-sdk-block out\zcsmw-mod-signed.apk
+```
+
+**为什么不用 root / 不用改 hosts**：
+
+* jsc 里的官方地址**不再被打包时改写**（`--no-url-patch`），`patch.js` 在运行时把
+  `cdn.shuangmawei.net` / `114.55.66.97:16840` 改写到 `--HostName`。拦截点是
+  `cc.loader.getXMLHttpRequest()` 和 `window.WebSocket` 两个 JS 单点。
+* 热更新那份 `project.manifest` 走**原生 curl**，拦不到 → 由 `build_apk.py`
+  按 **JSON** 重写（纯文本，不受等长约束）。
+* 于是地址可以随便填（`127.0.0.1` 也行），`adb reverse` 把手机的回环转发到 PC ——
+  局域网、防火墙、`hosts`、root **全都不需要**，插 USB 就能跑。
+
+> ⚠️ **包装原生构造函数要抄静态常量**。`wsFactory` 是在模块加载时**捕获**
+> `window.WebSocket` 的，而 `wsHandle.send` 判的是
+> `socket.readyState === WebSocket.OPEN`。包出来的函数不抄 `OPEN` 就等于
+> `undefined` → 判定恒假 → **登录握手一个字节都发不出去**（症状：WS 连上了、
+> 密钥也算完了，服务端发完欢迎包就一直阻塞在 recv）。详见
+> [`server/docs/overview.md`](server/docs/overview.md) §6.13。
+>
+> ⚠️ 老路子的坑：`--host` 走的是**等长**替换（`<host>:18080` 必须 19 字节 →
+> **LAN IP 必须 13 个字符**），而且那几个文件是**就地改写**的 —— 换 IP 时替换逻辑
+> 「找不到旧串」会**静默跳过**，整包作废（实测踩过：DHCP 换了 IP）。要用老路子就
+> 得先从 `game/original/zcsmw-original.apk` 恢复那几个文件；`-RuntimeUrlRewrite`
+> 不存在这个问题（jsc 永远保持原始地址）。
+
+---
+
 ### Step 5 · 抽客户端表
 
 服务端的数值**全部来自客户端自带的 `table_*`**（那些表是编译进 `.jsc` 的静态配置，
