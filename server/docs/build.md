@@ -394,13 +394,23 @@ python script\build_arm64_deps.py          # ① 备依赖（幂等，一条命�
      （真机 tombstone：`Cause: seccomp prevented call to disallowed arm64 system call 144`，
      帧在 `libwebsocket_create_context+564` → `setgid+12`）。所以编库前要把那 3 个字段补回
      **同一个位置**，让两边布局一致。
-4. **头文件按 ABI 分**：SpiderMonkey 的 `js-config`（32 位 `JS_NUNBOX32` / 64 位 `JS_PUNBOX64`）
-   和 curl 的 `curlbuild` 都得和链接的那份 `.a` 对得上 —— 脚本会挂出
-   `spidermonkey/include/android64/js-config.h` 和 `curl/include/android64/`，
-   并给两个 `Android.mk` 加上「arm64 用 64 位那套」的 `ifeq`。
+4. **头文件按 ABI 分**：SpiderMonkey 的 `js-config`（32 位 `JS_NUNBOX32` / 64 位 `JS_PUNBOX64`）、
+   curl 的 `curlbuild`、**jpeg 的 `boolean` 宽度**都得和链接的那份 `.a` 对得上 —— 脚本会挂出
+   `spidermonkey/include/android64/js-config.h`、`curl/include/android64/`、
+   `jpeg/include/android64/`，并给三个 `Android.mk` 加上「arm64 用 64 位那套」的 `ifeq`。
    > 对不上会怎样：`js-config` 错 = jsval 表示错（ABI 直接崩）；curl 那个错 =
-   > `curlrules.h` 的编译期自检当场报 `size of array '__curl_rule_01__' is negative`。
-5. 把上面这些落到 `engine\src\...\external\**` 和那两个 `Android.mk` 里
+   > `curlrules.h` 的编译期自检当场报 `size of array '__curl_rule_01__' is negative`；
+   > **jpeg 那个错最阴**（2026-09-20 真机上"主界面背景图全黑"的根因）：
+   > 3.6 自带的 `external/jpeg/include/android/jconfig.h` 有
+   > `typedef unsigned char boolean;` + `#define HAVE_BOOLEAN`，于是
+   > `sizeof(struct jpeg_decompress_struct)==632`（32 位是 452，和 deps-47 那两份 `.a` 一致）；
+   > 而 `v3-deps-140` 的 arm64 `libjpeg.a` 是它自己 CMake 那份 jconfig 编的（`boolean` 4 字节、
+   > 要 **664**）。`jpeg_CreateDecompress()` 进门先查 version + structsize，对不上就 `ERREXIT`，
+   > cocos 的 `myErrorExit()` 只 `longjmp` 回去、**一个字的日志都不打** —— 结果就是
+   > 所有 `.jpg`（`bgimage1/bgimage2` 这种主界面大背景）静默失败变黑，`.png` 全部正常。
+   > 脚本现在把 arm64 那份 `jconfig.h` 的这两句删掉（`boolean` 交回 `jmorecfg.h` 的 `enum`），
+   > 并且**编译期断言** `sizeof==664`，对不上直接让构建失败，不会再退化成"图片悄悄变黑"。
+5. 把上面这些落到 `engine\src\...\external\**` 和那三个 `Android.mk` 里
    （`engine\src` 被 .gitignore 挡着不进仓库，所以**规则必须留在这个脚本里**）。
 
 `build.ps1` 侧只要两处适配（已内置）：arm64 用 **toolchain 4.9**（r10e 的 arm64 没有 GCC 4.8）

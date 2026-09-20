@@ -29,8 +29,21 @@ armeabi / armeabi-v7a / x86 三套**，没有 arm64 —— 所以想编 64 位 .
        这 3 个字段补回同一个位置，让两边布局一致。
      * bionic 没有 BSD 的 `getdtablesize()`（libwebsockets 直接调它）→ 补一个小 shim。
 4. **头文件按 ABI 分**：SpiderMonkey 的 `js-config`（32 位 `JS_NUNBOX32` /
-   64 位 `JS_PUNBOX64`）和 curl 的 `curlbuild` 都必须和链接的那份 .a 对得上，
-   否则要么 ABI 直接错，要么 curlrules.h 的编译期自检当场报错。
+   64 位 `JS_PUNBOX64`）、curl 的 `curlbuild`、以及 **jpeg 的 `boolean` 宽度**
+   都必须和链接的那份 .a 对得上：
+     * SM 对不上 ABI 直接错；curl 对不上是 curlrules.h 的编译期自检报错；
+     * **jpeg 对不上最阴**（踩过，查了很久）：3.6 自带的
+       `external/jpeg/include/android/jconfig.h` 里有
+       `typedef unsigned char boolean;` + `#define HAVE_BOOLEAN`，
+       而 v3-deps-140 的 arm64 `libjpeg.a` 是它自己 CMake 那份 jconfig 编的
+       （`boolean` = jmorecfg.h 的 `enum {FALSE,TRUE}`，4 字节）。
+       `jpeg_CreateDecompress()` 进门第一件事就是查 version + structsize，
+       对不上直接 `ERREXIT` → cocos 的 `myErrorExit()` 只 longjmp 回去、
+       **一个字都不打印**：表现是主界面那种 `.jpg` 大背景
+       （`bgimage1`/`bgimage2`）全黑、`.png` 一切正常。
+       实测尺寸：arm64 要 **664**，我们编出来 **632**；32 位（x86 452 / 1 字节）
+       和 deps-47 那两份 .a 是对得上的，所以只有 arm64 要单开
+       `include/android64`，32 位那份原样保留。
 5. 把上面这些落到 `engine\src\...\external\**` 和两个 `Android.mk` 里。
 
 弄完就可以 `.\build.ps1 -Engine -Abi arm64-v8a` 编 64 位 .so 了
@@ -41,6 +54,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -241,8 +255,63 @@ def ensure_sm_headers(deps: str) -> None:
     log("  spidermonkey: include/android(js-config-32/64) + include/android64/js-config.h")
 
 
+# v3-deps-140 的 arm64 libjpeg.a 期望的结构体大小（boolean 4 字节）。
+# 32 位那份是 452（boolean 1 字节），和 3.6 原版头文件一致，不用动。
+JPEG_STRUCT_SIZE = 664
+
+# 编译期断言：尺寸不是 664 就编译不过 → 构建当场失败，不会又变成「图片静默变黑」。
+JPEG_SIZE_CHECK_C = """\
+#include <stdio.h>
+#include <stddef.h>
+#include "jpeglib.h"
+typedef char jpeg_decompress_struct_size_must_be_%d[
+    (sizeof(struct jpeg_decompress_struct) == %d) ? 1 : -1];
+"""
+
+
+def ensure_jpeg_headers() -> bool:
+    """jpeg：arm64 的 .a 要 4 字节 `boolean`，3.6 的头是 1 字节 → 单开 include/android64。
+
+    详见模块 docstring 第 4 条。一句话：结构体大小对不上时
+    `jpeg_CreateDecompress()` 会 `ERREXIT`，而 cocos 的 `myErrorExit()` 只 longjmp、
+    不打印，最后就是「所有 .jpg 背景变黑、png 正常」这种毫无线索的症状。
+    """
+    inc = os.path.join(EXT, "jpeg", "include")
+    a64 = os.path.join(inc, "android64")
+    os.makedirs(a64, exist_ok=True)
+    for f in ("jpeglib.h", "jmorecfg.h", "jerror.h"):
+        shutil.copy2(os.path.join(inc, "android", f), os.path.join(a64, f))
+    text = open(os.path.join(inc, "android", "jconfig.h"), encoding="utf-8").read()
+    text = re.sub(r"typedef\s+unsigned\s+char\s+boolean\s*;",
+                  "/* arm64 预编译库要 4 字节 boolean（jmorecfg.h 的 enum），这里不能 typedef */",
+                  text)
+    text = re.sub(r"(?m)^#define[ \t]+HAVE_BOOLEAN\b.*$",
+                  "/* HAVE_BOOLEAN 不能定义，否则 jmorecfg.h 不会提供 boolean */", text)
+    if re.search(r"(?m)^#define[ \t]+HAVE_BOOLEAN\b", text) or \
+       "typedef unsigned char boolean" in text:
+        log("!! jconfig.h 里 boolean 那两句没删干净，arm64 结构体大小会对不上")
+        return False
+    with open(os.path.join(a64, "jconfig.h"), "w", encoding="utf-8", newline="\n") as fh:
+        fh.write(text)
+
+    cc, _ar, sysroot = toolchain()
+    src = os.path.join(WORK, "jpeg-size-check.c")
+    with open(src, "w", encoding="utf-8", newline="\n") as fh:
+        fh.write(JPEG_SIZE_CHECK_C % (JPEG_STRUCT_SIZE, JPEG_STRUCT_SIZE))
+    proc = subprocess.run([cc, "-c", f"--sysroot={sysroot}", f"-I{a64}",
+                           "-o", os.path.join(WORK, "jpeg-size-check.o"), src],
+                          capture_output=True, text=True)
+    if proc.returncode != 0:
+        log(f"!! arm64 的 sizeof(struct jpeg_decompress_struct) 不等于 {JPEG_STRUCT_SIZE}，"
+            "会和预编译 libjpeg.a 对不上（所有 .jpg 会变黑）")
+        log("   " + (proc.stderr or proc.stdout).strip().replace("\n", "\n   ")[:800])
+        return False
+    log(f"  jpeg: include/android64（boolean 4 字节，sizeof={JPEG_STRUCT_SIZE}，与 .a 一致）")
+    return True
+
+
 def patch_android_mk() -> None:
-    """两个 Android.mk 按 ABI 选头文件目录（幂等：已经是新版就跳过）。"""
+    """三个 Android.mk 按 ABI 选头文件目录（幂等：已经是新版就跳过）。"""
     sm_mk = os.path.join(SM, "prebuilt", "android", "Android.mk")
     text = open(sm_mk, encoding="utf-8").read()
     if "SM_INCLUDES" not in text:
@@ -271,6 +340,20 @@ def patch_android_mk() -> None:
             "LOCAL_EXPORT_C_INCLUDES := $(CURL_INCLUDES)", 1)
         open(curl_mk, "w", encoding="utf-8", newline="\n").write(new)
         log("  curl/prebuilt/android/Android.mk: 按 ABI 选头文件目录")
+    jpeg_mk = os.path.join(EXT, "jpeg", "prebuilt", "android", "Android.mk")
+    text = open(jpeg_mk, encoding="utf-8").read()
+    if "JPEG_INCLUDES" not in text:
+        new = text.replace(
+            "LOCAL_EXPORT_C_INCLUDES := $(LOCAL_PATH)/../../include/android",
+            "ifeq ($(TARGET_ARCH_ABI),arm64-v8a)\n"
+            "# arm64 的 .a 用 4 字节 boolean（结构体 664），32 位那两份用 1 字节（632/452）\n"
+            "JPEG_INCLUDES := $(LOCAL_PATH)/../../include/android64\n"
+            "else\n"
+            "JPEG_INCLUDES := $(LOCAL_PATH)/../../include/android\n"
+            "endif\n\n"
+            "LOCAL_EXPORT_C_INCLUDES := $(JPEG_INCLUDES)", 1)
+        open(jpeg_mk, "w", encoding="utf-8", newline="\n").write(new)
+        log("  jpeg/prebuilt/android/Android.mk: 按 ABI 选头文件目录")
 
 
 def main() -> int:
@@ -297,6 +380,11 @@ def main() -> int:
         for p in ("chipmunk", "websockets"):
             dst = os.path.join(EXT, p, "prebuilt", "android", "arm64-v8a", f"lib{p}.a")
             log(f"自建 {p}: {'有' if os.path.isfile(dst) else '缺'} {os.path.relpath(dst, ROOT)}")
+        jcfg = os.path.join(EXT, "jpeg", "include", "android64", "jconfig.h")
+        ok = os.path.isfile(jcfg) and not re.search(
+            r"(?m)^#define[ \t]+HAVE_BOOLEAN\b", open(jcfg, encoding="utf-8").read())
+        log(f"jpeg arm64 头 (include/android64, boolean 4 字节 / sizeof={JPEG_STRUCT_SIZE}): "
+            f"{'就绪' if ok else '缺（跑一次不带 --check 的）'}")
         return 0
 
     log(f"1) 取依赖仓库 {DEPS_TAG} 的 arm64 部分（稀疏，只下要用的）")
@@ -399,6 +487,8 @@ def main() -> int:
                         os.path.join(cur, "android64"), dirs_exist_ok=True)
         log("  curl/include: android=7.26（32 位）/ android64=7.52（arm64）")
     ensure_sm_headers(deps)
+    if not ensure_jpeg_headers():
+        return 1
     patch_android_mk()
 
     log(r"完成。接下来：.\build.ps1 -Engine -Abi arm64-v8a（打包加 -PackAbis arm64-v8a）")
