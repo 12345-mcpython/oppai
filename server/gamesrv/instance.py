@@ -86,6 +86,29 @@ def _level_table() -> dict:
         return _level_cache
 
 
+_chapter_cache: dict | None = None
+
+
+def _chapter_table() -> dict:
+    """`table_chapter.json`：章节表（`{chapterId: {t,p,ll,n,lv,sr}}`）。
+
+    分区玩法的**章节清单只存在客户端**，服务端要回一份 `data.activityChapters`
+    告诉客户端有哪些章节（客户端按 `table_chapter[key].type == 5` 过滤），
+    所以这张表必须抽出来（见 extract_client_tables.py 的 CHAPTER_JS）。
+    """
+    global _chapter_cache
+    with _lock:
+        if _chapter_cache is None:
+            path = os.path.join(_DATA_DIR, "table_chapter.json")
+            try:
+                with open(path, "r", encoding="utf-8") as fh:
+                    _chapter_cache = json.load(fh)
+            except Exception:  # noqa: BLE001
+                log.warning("载入 %s 失败，分区章节列表会是空的", path)
+                _chapter_cache = {}
+        return _chapter_cache
+
+
 def _roll(row: dict) -> dict:
     """把一条 reward 表行掷成 {道具key: 数量}。
 
@@ -153,7 +176,7 @@ def login_block(player: dict) -> dict:
     return {
         "levels": _record(player),
         "chapters": {},
-        "activityChapters": [],
+        "activityChapters": activity_chapters(player),
         "subareaLevels": subarea_levels(player),
         "appearBossKey": {},
         "newActChapterFlag": {},
@@ -223,7 +246,6 @@ def sync_subarea_plays(player: dict, now: int | None = None) -> bool:
 
 def subarea_levels(player: dict) -> dict:
     """`data.subareaLevels` / `instance.getsubarealevel` 的那份 map。
-
     形状（反汇编 `Instance.updateSubareaLevel/<` 钉的）::
 
         {levelId: {levelId, challengeTimes, [deadline, limitDay, limitTime], [ac_*]}}
@@ -245,6 +267,51 @@ def subarea_levels(player: dict) -> dict:
     """
     return {level_id: {"levelId": level_id, "challengeTimes": SUBAREA_DAILY_TIMES}
             for level_id in subarea_level_ids()}
+
+
+# `INSTANCE_TYPE.SUBAREA`（客户端那是个**字符串**枚举："1"主线 / "3"好感 / "4"活动 / "5"分区）
+ACTIVITY_CHAPTER_TYPE = "5"
+
+
+def activity_chapters(player: dict) -> dict:
+    """`data.activityChapters` / `instance.getactivityinstance` 的那份 map。
+
+    ⚠️ **分区界面左侧的章节列表就靠它**：`SubareaChapterMenuLayer.showLayer` 会先调
+    `instance.getactivityinstance`，回调里 `setSubareaChapterList(
+    getActivityChapterListOfType(INSTANCE_TYPE.SUBAREA))`；而
+    `getActivityChapterListOfType` 是
+
+        for (k in _activityChapters) {
+            var c = table_chapter[_activityChapters[k].key];   // ← key 要能在客户端表里查到
+            if (c.type === type) push(_activityChapters[k]);   // ← 严格相等，两边都是字符串
+        }
+        sort(按 isActivityChapterOpen + priority)
+
+    以前这条路由回的是 `{"activityChapters": []}`（桩），所以界面上「分区战场」**一片空白**
+    —— 地图、按钮都在，就是没有章节。
+
+    形状（反汇编 `Instance.updateActivityInstance/<`）::
+
+        {chapterId: {key, challengeTimes, priority, [limitDay, limitTime]}}
+
+    * `key` = 客户端 `table_chapter` 的 key（服务端只认 `type == "5"` 的那 4 个：
+      5001 伯尼尔生物研究 / 5002 冰河集团 / 5003 第三工业园区 / 5004 太古重工）
+    * `challengeTimes = -1` —— 客户端见到 -1 会转成 `Number.MAX_VALUE`，即**章节级不限次**。
+      这是客户端自己的约定，不是我编的数字
+    * `priority` 从 `table_chapter` 抄（排序用）
+    * `limitDay` / `limitTime` **不给** —— `isActivityChapterOpen` 在这两个字段缺时直接放行
+      （跟 `isSubareaLevelOpen` 一个套路），这样就不用编造开放时间表
+    """
+    out = {}
+    for chapter_id, info in (_chapter_table() or {}).items():
+        if str((info or {}).get("t") or "") != ACTIVITY_CHAPTER_TYPE:
+            continue
+        out[str(chapter_id)] = {
+            "key": str(chapter_id),
+            "challengeTimes": -1,
+            "priority": int((info or {}).get("p") or 0),
+        }
+    return out
 
 
 def _team(player: dict, idx) -> dict:

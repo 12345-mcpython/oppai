@@ -187,6 +187,45 @@ LEVEL_JS = r"""
 """
 
 
+# 章节表（`table_chapter`，72 条）。
+#
+# 为什么要它：**分区玩法的章节清单在客户端表里**（`type == INSTANCE_TYPE.SUBAREA("5")`，
+# 共 4 个：5001~5004），而服务端要回一份 `data.activityChapters` 告诉客户端"有哪些章节"：
+#
+#   Instance.getActivityChapterListOfType(type)
+#       for (k in _activityChapters) {
+#           var c = table_chapter[_activityChapters[k].key];   // ← key 要能在客户端表里查到
+#           if (c.type === type) push(_activityChapters[k]);
+#       }
+#       sort(按 isActivityChapterOpen + priority)
+#
+# 所以服务端至少要知道每个章节的 `type`（过滤）和 `priority`（排序）；
+# `lv`（章节的关卡列表）留着给分区成就用（成就条件就是"通关 A-x …"）。
+CHAPTER_JS = r"""
+(function () {
+    var out = {};
+    for (var k in table_chapter) {
+        var r = table_chapter[k];
+        if (!r) { continue; }
+        var levels = [];
+        for (var i = 1; i <= 40; i++) {
+            var lv = r["level_" + i];
+            if (lv) { levels.push(lv); }
+        }
+        out[k] = {
+            t: r.type || "",
+            p: r.priority || 0,
+            ll: r.limit_lv || 0,
+            n: r.name || "",
+            lv: levels,
+            sr: r.stars_reward || ""
+        };
+    }
+    return JSON.stringify(out);
+})()
+"""
+
+
 # 军士养成表。
 #
 # 「培养（升级）」这条链路的数值全在客户端本地算，服务端要复刻一遍才不会
@@ -544,6 +583,7 @@ def main() -> int:
         ("table_quest.json", QUEST_JS),
         ("table_friend_support_npc.json", NPC_JS),
         ("table_level_reward.json", LEVEL_JS),
+        ("table_chapter.json", CHAPTER_JS),
         ("table_soldier.json", SOLDIER_JS),
         ("table_shelf.json", SHELF_JS),
         ("table_shop.json", SHOP_JS),

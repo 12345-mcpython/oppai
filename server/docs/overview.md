@@ -232,6 +232,7 @@ vanilla 不传参 → 游戏代码 `function (eventName) { if (/began\d/.test(ev
 | 关卡结算面板**「获得物资」永远空着**、`Exp+N` 恒为 0 | 奖励块挂在 `data.level` 上了；客户端读的是 `data.rewards.levelReward`，而 `data.level` 只走 `Level.updateLevel()` | `gamesrv/instance.py` |
 | 真机/新系统**装不上**报 `INSTALL_FAILED_DEPRECATED_SDK_VERSION` | 原版 `targetSdkVersion=23`，Android 14+ 卡门槛 | `adb install --bypass-low-target-sdk-block`（官方开关，不需要 root） |
 | 看 `abilist32` 为空就以为**跑不了** 32 位的 `armeabi` | **不一定** —— 有些 ROM 带厂商 32 位兼容层。实测一加 PLZ110（Android 16、`zygote64`、`abilist32` 空）能正常跑 | 直接装一个试；见 [`REPRODUCE.md`](../../REPRODUCE.md) Step 4b |
+| 分区界面**进去了但一片空白**（地图和按钮都在、一个章节都没有） | 分区左侧的章节列表来自 `getActivityChapterListOfType(SUBAREA)`，它遍历 `_activityChapters` 并用 **`table_chapter[entry.key].type == "5"`** 过滤；而 `instance.getactivityinstance` 原来回的是 `{"activityChapters": []}`（桩），且 `data` 必须是**那份 map 本身** | `gamesrv/instance.py` 的 `activity_chapters()`（认 `table_chapter.json` 里 type=="5" 的 4 个章节） |
 | 分区关卡一进去就提示**「挑战次数用完啦~TuT」** | 客户端 `isCanBattle` 末尾是**裸比较** `challengeTimes >= challengeTimeLimit`，**没有** `!limit` 那层保护（那层只在 `checkLevelChallengeTimes` 里，而它没被调用）。服务端给 `challengeTimes: 0` 时 `0 >= 0` 成立 → 直接判没次数 | `gamesrv/instance.py` 的 `SUBAREA_DAILY_TIMES` 必须 **> 0**；跨天重置也得服务端做（`sync_subarea_plays`） |
 | 通关后**好感度弹窗不出现/显示 +0** | 数量要回在 `rewards.levelReward.favor`（"给谁"由客户端拿自己 `table_level.favor_char_key` 算）；回了 `data.rewards.favorReward.favors` 会走到客户端一个 `.count` 写错的死分支 | `gamesrv/favor.py` + `instance.py` |
 
@@ -684,12 +685,18 @@ WS 侧要替换构造函数（就出事）。定位靠的是**脱离游戏逻辑
       `favor` / `newFavorEvent` / `useGiftStatus` 这一整条一直是死的
       （宿舍好感涨了、进度条和等级要重登才动）。现在照原版 `responseConfig` 三类写法补齐，
       并且不再「重试 2 分钟就放弃」。见 §6.12 + [protocol.md §5.2](protocol.md)
-- [x] **分区关卡（分区玩法）接通**：`instance.getsubarealevel` + 登录块 `subareaLevels`
-      现在给出 4 个分区章节的 27 个关卡（按 `table_level.instance_type == 5` 认，
-      抽表时带出 `it` 列）。**开放时间不编**：条目不填 `deadline`/`limitDay`/`limitTime`
-      ——客户端的 `isSubareaLevelOpen` 在这三个全缺时直接放行（永久开放）。
-      每日上限 `SUBAREA_DAILY_TIMES = 3`（§D），跨天 05:00 由服务端清零
-      （`sync_subarea_plays`）。见 §6 症状表里那条「次数用完」的坑
+- [x] **分区关卡（分区玩法）接通**：两条链路都要给，缺一条界面就是空的
+      * **章节列表**：`instance.getactivityinstance` 的 **`data` 本身就是 map**
+        `{chapterId: {key, challengeTimes: -1, priority}}`（客户端按
+        `table_chapter[key].type == "5"` 过滤 + 按 priority 排序）；
+        `challengeTimes: -1` 是客户端自己的"不限次"约定（转成 `Number.MAX_VALUE`）。
+        章节清单只在客户端表里 → 新增 `table_chapter.json` 抽表 + CHAPTER_JS
+      * **关卡进度/次数**：登录块 `subareaLevels` + `instance.getsubarealevel`，
+        key 是关卡 id（27 关，按 `table_level.instance_type == 5` 认，抽表带出 `it` 列）
+      * **开放时间不编**：章节和关卡都不填 `deadline`/`limitDay`/`limitTime`
+        —— 客户端在这几个字段全缺时直接放行（永久开放）
+      * 每日上限 `SUBAREA_DAILY_TIMES = 3`（§D），跨天 05:00 由服务端清零
+        （`sync_subarea_plays`）。见 §6 症状表里那两条「分区空白 / 次数用完」的坑
 - [x] 文档：协议 / 逆向手法 / 打包逻辑 / 调试台 / 引擎调试 / 本总览 / **与原版的差异** / **从零复刻**
 
 ### 待办（按卡点排序）

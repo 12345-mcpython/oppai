@@ -117,6 +117,8 @@
 | 宿舍事件奖励 | 读事件时发 `reward_favor` | **客户端全库 0 命中**这个字段，说明是纯服务端数值，但"什么时候发"是推的 |
 | 分区关卡每日次数 | **每关每天 3 次**（`instance.SUBAREA_DAILY_TIMES`），05:00 跨天清零 | 客户端表里**没有**这个数（剧情关的 `challenge_times` 也空着），原版给多少无从考证。但**不能给 0**：客户端 `isCanBattle` 是裸比较 `challengeTimes >= challengeTimeLimit`，0 会被判成「次数用完」（实测踩过）。单旋钮 |
 | 分区关卡开放时间 | **不给**（`deadline`/`limitDay`/`limitTime` 全缺 = 永久开放） | 客户端 `isSubareaLevelOpen` 在这三个字段全缺时直接 `return true`，所以这是**客户端自己认的"不限时"**，不是我编的时间表。原版的排期（哪个区几点开）没处可查 |
+| 分区章节次数 | **不限次**（`challengeTimes: -1`） | 这是**客户端自己的约定**：`Instance.updateActivityInstance/<` 见到 `-1` 就转成 `Number.MAX_VALUE`。所以不算我编的 |
+| 分区关卡**列表**从哪来 | 服务端只认 `table_chapter.type == "5"` 的 4 个章节（5001~5004） | 章节清单**只存在客户端表**里（服务端没有别的来源），所以抽了 `table_chapter.json`；顺序照表里的 `priority` |
 
 **反过来说，这些是"表里写死、和原版一致"的**（不用担心）：
 好感度升级曲线（`table_favor_upgrade`，500/700/…/90000，满级 15）、

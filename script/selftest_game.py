@@ -322,8 +322,39 @@ def subarea_check(ok: bool) -> bool:
         print(f"  BAD challengeTimes（每日上限）必须 > 0，实际 {limits}"
               f" —— 0 会让客户端 isCanBattle 直接判「次数用完」")
         return False
+
+    # 分区**章节**列表：`data.activityChapters` / `instance.getactivityinstance`
+    #
+    # 分区界面（SubareaChapterMenuLayer）左侧的章节列表就靠它：
+    #     getActivityChapterListOfType(INSTANCE_TYPE.SUBAREA) 按
+    #     `table_chapter[entry.key].type == "5"` 过滤。以前这条路由回 `[]`，
+    #     界面上「分区战场」是**空的**（地图和按钮都在、一个章节都没有）。
+    from gamesrv import instance as ginstance
+
+    chapters = inst.get("activityChapters")
+    if not isinstance(chapters, dict) or not chapters:
+        print(f"  BAD 登录块 activityChapters 不是非空 map：{str(chapters)[:80]}")
+        return False
+    res2 = call("instance.getactivityinstance", {}, 118)
+    if res2.get("code") != 200:
+        print(f"  BAD instance.getactivityinstance code={res2.get('code')}")
+        return False
+    data2 = res2.get("data")
+    if not isinstance(data2, dict) or "activityChapters" in data2:
+        keys = list(data2)[:5] if isinstance(data2, dict) else type(data2).__name__
+        print(f"  BAD getactivityinstance 的 data 应该就是那份 map：{keys}")
+        return False
+    if set(data2) != set(chapters):
+        print(f"  BAD 两处章节不一致：登录块 {sorted(chapters)} vs 路由 {sorted(data2)}")
+        return False
+    tbl = ginstance._chapter_table()
+    alien = [k for k in data2 if str((tbl.get(k) or {}).get("t") or "") != "5"]
+    if alien:
+        print(f"  BAD 有不是分区章节（table_chapter.type != 5）的 key：{alien}")
+        return False
+
     print(f"  OK  分区关卡：登录块与 getsubarealevel 一致，{len(data)} 关，"
-          f"每日上限={limits[0]}")
+          f"每日上限={limits[0]}；分区章节 {len(data2)} 个 {sorted(data2)}")
     return ok
 
 

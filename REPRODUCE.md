@@ -419,7 +419,7 @@ cd E:\code\zcsmw
 python script\extract_client_tables.py
 ```
 
-**验证点**：`server\gamesrv\data\` 下出现 22 个 `table_*.json`，总计约 1.6 MB。
+**验证点**：`server\gamesrv\data\` 下出现 26 个 `table_*.json`，总计约 1.7 MB。
 
 ```powershell
 Get-ChildItem server\gamesrv\data\table_*.json | Measure-Object -Property Length -Sum
@@ -430,7 +430,7 @@ Get-ChildItem server\gamesrv\data\table_*.json | Measure-Object -Property Length
 > 整轮全抽（含 `table_soldier` / `table_equipment` 那种几十万字的）
 > **会把模拟器压到卡死**，实测过一次。
 >
-> 这个仓库里**已经带了这 22 张表**，所以正常复刻可以跳过这一步；
+> 这个仓库里**已经带了这 26 张表**，所以正常复刻可以跳过这一步；
 > 只有客户端换版本、或者你要验一遍流程时才需要跑。
 
 ---

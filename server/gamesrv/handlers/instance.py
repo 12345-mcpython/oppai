@@ -75,7 +75,19 @@ def get_chapter_stars_reward(session: dict, msg: dict, req_id):
 
 @route("instance.getactivityinstance")
 def get_activity_instance(session: dict, msg: dict, req_id):
-    return {"code": CODE_OK, "msg": "", "data": {"activityChapters": []}}
+    """活动/分区章节列表。
+
+    ⚠️ `data` **本身就是那份 map**（不是 `{activityChapters: ...}`）——
+    反汇编 `Instance.updateActivityInstance/<`：
+        var activityChapters = data.data;      // ← 直接用，循环里读 .challengeTimes
+    分区界面（`SubareaChapterMenuLayer`）就是靠它拿左侧章节列表的；
+    以前回 `{"activityChapters": []}`，界面上「分区战场」是空的。
+    """
+    player = _player(session)
+    block = instance.activity_chapters(player)
+    log.info("instance.getactivityinstance -> %d 个章节（分区 %s）",
+             len(block), sorted(block))
+    return {"code": CODE_OK, "msg": "", "data": block}
 
 
 @route("instance.getsubarealevel")
