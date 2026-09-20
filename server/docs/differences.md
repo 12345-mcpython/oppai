@@ -23,11 +23,12 @@
 |---|---|---|---|
 | A1 | **整个服务端自研** | 原版服务端已随停服消失。纯标准库 Python（无 pip 依赖；DES 会顺带用 `ctypes` 加载设备上的 OpenSSL 加速，验不过就退回纯 Python，见 A8），CDN/gate/login/game 四个端口 | `server/` |
 | A2 | **重建 `libcocos2djs.so`** | 原版 `.so` 是用**改过的** cocos2d-js 3.6 编的，仓库里那版对不上。按 v3.6 重建 + 14 个补丁 | `engine/`、[`engine-debug.md`](engine-debug.md) |
-| A3 | **客户端适配 10 条**（`patch.js`） | 引擎换了，几个绑定名对不上，不改直接黑屏；另外引擎里 `responseConfig` 不派发、少了几个绑定，还有一条是客户端自己的 off-by-one（见 A3d）、一条是客户端道具数量事件不派发（见 A3e） | `server/client/patch.js` 头部 |
+| A3 | **客户端适配 11 条**（`patch.js`） | 引擎换了，几个绑定名对不上，不改直接黑屏；另外引擎里 `responseConfig` 不派发、少了几个绑定；**另外三条是客户端自己的坑**：队伍详情页 off-by-one（A3d）、道具数量事件不派发（A3e）、情报室返回键接到隐藏节点上（A3f） | `server/client/patch.js` 头部 |
 | A3b | **响应派发自己补一层** | 原版靠 `src/util/server.js` 的 `responseConfig` 把响应里的模块块推给各中心，这套引擎上**一次都没跑**（实测 `Favor.prototype.update` 调用 0 次）。`patch.js` 的 RESP-DISPATCH 照它的三类写法补齐才生效 | [protocol.md §5.2](protocol.md) |
 | A3c | **地址改成运行时改写**（`URL-REWRITE`，默认行为） | jsc 里的地址只能等长替换（`<host>:18080` 必须 19 字节 → **host 必须 13 字符**），而且那几个文件是就地改写的，换地址时替换逻辑找不到旧串会**静默跳过**、整包作废。现在 jsc 保留原始地址，改由 `patch.js` 在运行时改写 XHR / WebSocket；`project.manifest` 按 JSON 重写（它走原生 curl，拦不到）。代价：包内仍带官方地址 | [`REPRODUCE.md`](../../REPRODUCE.md) Step 4b、`script/build_apk.py`（老路子 `--patch-jsc-urls`） |
 | A3d | **队伍详情页默认落到「当前队伍」** | 客户端自己的 off-by-one：入口 `new TeamDetailLayer()` 不带下标 → 走兜底常量 `DEFAULT_TEAM_IDX = 1` → `_.findIndex(teams, {index:1})` 命中**第 2 队**。队伍 `index` 必须 0 起是客户端自己定的（`TEAM_COUNT_LIMIT=5`、`_setCurTeamIdx` 夹 [0,4]、`getCurTeam()` = `findIndex{index: curTeamIdx}`、`CommonTeamItem` 传 `getCurTeamIdx()-1`），改服务端 index 会让第 5 队开战前被夹错 → 只能在客户端补 | `patch.js` 末尾 TEAM-DETAIL（**删掉即可还原原版第 2 队**）；反汇编依据见 [`reverse-engineering.md`](reverse-engineering.md) 的 aliased 槽位那节 |
 | A3e | **道具数量变化后补发 `item_count_updated_<key>`** | 客户端自己的死链：货币条注册的是 `bag.addCountUpdateListener(key, cb)` → `item.addPropListener("item_count_updated_"+key, cb)`，而 `Bag.updateItems` 改数量走 `item.count = n` setter，**这个 setter 不派发那个事件**（实测：手动 `dispatchPropEvent` 同名事件监听器立刻收到，走 setter 收不到）→ 服务端驱动的加/扣道具之后**顶部货币条一直是旧数字**（背包里其实已经变了）。玩家报「抽卡没扣我货币」就是这个 | `patch.js` 末尾 ITEM-EVENT（包一层 `updateItems` 补派发） |
+| A3f | **情报室左上角返回键改接到"可见的那个"同名节点** | `illustrationscommonlayer.csb` 里有**两个** `returnbutton`：可见的在 `returnbuttonpanel` 下（`ccui.Button`，世界坐标 8,543），另一个在 `playillustrationspanel(不可见) → levelpanel(不可见)` 里（`ccui.Layout`，830,476）。`_init` 用 `ccui.helper.seekNodeByName(_ui, "returnbutton")`——**深度优先取第一个**——拿到的是隐藏页那个，于是 `onClickReturn` 接到了玩家点不到的地方；同屏类型页签/升序都是可见节点所以正常。**服务端没有杠杆，只能客户端补**（实机证据 `out/probe_return_btn2.js`） | `patch.js` 末尾 ILLUST-RETURN（包 `_init`，把可见箭头再接一次 `onClickReturn`） |
 | A4 | **Java 层绕开渠道登录** | 原版走 QuickSDK→百度登录，那两个服务器早下线了，弹窗永远登不进去。改成原生直接回调「登录成功」 | `server/client/patch_smali.py`、`ServerLoginRunnable.smali` |
 | A5 | **删掉第三方 SDK（46.6MB）** | 统计/推送/广告/渠道全下线了，留着只是体积 | `script/sdk_strip/` |
 | A6 | **登录不走真实 DH** | 原版握手用自研 DH + `hashKey`/`hmac64`，算法没还原。私服用 **DH 单位元**当共享密钥 | [`protocol.md`](protocol.md) |
@@ -106,14 +107,15 @@
   `favors` 分支写的是 `favors.count`（`favors` 是数组，`.count` 恒为 `undefined`），
   所以服务端**不能**用 `rewards.favorReward.favors` 那种形状下发好感度，
   得用 `rewards.levelReward.favor`。这是原版客户端自己的 bug，没去改它
-* **情报室（菜单 → 情报室）左上角的返回键实机点不动** —— **还没查清**。
-  目前排掉的：客户端**没卡死**（情报室打开后仍每 60 秒发 `boss.getbosslist`，
-  主线程活着）；`ccuiManager.addMenuItemEvent` 在 node 为 null 时会 `cc.warn`，
-  logcat 里没有这条 → 返回键**是接上了**的（`register()` 第一个就挂 `_returnBtn`，
-  handler 是 `cc.director.getRunningScene().pop(true)`）。
-  剩下要实机量的：`_returnBtn` 的世界坐标/命中区是不是落在返回箭头的位置
-  （上一次会话量到 `830,476 150x100`，而箭头在左上角）、有没有节点在上面吞触摸。
-  同一屏的「数量 0/152 + 全剪影」是另一个 bug，已修，见 §F 最后一行
+* **情报室（菜单 → 情报室）左上角的返回键实机点不动** —— **已修**（`patch.js` 第 11 条 ILLUST-RETURN）。
+  根因：`illustrationscommonlayer.csb` 里**有两个**叫 `returnbutton` 的节点，
+  `_init` 的 `ccui.helper.seekNodeByName(_ui, "returnbutton")` 按深度优先取到的是
+  `playillustrationspanel(不可见) → levelpanel(不可见)` 里那个 `ccui.Layout`（世界坐标 830,476），
+  而左上角看得见的那个是 `returnbuttonpanel` 下的 `ccui.Button`（8,543）—— 它**从来没接过回调**。
+  所以 `register()` 里 `addMenuItemEvent(_returnBtn, onClickReturn)` 是"接到了隐藏页的按钮上"，
+  同屏的类型页签/升序（都是可见节点）照常能用。实机量到的依据见
+  `out/probe_return_btn2.js`；补丁把可见箭头再接一次同一个 `onClickReturn`
+  （= `getRunningScene().pop(true)`），实测点一下就退回主界面
 * **情报室的真正入口是 `assets/src/srcex/menubtnex.jsc` 的
   `MenuBtnEx._onClickIllustrationButton` → `cc.director.getRunningScene().push(new
   Illustratedcommonlayer(1), false, true)`**；`assets/src/ui/illustrated/illustratedlayer.jsc`

@@ -64,6 +64,14 @@
 //      （手动 `dispatchPropEvent` 同名事件，监听方立刻收到 → 监听侧是好的）。
 //      详见文件末尾 ITEM-EVENT 那段。
 //
+//  11. 情报室左上角返回键（`seekNodeByName` 命中了隐藏页里的同名节点）
+//      症状是「菜单 → 情报室，左上角那个返回箭头点不动」，而同一屏的类型页签、
+//      「升序」都能点。根因：`illustrationscommonlayer.csb` 里有**两个**
+//      `returnbutton`，`_init` 的 `seekNodeByName(_ui, "returnbutton")` 深度优先
+//      取到的是 `playillustrationspanel/levelpanel`（两级都不可见）里那个，
+//      玩家看得见的那个（`returnbuttonpanel` 下）从来没接过回调。
+//      详见文件末尾 ILLUST-RETURN 那段。
+//
 // 探针/诊断部分在 probe.js —— release 可以不打包那个文件。
 // 两个文件互相独立，这个文件不依赖 probe.js 的任何东西。
 // ===========================================================================
@@ -1441,6 +1449,89 @@
                 if (patch()) {
                     clearInterval(window.__oppaiItemEventTimer);
                     window.__oppaiItemEventTimer = null;
+                }
+            }, 500);
+        }
+    })();
+
+    // -----------------------------------------------------------------------
+    // 11) 情报室左上角返回键 —— `seekNodeByName` 命中隐藏页里的同名节点
+    //
+    // 症状：菜单 → 情报室，左上角的返回箭头**点不动**；同一屏的类型页签
+    //   （全部/装甲/敢死/生化/特需）和「升序」按钮都能点（它们都是可见节点）。
+    //
+    // 根因（2026-09-20 活客户端实测，`out/probe_return_btn2.js`）：
+    //   `illustrationscommonlayer.csb` 里有**两个**叫 `returnbutton` 的节点：
+    //
+    //     playillustrationspanel(vis=false) → levelpanel(vis=false)
+    //         → returnbutton   ← `ccui.Layout`，150x100，世界坐标 (830,476)
+    //     returnbuttonpanel(vis=true) → returnbutton
+    //         → 左上角看得见的那个 `ccui.Button`，100x100，世界坐标 (8,543)
+    //
+    //   `Illustratedcommonlayer._init` 取的是 `seekNodeByName(_ui, "returnbutton")`，
+    //   它按**深度优先取第一个**同名节点，而遍历顺序里 `playillustrationspanel`
+    //   排在 `returnbuttonpanel` 前面 ⇒ `_returnBtn` 拿的是隐藏页里那个，
+    //   `register()` 把 `onClickReturn`（= `getRunningScene().pop(true)`）接在它身上，
+    //   玩家点的那个箭头**从来没接过任何回调**。
+    //   （`ccuiManager.addMenuItemEvent` 遇到 null 会
+    //   `cc.warn("ccuimanager.addMenuItemEvent error")`，logcat 里没有这条
+    //   ⇒ 不是"没找到节点"，是"找到了错的节点"。）
+    //
+    // 做法：包一层 `_init`，原逻辑跑完之后把「可见的那个返回键」再接一次同一个
+    //   `onClickReturn`，并把 `_returnBtn` 指过去。隐藏页那个保持原样 ——
+    //   切到「玩法」页时它自己那套还在。
+    //
+    // 还原原版行为：整块删掉即可（症状回到「情报室左上角点不动」）。
+    // -----------------------------------------------------------------------
+    (function installIllustratedReturnButton() {
+        function patch() {
+            var W = window;
+            if (!W.Illustratedcommonlayer || !W.Illustratedcommonlayer.prototype) {
+                return false;
+            }
+            var proto = W.Illustratedcommonlayer.prototype;
+            if (proto.__oppaiReturnBtn) {
+                return true;
+            }
+            var orig = proto._init;
+            if (typeof orig !== "function") {
+                return false;
+            }
+            proto._init = function () {
+                var ret = orig.apply(this, arguments);
+                try {
+                    var helper = W.ccui && W.ccui.helper;
+                    if (!helper || typeof helper.seekNodeByName !== "function" || !this._ui) {
+                        emit("ILLUST-RETURN 没有 ccui.helper.seekNodeByName，跳过");
+                        return ret;
+                    }
+                    var panel = helper.seekNodeByName(this._ui, "returnbuttonpanel");
+                    var btn = panel ? helper.seekNodeByName(panel, "returnbutton") : null;
+                    if (!btn || btn === this._returnBtn) {
+                        return ret;
+                    }
+                    this._returnBtn = btn;
+                    var sound = W.table_view_sound && W.table_view_sound["default"];
+                    W.ccuiManager.addMenuItemEvent(btn, this.onClickReturn.bind(this), true, sound);
+                    emit("ILLUST-RETURN 情报室返回键改接到可见箭头上（原版接的是隐藏页里那个同名节点）");
+                } catch (e) {
+                    emit("ILLUST-RETURN 接返回键失败: " + e);
+                }
+                return ret;
+            };
+            proto.__oppaiReturnBtn = true;
+            emit("ILLUST-RETURN 补丁已安装");
+            return true;
+        }
+
+        if (patch()) {
+            return;
+        }
+        if (!window.__oppaiIllustReturnTimer) {
+            window.__oppaiIllustReturnTimer = setInterval(function () {
+                if (patch()) {
+                    clearInterval(window.__oppaiIllustReturnTimer);
+                    window.__oppaiIllustReturnTimer = null;
                 }
             }, 500);
         }
