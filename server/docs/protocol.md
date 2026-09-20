@@ -640,7 +640,7 @@ SignNormalLayer.receiveRewards(): if (!sign.canSignToday) return;   // 签过了
                                   requestReceiveRewards({key: signKey})
 ```
 
-⚠️ 四个坑：
+⚠️ 五个坑：
 
 1. **`signs` 必须是 map**（`{signKey: 行}`）。以前这里给的是 `signs: []`
    → 客户端 `for (k in [])` 一条都拿不到 → **「点签到没用」**
@@ -661,6 +661,16 @@ SignNormalLayer.receiveRewards(): if (!sign.canSignToday) return;   // 签过了
    `TypeError: sign.rewards[(i + 1)] is undefined`（signnormallayer.js:84）。
    实机验证的取数脚本：`out/probe_sign_shape.py`（只走数据层，不开界面）。
    奖励里**不能放没有图标的道具**（`100101`/`100102`）—— 见 differences.md §F。
+5. **每天必须恰好 1 件奖励**。`SignRewardItem._init` 按件数分支：
+
+   ```js
+   if (_rewards.length === 1)      item = rewardManager.getRewardIcon(_rewards[0]);  // 真图标
+   else if (_rewards.length > 1)   item = new cc.Sprite(res.signcommonicon);         // 通用图标
+   else                            cc.warn("signNormalLayer._update() rewards error!");
+   ```
+
+   给 2 件 → 7 个格子全长一样（都是 `signcommonicon`），看不出给什么；
+   给 0 件 → `addChild(undefined)` 直接崩。
 
 排期和奖励**客户端表里没有**（`jsc_find table_sign*` 0 命中）→ 服务端自己定，
 见 `gamesrv/sign.py` 的 `SIGN_REWARDS`（7 天循环）与 differences.md §D。

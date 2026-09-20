@@ -867,8 +867,16 @@ def sign_check(ok: bool) -> bool:
     `updateByServer` 把新 `count` 合并进同一行。
 
     ⚠️ 会真改签到状态和道具，跑完还原（所以可以反复跑）。
+    玩家**今天真签过**也得能跑：用例先把 `lastDay` 清掉再读登录块，收尾连状态一起还原。
     """
     from gamesrv import config, items, sign, store
+
+    player = store.get_or_create_player(config.DEFAULT_ACCOUNT)
+    before_state = dict(sign.state(player))
+    before_items = dict(items.items_of(player))
+    # 先假装今天没签过，否则下面「领一次」那几步全都没法测
+    sign.state(player)["lastDay"] = ""
+    store.save_player(player)
 
     login = call("agent.getlogindata", {}, 150)
     block = (login.get("data") or {}).get("sign") or {}
@@ -896,19 +904,20 @@ def sign_check(ok: bool) -> bool:
             print(f"  BAD rewards[{day_no}] 里没有 item（内层也是 1 基，下标 0 留空）："
                   f"{str(day_rewards)[:60]}")
             return False
+        if day_rewards[2:]:
+            # SignRewardItem._init：length === 1 用真图标，> 1 一律用 res/signcommonicon
+            print(f"  BAD rewards[{day_no}] 有 {len(day_rewards[1:])} 件，每天必须**恰好一件**"
+                  f"（多件时客户端 7 个格子全用同一个通用图标）：{str(day_rewards)[:60]}")
+            return False
     # 客户端是 `rewards[i + 1][j]`（i 从 0、j 从 1），0 基会走到 `rewards[7]` undefined
     if reward_days[0] is not None:
         print(f"  BAD rewards[0] 应该留空（客户端不读，但别把第 1 天放这儿）：{reward_days[0]!r}")
         return False
 
-    player = store.get_or_create_player(config.DEFAULT_ACCOUNT)
-    before_state = dict(sign.state(player))
-    before_items = dict(items.items_of(player))
-
     bad = []
     try:
         if not row.get("canSignToday"):
-            bad.append("canSignToday 应该是 1（除非今天已经签过 —— 那说明上一轮没还原）")
+            bad.append("canSignToday 应该是 1（用例开头已经清掉 lastDay 了）")
         r = call("sign.receivereward", {"key": sign.SIGN_KEY}, 151)
         if r.get("code") != 200:
             bad.append(f"sign.receivereward code={r.get('code')} {r}")
@@ -936,6 +945,8 @@ def sign_check(ok: bool) -> bool:
         player = store.get_or_create_player(config.DEFAULT_ACCOUNT)
         player[sign.PLAYER_KEY] = before_state
         got = items.items_of(player)
+        for k in [k for k in got if k not in before_items]:
+            del got[k]              # 用例期间新发的道具（第 1 天那件）
         for k, v in before_items.items():
             got[k] = v
         store.save_player(player)
