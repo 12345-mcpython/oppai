@@ -1535,49 +1535,74 @@ def gacha_check(ok: bool) -> bool:
 
 
 def char_manual_check(ok: bool) -> bool:
-    """登录块 `char.charManual` 不能是空的 —— 空了「菜单 → 情报室」里一个角色都没有。
+    """登录块 `char.charManual`：key 必须是**军士卡 key**（不是角色 key），情报室靠它列角色。
 
-    情报室的列表是 `Illustratedcommonlayer._init` 里的
-    `dataManager.character.getSoldierManualKeys()`，而它是
+    反汇编依据：
 
-        for (k in _charManual)
-            if (charManager.getCharType(k) === CHAR_TYPE.SOLDIER &&
-                charManager.getSoldierCardType(k) === CARD_TYPE.TEAMMATE) res.push(k)
+        CharCenter.getSoldierManualKeys():
+            for (k in _charManual)
+                if (charManager.getCharType(k) === CHAR_TYPE.SOLDIER &&
+                    charManager.getSoldierCardType(k) === CARD_TYPE.TEAMMATE) res.push(k)
 
-    ⇒ **`charManual` 空 = 情报室空**（实机表现就是「情报室里无角色」）。
-    客户端自己按 `card_type` 过滤（自军/敌兵两个页签都吃这份），所以服务端把
-    `table_soldier` 里出现过的角色 key 全发过去即可。
+        charManager.getCharType(k)        → table_soldier[k] / table_hero[k] / table_mecha[k]
+        charManager.getSoldierCardType(k) → table_soldier[k].char_key
+                                            → table_soldier_master[ck].card_type
+
+    两张表都按**卡 key** 索引，所以发角色 key（`sasm`）的后果是：每个 key 都
+    `cc.error`，`getSoldierManualKeys()` 返回空 → 情报室「数量 0/152」+ 152 个格子全是剪影
+    （格子是 `filtrateData()` 按 `table_soldier` 全表铺的，"有格子没内容"就是这么来的）。
+
+    ⚠️ 这条检查以前只断言"**非空**"，而且那句
+    `[k for k, v in master.items() if str(v) == "1"]` 在 master 行是 `int` 的当前结构下
+    **永远不成立** —— 所以 196 个角色 key 的错误实现照样"通过"了。现在按契约钉死。
     """
-    from gamesrv import items, store
+    from gamesrv import items
 
     bad = []
     char = ((call("agent.getlogindata", {}, 200).get("data") or {}).get("char") or {})
     manual = char.get("charManual")
+    soldiers = char.get("soldiers") or []
+    table = items.table("table_soldier") or {}
+    card = table.get("card") or {}
+    master = table.get("master") or {}
+    heros = {str(k) for k in (items.table("table_hero") or {})}
+    mechas = {str(k) for k in (items.table("table_mecha") or {})}
+
     if not isinstance(manual, dict) or not manual:
         bad.append(f"char.charManual 是空的（{type(manual).__name__}）→ 情报室里没角色")
     else:
-        # 键必须是客户端查得到的角色 key，值要能合并（isNewHead）
-        cards = (items.table("table_soldier") or {}).get("card") or {}
-        known = {str(r.get("ck")) for r in cards.values() if isinstance(r, dict)}
-        known |= {str(k) for k in (items.table("table_hero") or {})}
-        known |= {str(k) for k in (items.table("table_mecha") or {})}
-        unknown = [k for k in list(manual)[:200] if k not in known]
+        # 1) 每个 key 客户端都得查得到（getCharType 查卡表 / 英雄表 / 机甲表）
+        unknown = [k for k in manual if k not in card and k not in heros and k not in mechas]
         if unknown:
-            bad.append(f"charManual 里有客户端不认识的 key：{unknown[:5]}")
-        if not all(isinstance(v, dict) for v in list(manual.values())[:20]):
-            bad.append("charManual 的值要是对象（客户端读 isNewHead 并逐字段合并）")
-        # 自军军士的数量应该 > 0（情报室第一个页签要有东西）
-        self_keys = [k for k, v in (items.table("table_soldier") or {}).get("master", {}).items()
-                     if str(v) == "1"]
-        if self_keys and not any(k in manual for k in self_keys):
-            bad.append("charManual 里一个「自军军士」都没有（情报室军士页会空）")
+            bad.append(f"charManual 里有客户端查不到的 key（会刷 getCharType error）：{unknown[:5]}")
+        # 2) 卡表里的 key 必须是「自军卡」，否则 getSoldierManualKeys 会把它丢掉
+        not_teammate = [k for k in manual
+                        if k in card and master.get(str((card[k] or {}).get("ck"))) != 1]
+        if not_teammate:
+            bad.append(f"charManual 里的军士不是自军卡（会被丢掉）：{not_teammate[:5]}")
+        # 3) 角色 key（ck）不是卡 key —— 混进来就是上面那个 bug 的复现
+        char_keys = {str(r.get("ck")) for r in card.values() if isinstance(r, dict)}
+        wrong_kind = [k for k in manual if k in char_keys]
+        if wrong_kind:
+            bad.append(f"charManual 用的是角色 key 而不是军士卡 key：{wrong_kind[:5]}")
+        # 4) 自己有的军士都得在图鉴里（否则「数量 x/152」会比实际拥有的少）
+        owned = {str(s.get("key")) for s in soldiers if isinstance(s, dict) and s.get("key")}
+        missing = sorted(owned - set(manual))
+        if missing:
+            bad.append(f"拥有的军士没进图鉴：{missing[:5]}")
+        if not (owned & set(manual)):
+            bad.append("charManual 里一张自己有的军士卡都没有（情报室军士页会空）")
+        if not all(isinstance(v, dict) for v in manual.values()):
+            bad.append("charManual 的值要是对象（客户端读 isNewHead）")
 
     if bad:
         for one in bad:
             print(f"  BAD {one}")
         return False
-    print(f"  OK  角色图鉴：登录块 char.charManual 有 {len(manual)} 个角色 key"
-          f"（菜单→情报室的列表就是它的键，非空即不会「无角色」）")
+    n_soldier = sum(1 for k in manual if k in card)
+    print(f"  OK  角色图鉴：charManual {len(manual)} 个 key = 军士卡 {n_soldier} 张 + 英雄/机甲 "
+          f"{len(manual) - n_soldier} 个（都是玩家真有的；客户端 getSoldierManualKeys 收得下、"
+          f"不刷 getCharType error）")
     return ok
 
 

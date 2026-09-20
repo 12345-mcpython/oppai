@@ -106,6 +106,21 @@
   `favors` 分支写的是 `favors.count`（`favors` 是数组，`.count` 恒为 `undefined`），
   所以服务端**不能**用 `rewards.favorReward.favors` 那种形状下发好感度，
   得用 `rewards.levelReward.favor`。这是原版客户端自己的 bug，没去改它
+* **情报室（菜单 → 情报室）左上角的返回键实机点不动** —— **还没查清**。
+  目前排掉的：客户端**没卡死**（情报室打开后仍每 60 秒发 `boss.getbosslist`，
+  主线程活着）；`ccuiManager.addMenuItemEvent` 在 node 为 null 时会 `cc.warn`，
+  logcat 里没有这条 → 返回键**是接上了**的（`register()` 第一个就挂 `_returnBtn`，
+  handler 是 `cc.director.getRunningScene().pop(true)`）。
+  剩下要实机量的：`_returnBtn` 的世界坐标/命中区是不是落在返回箭头的位置
+  （上一次会话量到 `830,476 150x100`，而箭头在左上角）、有没有节点在上面吞触摸。
+  同一屏的「数量 0/152 + 全剪影」是另一个 bug，已修，见 §F 最后一行
+* **情报室的真正入口是 `assets/src/srcex/menubtnex.jsc` 的
+  `MenuBtnEx._onClickIllustrationButton` → `cc.director.getRunningScene().push(new
+  Illustratedcommonlayer(1), false, true)`**；`assets/src/ui/illustrated/illustratedlayer.jsc`
+  是**死代码** —— 它要的 `res/illustrationslayer.csb` 根本没随包发（包里只有同名 `.png/.plist`），
+  实例化它会让引擎 `CC_ASSERT(FileUtils::isFileExist)` 失败、接着解引用 null 直接 SIGSEGV
+  （2026-09-20 我用探针 `new IllustratedLayer()` 真把客户端打崩过一次）。查这个界面的问题
+  一律从 `Illustratedcommonlayer` 入手
 
 ---
 
@@ -183,6 +198,7 @@
 | `items` 块里别塞客户端不认识的 key | `Bag.updateItems` 是 `this._items[key].count = n`，client 那份 `_items` 是拿 `table_item` **全表预先建行**（481 条） | 真出现陌生 key 就是 `undefined.count = n` 的 TypeError | `items.changed_block()` 只回"改动前就有的 key" |
 | 有些数组字段客户端是 **1 基**读的（下标 0 空着） | 签到奖励 `rewards`：客户端 `for (i = 0; i < rewardCount; i++) for (j = 1; sign.rewards[i + 1][j]; j++)`（i 从 0 数但取 `i+1`，j 从 1 数）。我一开始发的 0 基二维数组 | 走到最后一天 `sign.rewards[7]` 是 undefined → `TypeError: sign.rewards[(i + 1)] is undefined`（signnormallayer.js:84），和上一条一样**打断主界面初始化**（界面点不动、服务端没请求）。`count` 是 0 基而 `rewards` 是 1 基，这个错位是客户端自己的约定 | `sign._days_1based()`；`sign_check` 钉住形状；实机取数脚本 `out/probe_sign_shape.py` |
 | 签到**每天必须恰好一件**奖励 | 我给每天塞了 2 件（金条 + 道具） | `SignRewardItem._init` 是 `length === 1` → 画该道具真图标；`> 1` → 一律 `res/signcommonicon` 通用图标（7 个格子长得一模一样，看不出给什么）；`=== 0` → `cc.warn` + `addChild(undefined)` 直接崩 | `sign.SIGN_REWARDS` 改成每天一件；`sign_check` 断言「恰好一件」 |
+| **`char.charManual` 的 key 必须是军士**卡** key（`sasm010101`），不是角色 key（`sasm`）** | 2026-09-20：`charManual` 发的是 `table_soldier.card[].ck`（角色 key，196 个）。客户端情报室的清单是 `CharCenter.getSoldierManualKeys()`：`for (k in _charManual) if (charManager.getCharType(k) === CHAR_TYPE.SOLDIER && charManager.getSoldierCardType(k) === CARD_TYPE.TEAMMATE) push(k)`；而 `getCharType` 查的是 `table_soldier[k]`，`getSoldierCardType` 再走 `table_soldier[k].char_key → table_soldier_master[ck].card_type` —— **两张表都按卡 key 索引**（英雄/机甲那两个页签查 `table_hero`/`table_mecha`，key 本来就和角色 key 同名，混在一个 map 里没问题） | 每个角色 key 都打一行 `[error]charManager.getCharType() error, key is sasm`（实机 logcat 里刷了 196 行）；`getSoldierManualKeys()` 返回空 → 情报室「**数量 0/152**」、152 个格子**全是剪影**（格子是 `filtrateData()` 按 `table_soldier` 全表铺的，所以是"有格子没内容"） | `store.player_char_manual()` 只发玩家真有的卡（军士实例的 `key` + `player_heros/player_mechas`）；`selftest_game.py` 的 `char_manual_check` 按上面那条契约钉死。⚠️ 旧版这条检查只断言"非空"，而且里面那句 `[k for k, v in master.items() if str(v) == "1"]` 在 master 行是 `int` 的当前结构下**永远不成立** → 所以错误的实现照样"通过"了 |
 
 ---
 
