@@ -325,7 +325,7 @@ adb -s 127.0.0.1:21503 logcat -d -v brief | Select-String "OPPAIPATCH|JS ERROR"
 
 | 卡点 | 结论 | 怎么办 |
 |---|---|---|
-| **装得上** | `targetSdkVersion=23`（原版就这样）。Android 14 起禁装 `<23`（23 恰好能装），**Android 15 起禁装 `<24`** | `adb install -r --bypass-low-target-sdk-block <apk>`（Android 14+ 的官方开关，**不需要 root**）；或者把 manifest 里那个数字抬到 24 重打包 |
+| **装得上** | 原版 `targetSdkVersion=23`。Android 14 起禁装 `<23`、**Android 15 起禁装 `<24`**，所以以前装真机得带 `--bypass-low-target-sdk-block` | **已修**：`script/build_apk.py` 的 `normalize_android_manifest()` 每次打包把 targetSdk 提到 **33**，并给带 intent-filter 的组件补显式 `android:exported`（31+ 不写会报 `android:exported needs to be explicitly specified`）。现在 `.\build.ps1 -Install` 直接装 |
 | **跑得起来** | 包里只有 `armeabi` + `x86`（引擎的预编译依赖 curl/websockets/png/freetype… 也只有 armeabi / armeabi-v7a / x86，**没有 arm64**） | **别只看属性，直接装一个试** —— `ro.product.cpu.abilist` / `ro.zygote` 说只有 64 位，不代表跑不了：**实测一加 PLZ110（Android 16，`abilist32` 为空、`ro.zygote=zygote64`）能正常跑**，靠的是厂商自带的 32 位兼容层（该机有 `app_process32`、32 位 `linker`/bionic、`init.svc.zygote_tango`）。没有这层兼容层的机器（例如 Pixel 7 以后）才会 `UnsatisfiedLinkError` |
 | **连得上** | 地址烘在包里 → 换 IP 就要重打包 | 见下面，**改成运行时改写**，连局域网都不需要 |
 
@@ -344,9 +344,9 @@ python script\serve.py
 # 3) 打包 + 装到真机（-Serial 指到手机；不带任何地址参数，读服务端配置）
 .\build.ps1 -Install -Serial <手机序列号>
 
-# 4) Android 14+ 装不上（targetSdk=23 < 门槛）时，用这条（官方开关，不需要 root）：
+# 4) 现在直接装就行（targetSdk 已经是 33，见上面「装得上」那行）
+#    万一你手上的包还是旧的 targetSdk=23，才需要这条官方开关（不需要 root）：
 adb -s <手机序列号> install -r --bypass-low-target-sdk-block out\zcsmw-mod-signed.apk
-#    实测：一加 PLZ110（Android 16）就是靠它装上的
 ```
 
 **实测结论（一加 PLZ110，Android 16 / SDK 36）**：

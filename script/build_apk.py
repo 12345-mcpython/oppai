@@ -26,7 +26,12 @@
 
 所有步骤都是**幂等**的：已经替换过的地址会被识别出来直接跳过。
 
-路径可用环境变量覆盖：GS_APK_DIR / GS_WORK_DIR / GS_JAVA_HOME / GS_BUILD_TOOLS
+路径可用环境变量覆盖：AndroidManifest.xml 的规范化见 `normalize_android_manifest()`：targetSdk 23 -> 33、
+带 intent-filter 的组件补 android:exported（31+ 不写直接装不上）、删死掉的渠道
+meta-data。它和别的清理一样**每次打包都跑** —— `game/` 不进 git，手改留不住，
+而「装不上」要等真机安装才暴露。
+
+GS_APK_DIR / GS_WORK_DIR / GS_JAVA_HOME / GS_BUILD_TOOLS
 """
 
 from __future__ import annotations
@@ -213,9 +218,47 @@ DROP_SMALI_GROUPS = (
 
 
 
+# ---------------------------------------------------------------------------
+# Android 清单：targetSdk 与死掉的渠道残留（见 normalize_android_manifest()）
+# ---------------------------------------------------------------------------
+ANDROID_NS = "http://schemas.android.com/apk/res/android"
+A = "{%s}" % ANDROID_NS
+
+# 原包是 minSdk 21 / **targetSdk 23**（Android 6）。后果：
+#   * Android 14 起**拒绝安装** targetSdk < 23 的包，Android 15 起 < 24 ——
+#     以前往新设备/新模拟器装都得 `adb install -r -d --bypass-low-target-sdk-block`；
+#   * 系统按 2015 年的行为给你放行（存储、后台、通知全是老的宽松规则）。
+# 停在 33（Android 13）是"够新 + 坑最少"的一档：
+#   * 31+ 要求带 intent-filter 的组件显式写 android:exported（下面会自动补）；
+#   * 30+ 起分区存储：WRITE/READ_EXTERNAL_STORAGE 失效 —— 引擎写的是应用内目录，
+#     实测没影响（`GameShare` 里那处 `Environment.getExternalStorageDirectory()`
+#     是分享截图用的，分享链路本来就没接）；
+#   * 34 会要求前台服务声明类型、35 会强制 edge-to-edge（全屏横版游戏容易画面出问题），
+#     所以不往上抬。要抬就改这一个常量。
+TARGET_SDK = 33
+MIN_SDK = 21
+
+# 死掉的渠道 SDK meta-data。判定依据（都扫过一遍）：
+#   * `YESDK_*` / `BDPlatformType` / `BDGameVersion` 是 YE SDK / 百度 SDK 用的，
+#     那些 Java 类早被 `script/sdk_strip/strip.py` 删光 —— smali / 两个 .so /
+#     assets 里对这些**键名** 0 引用；
+#   * 剩下的 smali 里唯一读 meta-data 的是 `AppActivity`，它读的键是 `CPS`
+#     （`AppActivity.CPS = "CPS"`），manifest 里本来就没有 → 走 null 分支。
+DEAD_META_DATA = (
+    "YESDK_APP_ID", "YESDK_APPKEY", "YESDK_CHANNEL_ID", "YESDK_EXTRA",
+    "BDPlatformType", "BDGameVersion",
+)
+
+# ⚠️ 别照抄 `script/sdk_strip/manifest_clean.py` 那份 PERM_HINTS 去删权限：
+# 它是"看着像只给 SDK 用"的粗筛，而现在这几个**确实有人在用** ——
+# `Utilsex.smali` 调 `PowerManager.newWakeLock`（要 WAKE_LOCK）、
+# 客户端读 `WifiManager`（3 处，要 ACCESS_WIFI_STATE）、
+# `ACCESS_NETWORK_STATE` 是联网判定用的。删了不是"少一条隐私声明"，
+# 是运行时 SecurityException。要删权限得先按 smali/.so/assets 全量扫引用。
+
+
 def log(*a):
     print("[build]", *a, flush=True)
-
 
 def Warn(*a):
     print("[build][warn]", *a, flush=True)
@@ -591,6 +634,93 @@ def prune_do_not_compress() -> None:
             log(f"      - {r}")
 
 
+def normalize_android_manifest() -> None:
+    """把 `AndroidManifest.xml` 规范成我们要的样子（**幂等**，每次打包都跑）。
+
+    为什么必须放在这里而不是手改 manifest：`game/` 是 **gitignore 的解包树**
+    （`git ls-files game` = 0 个文件）。手改的 targetSdk 一旦重新 `apktool d`
+    就没了，而"装不上"这种问题要等真机安装才暴露 —— 所以规则得留在构建脚本里。
+
+    三件事：
+
+    1. **`uses-sdk` 的 targetSdkVersion 提到 `TARGET_SDK`**（apktool.yml 的 `sdkInfo`
+       一起改，apktool 打包以它为准）。
+    2. **给带 `<intent-filter>` 的组件补显式 `android:exported`**。
+       targetSdk 31+ 不写就 **装不上**：`android:exported needs to be explicitly
+       specified. Apps targeting Android 12 and higher are required to specify an
+       explicit value`。值按老语义取 —— 31 之前"有 intent-filter = 默认导出"，
+       所以补 `true`（原样保留行为），不是 `false`。
+    3. **删掉死掉的渠道 meta-data**、合并重复的 `<supports-screens>`。
+    """
+    import xml.etree.ElementTree as ET
+
+    path = os.path.join(APK_DIR, "AndroidManifest.xml")
+    if not os.path.isfile(path):
+        return
+    ET.register_namespace("android", ANDROID_NS)
+    tree = ET.parse(path)
+    root = tree.getroot()
+    changes = []
+
+    # 1) uses-sdk
+    for el in root.findall("uses-sdk"):
+        if el.get(A + "targetSdkVersion") != str(TARGET_SDK):
+            changes.append(f"targetSdkVersion {el.get(A + 'targetSdkVersion')} -> {TARGET_SDK}")
+            el.set(A + "targetSdkVersion", str(TARGET_SDK))
+        if el.get(A + "minSdkVersion") != str(MIN_SDK):
+            el.set(A + "minSdkVersion", str(MIN_SDK))
+
+    # 2) exported
+    for tag in ("activity", "activity-alias", "service", "receiver", "provider"):
+        for el in root.iter(tag):
+            if el.find("intent-filter") is None:
+                continue
+            if el.get(A + "exported") is None:
+                name = (el.get(A + "name") or "?").rsplit(".", 1)[-1]
+                el.set(A + "exported", "true")
+                changes.append(f"{tag} {name}: 补 android:exported=true")
+
+    # 3) 死 meta-data + 重复 supports-screens
+    for el in list(root.iter("meta-data")):
+        name = el.get(A + "name")
+        if name in DEAD_META_DATA:
+            parent = None
+            for cand in root.iter():
+                if el in list(cand):
+                    parent = cand
+                    break
+            if parent is not None:
+                parent.remove(el)
+                changes.append(f"删 meta-data {name}")
+
+    screens = list(root.iter("supports-screens"))
+    for el in screens[1:]:
+        root.remove(el)
+        changes.append("删重复的 <supports-screens>")
+
+    if not changes:
+        return
+    ET.indent(tree, space="    ")
+    with open(path, "w", encoding="utf-8", newline="\n") as fh:
+        fh.write("<?xml version='1.0' encoding='utf-8'?>\n")
+        fh.write(ET.tostring(root, encoding="unicode"))
+        fh.write("\n")
+
+    # apktool.yml 的 sdkInfo 也一起改
+    yml = os.path.join(APK_DIR, "apktool.yml")
+    if os.path.isfile(yml):
+        with open(yml, "r", encoding="utf-8") as fh:
+            text = fh.read()
+        new = re.sub(r"(?m)^(\s*targetSdkVersion:\s*)\d+", rf"\g<1>{TARGET_SDK}", text)
+        if new != text:
+            with open(yml, "w", encoding="utf-8", newline="\n") as fh:
+                fh.write(new)
+
+    log(f"  AndroidManifest: 规范化 {len(changes)} 处 -> targetSdk {TARGET_SDK}")
+    for c in changes:
+        log(f"      - {c}")
+
+
 def prune_stale_dex() -> None:
     """清理 apktool 增量缓存里已经不存在的 dex。
 
@@ -788,6 +918,9 @@ def prepare_assets(host: str, port: int, login_port: int, patch_path: str,
 
     # 剪掉 apktool.yml 里指向已删文件的 doNotCompress 条目
     prune_do_not_compress()
+
+    # Android 清单规范化：targetSdk + exported + 死掉的渠道 meta-data
+    normalize_android_manifest()
 
 
 # ---------------------------------------------------------------------------

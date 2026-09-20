@@ -16,9 +16,19 @@
 
 4. 在 AppActivity.onCreate 里注入一行调用 PermissionHelper.request(this)
 
-⚠️ **targetSdk 必须停在 23，不能再往上升。**
+⚠️ **这份脚本是"一次性迁移"（minSdk 9→21、补 targetSdk、装运行时权限），已经跑过了。**
+下面这段「targetSdk 必须停在 23」是**当年**的结论，前提已经不存在了 ——
+写这段的时候 QuickSDK / 百度 SDK 的 Java 类还在包里，它们才是 27+ 起不来的原因；
+现在 `script/sdk_strip/strip.py` 把那套 SDK 删光了（剩下 151 个 smali 里
+`MODE_WORLD_READABLE` / `getDeclaredMethod` / `Class.forName` 各 0 处，
+两个 .so 里 `quicksdk` / `baidu` 也 0 命中），**所以才能往上抬**。
 
-踩了两次坑，都是这个 2016 年的 QuickSDK / 百度 SDK 引起的：
+2026-09-20 已把 targetSdk 抬到 **33**，并且**规则改由 `script/build_apk.py` 的
+`normalize_android_manifest()` 每次打包强制执行**（`game/` 不进 git，手改留不住）。
+这个文件里的 `TARGET_SDK` 只是历史记录，别再拿它去改 manifest —— 它会把
+targetSdk 写回 23。
+
+**当年的记录（前提：QuickSDK / 百度 SDK 还在）**：
 
 | targetSdk | 结果 |
 |---|---|
@@ -26,6 +36,7 @@
 | **23** | ✅ 能用：装得上、没有旧版警告、SDK 也正常 |
 | 27 | ❌ App 能启动，但百度 SDK 初始化失败并不断重试，弹窗闪烁（见下） |
 | 28+ | ❌ 直接起不来：隐藏 API 限制 |
+| **33** | ✅ 2026-09-20 实测：SDK 删光之后能装能跑（模拟器 Android 9 起得来、登得上） |
 
 **27 的坑：`MODE_WORLD_READABLE no longer supported`**
 
@@ -90,7 +101,10 @@ PERM_SRC = os.path.join(BASE_DIR, "client", "PermissionHelper.smali")
 PERM_DST = os.path.join(SMALI_DIR, "PermissionHelper.smali")
 
 MIN_SDK = 21
-TARGET_SDK = 23          # 不要往上提！见文件头说明（24 起 MODE_WORLD_READABLE 会抛异常）
+# ⚠️ 历史值。现在 targetSdk 由 script/build_apk.py 的 normalize_android_manifest()
+# 每次打包强制写成 33；这个脚本只在"从原版重新解包"时才可能用到，跑它会把
+# targetSdk 写回 23（下一次打包会被 build_apk.py 纠正回来）。
+TARGET_SDK = 23
 
 USES_SDK = f'    <uses-sdk android:minSdkVersion="{MIN_SDK}" android:targetSdkVersion="{TARGET_SDK}"/>'
 

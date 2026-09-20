@@ -404,3 +404,9 @@ adb shell logcat -d -b crash | findstr "Abort message"
 
 **教训**：改 targetSdk / 删依赖这类事，光看「App 能不能起来」不够 ——
 SDK 的失败是被它自己的 try/catch 吞掉的，只在 logcat 里留一行 `onFailed`。
+**反过来也成立**：判断「能不能抬 targetSdk」同样不能只看 App 起没起来，
+得先确认**引起限制的那个东西还在不在**。2026-09-20 把 targetSdk 从 23 抬到 33
+就是这么过的 —— 当年卡在 27+ 的是 QuickSDK / 百度 SDK（`MODE_WORLD_READABLE`、
+隐藏 API 反射），而那套 Java 类早被 `sdk_strip/strip.py` 删光，
+扫一遍剩余 151 个 smali + 两个 .so 确认相关调用 0 命中之后才敢抬。
+规则落在 `script/build_apk.py` 的 `normalize_android_manifest()`（每次打包强制）。
