@@ -224,24 +224,32 @@ def settle(player: dict, rewards) -> dict:
 
 
 def _add_soldier(player: dict, key: str):
-    """按 key 加一个军士到名单里，返回新 id；拿不到属性就返回 None。"""
+    """按 key 加一个军士到名单里，返回新 id；拿不到属性就返回 None。
+
+    ⚠️ 表名是 **`card`** 不是 `table_soldier`：抽出来的 `table_soldier.json` 是个
+    **复合表**（`{card, master, constant, to_exp, upgrade_exp, lv_limit, ...}`，
+    见 `soldier.tables()`），`soldier._row("table_soldier", key)` 永远查不到东西 ——
+    后果是**所有 SOLDIER 类型的奖励都被静默丢掉**（只留一条 warning），
+    抽卡/派遣/关卡奖励发军士时全中招（2026-09-20 做抽卡时发现）。
+    卡行是压缩字段：`q` = 品质、`p` = 站位、`ck` = char_key。
+    """
     try:
         from . import soldier as soldier_mod
 
-        row = soldier_mod._row("table_soldier", key) or {}
+        row = soldier_mod._row("card", key) or {}
     except Exception as exc:  # noqa: BLE001
-        log.warning("查 table_soldier[%s] 失败：%s", key, exc)
+        log.warning("查 table_soldier.card[%s] 失败：%s", key, exc)
         row = {}
     if not row:
-        log.warning("table_soldier 里没有 %s，发不了这个军士", key)
+        log.warning("table_soldier.card 里没有 %s，发不了这个军士", key)
         return None
     soldiers = store.ensure_soldiers(player)
     used = {int(s.get("id") or 0) for s in soldiers}
     new_id = 1
     while new_id in used:
         new_id += 1
-    positioning = int(row.get("positioning") or 1)
-    quality = int(row.get("quality") or 1)
+    positioning = int(row.get("p") or row.get("positioning") or 1)
+    quality = int(row.get("q") or row.get("quality") or 1)
     soldiers.append(store.new_soldier(new_id, key, positioning=positioning, quality=quality))
     log.info("发军士 %s -> id=%d（站位 %d 品质 %d）", key, new_id, positioning, quality)
     return new_id

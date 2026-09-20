@@ -750,6 +750,44 @@ ARENA_MECHA_SKILL_JS = r"""
 """
 
 
+# 抽卡（扭蛋）。**客户端一张 gacha 表都没有** —— 卡池 master（有哪些池子、消耗什么、
+# 概率、能出哪些卡）全在服务端下发，所以服务端得自己造池子，但池子里装的卡要从
+# 客户端表里挑：
+#
+#   `table_soldier`（已抽，`card`/`master`）—— 自军卡看 `table_soldier_master[charKey].card_type == 1`，
+#       一共 152 张，是**每个角色的 4 档卡**：quality 1/2/3/4（q3 = S、q4 = SR，
+#       对应 `gachaconfig.SOLDIER_S_QUALITY = 3` / `SOLDIER_SR_QUALITY = 4`），
+#       `template` 就是档位（1..4）。抽到哪一档就发哪一档的 key（`saf010104` 这种）。
+#   `table_hero`（2 条，`hadf` 阿呆芙 / `haysdn`）和 `table_mecha`（6 条）都带
+#       **`gacha_name`** 字段 —— 那就是"抽卡时显示的名字"，说明它们是卡池大奖。
+#   `table_item` —— 池子消耗（金条 100001 / 好人卡 100016）和填充奖励。
+HERO_JS = r"""
+(function () {
+    var out = {};
+    for (var k in table_hero) {
+        var r = table_hero[k] || {};
+        out[k] = {name: r.name, gacha_name: r.gacha_name, desc: r.desc,
+                  mecha_1: r.mecha_1, mecha_2: r.mecha_2, mecha_3: r.mecha_3,
+                  mecha_4: r.mecha_4, max_mecha_count: r.max_mecha_count};
+    }
+    return JSON.stringify(out);
+})()
+"""
+
+MECHA_JS = r"""
+(function () {
+    var out = {};
+    for (var k in table_mecha) {
+        var r = table_mecha[k] || {};
+        out[k] = {name: r.name, gacha_name: r.gacha_name, desc: r.desc,
+                  type: r.type, positioning: r.positioning, template: r.template,
+                  skill_key: r.skill_key, quality: r.quality};
+    }
+    return JSON.stringify(out);
+})()
+"""
+
+
 def _dump(base: str, js: str, name: str):
     result = eval_remote(base, js, timeout=30.0)
     if not result.get("ok"):
@@ -827,6 +865,8 @@ def main() -> int:
         ("table_arena_attr_correct_own.json", ARENA_ATTR_OWN_JS),
         ("table_arena_attr_correct_enemy.json", ARENA_ATTR_ENEMY_JS),
         ("table_arena_mecha_super_skill_correct_own.json", ARENA_MECHA_SKILL_JS),
+        ("table_hero.json", HERO_JS),
+        ("table_mecha.json", MECHA_JS),
         ("table_item.json", ITEM_JS),
     ]
     if args.only:

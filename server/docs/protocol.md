@@ -824,6 +824,75 @@ SignNormalLayer.receiveRewards(): if (!sign.canSignToday) return;   // 签过了
 `table_arena_mecha_super_skill_correct_own`（唯一消费者 `Mecha.loadArenaSuperSkill`，
 键 `"<mechaKey>#<superSkillLv>"`），所以服务端不用发。
 
+### 6.10 抽卡 / 扭蛋（`gacha.*`）
+
+`assets/src/table/` 里 176 张表**一张 gacha 的都没有** ——
+「有哪些池子、消耗什么、概率多少、能出哪些卡」是**运营配置**，原版由服务端下发，
+随停服一起没了。所以这一块是**内容缺口**，服务端得自己造（见 `gamesrv/gacha.py` 与
+differences.md §B/§D），但所有 id/枚举都照客户端：
+
+```js
+config/gachaconfig.jsc:
+  GACHA_TYPE  = {10:FREE, 20:GEM, 30:FRAGMENT, 40:TIME_LIMIT, 50:WELFARE, 60:COMMON}
+  GACHA_KEYS  = {FREE:"1001", GEM:"1002", FRAGMENT:"1003"}
+  GACHA_NAMES = {1001:"免费抽卡", 2001:"碎片单抽", 2010:"碎片十连",
+                 4001:"钻石单抽", 4010:"钻石十连"}       // ★ 池子 id 不用编，原版就这几个
+  GACHA_FORM  = {DEFAULT:"0", TIMES_CHANGEABLE:"1"}
+  GACHA_TIMES_LIMIT = {DAILY:"d", ACTIVITY:"a", TOTAL:"t"}
+  SOLDIER_S_QUALITY = 3 / SOLDIER_SR_QUALITY = 4
+  GACHA_ERROR_DICT  = {201 参数错误 / 202 找不到抽卡信息 / 203 军士库满员 / 204 次数用完 /
+                       205 倒计时 / 206 资源不够 / 207 资源错误 / 210 非活动期 /
+                       211~213 次数用完 / 405 更新数据错误}
+```
+
+**登录块 `data.gacha`**（`Gacha.update(data)` 是直接赋值，所以这三份必须是 **map**）：
+
+```js
+{gachaData:      {"<dataKey>": {masterKey, todayTimes, lastGachaTimeSec, totalTimes}},
+ gachaInfoList:  {"<infoKey>": {itemKey, itemCount, voucherKey, voucherCount, useVoucher,
+                                receiveKey, receiveCount, limitTimesObj, saleInfoObj,
+                                saleTypeObj, freeInterval}},
+ gachaMasterList:{"<poolKey>": {key, name, type, form, infoKeysObj, saleTypeObj}},
+ gachaLibCards: {}, lastUpdateInfoTime: 毫秒, freeGachaTip: {}, activityTimes: {}}
+```
+
+⚠️ **五个坑**：
+
+1. **`gachaInfoList` / `gachaMasterList` 缺了就是「没有卡池」**：早期只发 `gachaData`，
+   `getGachaMasterList()` 返回空数组 → 界面显示没有卡池（`Gacha.update` 只认这三个键，
+   而 `getGachaMasterList()` 是遍历 `_gachaMasterObj` 再按 `_checkGachaVaild` 过滤）。
+   `_checkGachaVaild` **只对 `type == 40`（TIME_LIMIT）校验 `startTime`/`endTime`** ——
+   普通池（10/20/30）不填时间也永远有效。
+2. **`saleInfoObj` 是「按次数索引」的折扣表**：客户端
+   `getGachaSale = saleInfoObj[第几次] || saleInfoObj[0] || 100`，
+   `getGachaConsume = info.itemCount * sale / 100`。写成 `{saleTimes, sale, defaultSale}`
+   那种对象会让 `saleInfoObj[次数]` 是 undefined → 价格算成 **NaN**（实机量到 `consume: null`，
+   界面上价格显示不出来）。正确形状如 `{"0": 100}`。
+3. **`dataKey` 怎么拼**：`Gacha.getGachaDataKey(masterKey, times)` 是
+   `form == TIMES_CHANGEABLE ? masterKey : masterKey + ("0" + times)`（times < 10 补 0）
+   —— 所以"钻石单抽"是 `4001` → dataKey `400101`；服务端 `gachaData` 的 key 要照这个来。
+4. **`infoKeysObj` 要指向真有的 infoKey**：`_getGachaInfoByMaster` 是
+   `form == DEFAULT ? _gachaInfoObj[master.infoKeysObj[times]]
+                    : _gachaInfoObj[master.infoKeysArr[min(times-1, len-1)].infoKey]`。
+5. **免费池的判定是「没有消耗」**：`isFreeGacha()` = `info.itemCount` 和
+   `info.voucherCount` 都是 0；每日次数走 `info.limitTimesObj.d`
+   （`GACHA_TIMES_LIMIT.DAILY`），客户端 `getRemainTimes` 拿它减 `gachaData[key].todayTimes`。
+
+**三条路由**：
+
+| route | 请求 | 回包 |
+|---|---|---|
+| `gacha.getgacha` | `{}` | **扁平**三件套 + `gachaData/gachaInfoList/gachaMasterList`（⚠️ 不是 `{"gacha":…}`，它不走响应派发） |
+| `gacha.getlibraryshow` | `{key}` | `{cards: [{key, type, quality}], upRate: {}, gachaInfo: master}` |
+| `gacha.gacha` | `{key, times}` | `{gachaData, cards: [{type, key, quality?}], itemKey, extraReward, gemGachaTimes}`；失败用 `GACHA_ERROR_DICT` 的码 |
+
+**卡池内容**（服务端从客户端表里挑，见 `gacha.card_pool()`）：自军卡看
+`table_soldier_master[charKey].card_type == 1`，一共 **152 张 = 每个角色的 4 档卡**
+（`quality` 1/2/3/4，`template` 就是档位；q3 = S、q4 = SR）；大奖是
+`table_hero`（2 个，带 `gacha_name`）+ `table_mecha`（6 个，同样带 `gacha_name`）。
+抽到的英雄/机甲进 `player["heros"]`/`player["mechas"]`，随登录块 `char.heros`/`char.mechas`
+下发（`CarCenter._initHeros/_initMechas` 按 `{key, ownFlag}` 建对象）。
+
 ---
 
 ## 7. 切主场景

@@ -9,8 +9,8 @@ route 名字来自客户端 src/manager/datamanager.js：
 from __future__ import annotations
 
 from ..gameproto import CODE_OK
-from .. import (arena, config, detect, exchange, favor, instance, logx, quests, sign,
-                store, subarea)
+from .. import (arena, config, detect, exchange, favor, gacha, instance, logx, quests,
+                sign, store, subarea)
 from . import route
 
 log = logx.get("handler.agent")
@@ -61,10 +61,11 @@ def _module_stubs(player: dict | None = None) -> dict:
         # 现在读存档 —— 不然买了东西一发一扣，重登又变回去了。
         "item": store.player_items(player),
         "char": {
-            "heros": [store.new_hero()],
+            # 英雄 / 机甲存在存档里（抽卡会往里加，见 store.add_hero/add_mecha）
+            "heros": store.player_heros(player) if player else [store.new_hero()],
             # ⚠️ 军士存在玩家存档里（升级过就不能每次登录现生成，否则升级会回退）
             "soldiers": store.ensure_soldiers(player) if player else store.new_soldiers(),
-            "mechas": [store.new_mecha()],
+            "mechas": store.player_mechas(player) if player else [store.new_mecha()],
             # 守护灵（宿舍 guard 面板）。**按 charKey 索引的 map，不是数组** ——
             # `CharCenter.getDaemon(k)` 是 `this._daemons[k]`，给数组的话恒 undefined。
             # 行只有 `{charKey, lv, curExp}`，属性/上限客户端自己算。
@@ -74,12 +75,13 @@ def _module_stubs(player: dict | None = None) -> dict:
             "charManual": {},
             "skillComb": {},
         },
-        "gacha": {
-            "gachaData": {},
-            "gachaLibCards": {},
-            "lastUpdateInfoTime": t,
-            "freeGachaTip": {},
-            "activityTimes": {},
+        # 抽卡。**客户端一张 gacha 表都没有**，卡池 master 全在这一块里下发：
+        # `gachaData`（玩家次数）/ `gachaInfoList`（消耗行）/ `gachaMasterList`（池子定义）
+        # 三个都是 **map**，`Gacha.update(data)` 直接吃。见 gamesrv/gacha.py。
+        "gacha": gacha.login_block(player) if player else {
+            "gachaData": {}, "gachaInfoList": {}, "gachaMasterList": {},
+            "gachaLibCards": {}, "lastUpdateInfoTime": t,
+            "freeGachaTip": {}, "activityTimes": {},
         },
         "mail": {"mails": [], "updateTime": t, "remindCount": 0},
         # 任务（主线）单独算：见 gamesrv/quests.py

@@ -71,6 +71,26 @@ ITEM_MONEY = "100002"
 ITEM_ACTION_POINT = "100003"
 
 
+# 抽卡碎片（好人卡，`ITEM_KEY.GACHA_FRAGMENT` = 100016）。原版从活动/关卡里攒，
+# 私服一件都不给的话「碎片单抽/十连」两个池子永远是「资源不够啦……OAQ」(206)。
+# 改成 0 并把 `FRAGMENT_STOCK_VERSION` +1 即可还原。
+FRAGMENT_KEY = "100016"
+FRAGMENT_STOCK = 99
+FRAGMENT_STOCK_VERSION = 1
+
+
+def top_up_fragments(player: dict) -> bool:
+    """老存档补一份抽卡碎片（按版本号只补一次）。"""
+    if int(player.get("fragmentStockVersion") or 0) >= FRAGMENT_STOCK_VERSION:
+        return False
+    bag = player_items(player)
+    bag[FRAGMENT_KEY] = max(int(bag.get(FRAGMENT_KEY) or 0), FRAGMENT_STOCK)
+    player["fragmentStockVersion"] = FRAGMENT_STOCK_VERSION
+    log.info("玩家 %s 补抽卡碎片 %s x%d（私服取舍，见 docs/differences.md §B）",
+             player.get("account"), FRAGMENT_KEY, FRAGMENT_STOCK)
+    return True
+
+
 def default_items() -> dict:
     """新号的初始背包。登录包里 `item` 那个块就是这个形状（`{key: count}`）。
 
@@ -81,6 +101,7 @@ def default_items() -> dict:
         ITEM_GEM: 100000,
         ITEM_MONEY: 10000000,
         ITEM_ACTION_POINT: 999,
+        FRAGMENT_KEY: FRAGMENT_STOCK,
     }
 
 
@@ -758,14 +779,23 @@ def new_module_state() -> dict:
     return {k: {"isUnlock": 1, "unlockLv": 1} for k in MODULE_KEYS}
 
 
-def new_hero() -> dict:
-    """主角。字段名来自客户端 src/data/hero.js 的 Hero。"""
+def new_hero(key: str = HERO_KEY) -> dict:
+    """主角/英雄。字段名来自客户端 src/data/hero.js 的 Hero。
+
+    `key` 默认是建号送的主角的那个（`HERO_KEY` = hadf）；抽卡抽到另一个英雄
+    （`table_hero` 里还有 `haysdn`）时要按那张表填 `curMechaKey`/`mechaKeys`。
+    """
+    from . import items as items_mod   # 局部 import：循环依赖
+
+    row = (items_mod.table("table_hero") or {}).get(str(key)) or {}
+    mechas = [row.get("mecha_%d" % i) for i in range(1, 5)]
+    mechas = [str(m) for m in mechas if m]
     return {
         "id": 1,
-        "key": HERO_KEY,
+        "key": str(key),
         "charType": CHAR_TYPE_HERO,
-        "curMechaKey": MECHA_KEY,
-        "mechaKeys": ["madflj", "madfxdlj", "madftiger", "madfewt"],
+        "curMechaKey": (mechas[0] if mechas else MECHA_KEY),
+        "mechaKeys": (mechas or ["madflj", "madfxdlj", "madftiger", "madfewt"]),
         "favorLv": 1,
         "favorCurExp": 0,
         "talentsLv": {},
@@ -913,23 +943,78 @@ def find_soldier(player: dict, soldier_id) -> dict | None:
     return None
 
 
-def new_mecha() -> dict:
-    """默认机甲。字段名来自客户端 src/data/mecha.js 的 Mecha。"""
+def new_mecha(key: str = MECHA_KEY) -> dict:
+    """默认机甲。字段名来自客户端 src/data/mecha.js 的 Mecha。
+
+    `key` 默认是建号送的那台（`MECHA_KEY` = madflj）；抽卡抽到别的机甲
+    （`table_mecha` 一共 6 台）时按那张表填定位/旋转范围。
+    """
+    from . import items as items_mod   # 局部 import：循环依赖
+
+    row = (items_mod.table("table_mecha") or {}).get(str(key)) or {}
     return {
         "id": 1,
-        "key": MECHA_KEY,
-        "uuid": MECHA_KEY,
+        "key": str(key),
+        "uuid": str(key),
         "lv": 1,
         "charType": CHAR_TYPE_MECHA,
-        "hidden": 0,
-        "positioning": 1,
-        "scale": 1000,
-        "type": 1,
+        "hidden": int(row.get("hidden") or 0),
+        "positioning": int(row.get("positioning") or 1),
+        "scale": int(row.get("scale") or 1000),
+        "type": int(row.get("type") or 1),
         "maxLv": 1,
         "maxSkillLv": 1,
-        "minRotation": -20,
-        "maxRotation": 80,
+        "minRotation": int(row.get("min_rotation") or -20),
+        "maxRotation": int(row.get("max_rotation") or 80),
     }
+
+
+# ---------------------------------------------------------------------------
+# 英雄 / 机甲：抽卡会往这两个列表里加（建号默认各一个）
+# ---------------------------------------------------------------------------
+def player_heros(player: dict) -> list:
+    """玩家拥有的英雄列表（`data.char.heros`，元素形状见 `new_hero()`）。"""
+    got = player.get("heros")
+    if not isinstance(got, list) or not got:
+        got = [new_hero()]
+        player["heros"] = got
+    return got
+
+
+def player_mechas(player: dict) -> list:
+    """玩家拥有的机甲列表（`data.char.mechas`）。"""
+    got = player.get("mechas")
+    if not isinstance(got, list) or not got:
+        got = [new_mecha()]
+        player["mechas"] = got
+    return got
+
+
+def add_hero(player: dict, key: str) -> bool:
+    """加一个英雄（已经有了就返回 False）。"""
+    key = str(key)
+    if not key:
+        return False
+    for row in player_heros(player):
+        if str(row.get("key")) == key:
+            return False
+    player["heros"].append(new_hero(key))
+    # 客户端 `Hero` 靠 `mechaKeys` 带出它自己的机甲，这里顺手把没拥有的也加上
+    for mecha_key in (new_hero(key).get("mechaKeys") or []):
+        add_mecha(player, mecha_key)
+    return True
+
+
+def add_mecha(player: dict, key: str) -> bool:
+    """加一台机甲（已经有了就返回 False）。"""
+    key = str(key)
+    if not key:
+        return False
+    for row in player_mechas(player):
+        if str(row.get("key")) == key:
+            return False
+    player["mechas"].append(new_mecha(key))
+    return True
 
 
 def new_team(index: int) -> dict:
@@ -1157,6 +1242,18 @@ def _migrate(player: dict) -> bool:
                 log.info("玩家 %s 补好感度礼物（v%s，%d 种各 %d 个）",
                          player.get("account"), GIFT_STOCK_VERSION, n, GIFT_STOCK)
         player["giftStockVersion"] = GIFT_STOCK_VERSION
+        changed = True
+    # 抽卡碎片（好人卡）补货。同上：老存档的 items 已存在，只能靠版本号补一次。
+    if int(player.get("fragmentStockVersion") or 0) != FRAGMENT_STOCK_VERSION:
+        if top_up_fragments(player):
+            changed = True
+    # 英雄 / 机甲列表（抽卡会往里加）。老存档里没有这两个字段 → 补一个默认的，
+    # 否则登录块 `char.heros`/`char.mechas` 是空的，客户端一个英雄/机甲都没有。
+    if not isinstance(player.get("heros"), list) or not player.get("heros"):
+        player["heros"] = [new_hero()]
+        changed = True
+    if not isinstance(player.get("mechas"), list) or not player.get("mechas"):
+        player["mechas"] = [new_mecha()]
         changed = True
     # 装备的属性 key。早期发出去的装备行 `firstAttrKeys` 是空数组，而客户端
     # `addEquipmentAttrByKeys` 是**先取值后判长度** → 空数组也崩（强化界面打不开）。

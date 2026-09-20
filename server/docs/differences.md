@@ -60,6 +60,8 @@
 | 公会 / 好友 / 竞技场 / 勋章 | **没做**（回空） | 完整社交 | 见 §C |
 | 扭蛋 | **空卡池**（界面显示"没有卡池"） | 正常 | 缺的是**运营配置**（见 §C） |
 | 公告 | 服务端 `var/notice.html` | 官方公告 | —— |
+| **抽卡 / 扭蛋** | **自己造了 5 个池子**（免费 / 碎片单抽十连 / 钻石单抽十连），消耗 100 金条单抽、900 十连、9 好人卡十连；十连保底至少一张 S+；SR 档里 15% 是英雄/机甲大奖；初始送 99 好人卡 | 原版是**运营配置**（池子/概率/保底/排期全在服务端，随停服丢了；客户端 176 张表里一张 gacha 表都没有）。池子 **id 和枚举照客户端** `gachaconfig`（`GACHA_NAMES` 就是原版那 5 个 key），概率/保底/消耗是自己定的 | 单旋钮：`gacha.POOLS`（消耗/次数/每日限制）、`gacha.RARITY_WEIGHT`、`gacha.PRIZE_WEIGHT`、`gacha.TEN_GUARANTEE`、`store.FRAGMENT_STOCK` |
+| **英雄 / 机甲** | 建号送 **1 英雄 + 1 机甲**（hadf + madflj），另外 1 个英雄（haysdn）和 5 台机甲只能**抽卡**获得 | 原版靠抽卡/活动 → 私服不送的话抽卡没大奖可出 | 抽到就进 `player["heros"]`/`player["mechas"]`，随登录块 `char.heros`/`char.mechas` 下发；`store.player_heros/player_mechas` |
 | **充值 / 月卡 / 礼包（IAP）** | **不可购买**（客户端的 `judgeexchangestate` 会先回 state≠0，直接弹提示；`exchange.payment` 也故意非 200） | 真实支付渠道 | 要有支付渠道才能开；道具兑换本身没关（见 [protocol.md §6.5](protocol.md)） |
 | **演习场对手** | 从 `table_friend_support_npc`（101 个 NPC）里按等级挑 8 个，名字/等级/5 个军士全抄 NPC 行 | 真人的 PvP 匹配（原版是别的玩家的阵容） | 单机没有别的玩家，只能拿 NPC 顶。想换口味改 `arena.make_rivals()` |
 | **演习场重复打同一个对手** | 照给积分和萌币（`state` 只影响「已战胜」标记） | 未知；理论上赢了就不能再打（客户端 `state == 1` 时点挑战只弹 1603「已经战胜过他了呢~」），但结算面板上有「再来一次」，客户端会拿同一个 `index` 再进战斗 —— 这里回非 200 会让用户卡在战斗结束什么都不弹 | 想限制就在 `arena.exit_fight()` 里按 `state` 拒绝（注意上面那个副作用） |
@@ -134,6 +136,9 @@
 | 演习场**对手的段位/积分** | 段位在「我的段位 ±1」内随机，积分取该段位区间内、往我的积分附近靠（±`points_volatility*points_range`） | 表里有 `arena_rival_condition_weight_a/b/c`（100/100/100）但**语义无从考证**，`robot_rival_lv_range_mode1..4` 也只知道是等级区间 → 这里只用它做了「挑等级接近的 NPC」这个意图 |
 | 演习场**输了的奖励** | 给 `fail_coins`（14）个演习萌币，和赢的 `pvp_rewards`（`100019#14`）同量 | `pvp_rewards` 是客户端自己解析的（`ArenaSelectTeam` 显示「胜利奖励」），`fail_coins` 只是表里一个孤零零的 14，推断成"失败补偿" |
 | 演习场**赛季重置时间** | `arena_reset_first_date`(2016-01-01) 起每 `arena_reset_cycle_day`(14) 天一轮，取下一个轮次 | 这是照表算的（不是编的），但**原版到底重不重置积分**无从考证 —— 现在只把这个时间发下去给客户端显示倒计时，服务端不做赛季清零 |
+| 抽卡**概率 / 保底** | 单抽权重 `{n:560, r:300, s:110, sr:30}`（千分比）；`sr` 档里 15% 是英雄/机甲；十连**保底至少一张 S+** | 纯自造：运营配置随停服丢了，客户端也没有任何 gacha 表可以反推。旋钮 `gacha.RARITY_WEIGHT` / `PRIZE_WEIGHT` / `TEN_GUARANTEE` |
+| 抽卡**池子消耗** | 钻石单抽 100 金条 / 十连 900；碎片单抽 1 好人卡 / 十连 9；免费池每天 1 次 | 同上，自造。`GACHA_NAMES` 只给了池子名字（免费/碎片/钻石·单抽十连），没给价格。想按原版改只动 `gacha.POOLS` |
+| 抽卡**池子里有哪些卡** | 自军卡 152 张全进池（按 quality 分 4 档）+ 英雄 2 + 机甲 6 | 客户端**没有卡池配置表**，只能拿"能当军士发的卡"（`table_soldier_master[charKey].card_type == 1`）当池子；原版还有技能卡/经验卡（`GACHA_EFFECT_FILE` 里有 SKILL/EXP 的特效），暂时没放进去 |
 
 **反过来说，这些是"表里写死、和原版一致"的**（不用担心）：
 好感度升级曲线（`table_favor_upgrade`，500/700/…/90000，满级 15）、

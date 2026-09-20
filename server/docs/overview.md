@@ -255,6 +255,8 @@ vanilla 不传参 → 游戏代码 `function (eventName) { if (/began\d/.test(ev
 | 演习场**失败后无法退出战斗**（`JS ERROR: js_cocos2dx_ui_Text_setString : Error processing arguments @ arenawinlayer.js:54`） | 结算面板三行是 `battleData.combatTime`（战斗用时，**秒**）/ `battleData.death`（人员伤亡）/ `battleData.rank`（**对手积分**，字段名有误导性）—— 我当时只发了 `combatTime`，另外两个是 `undefined` → `numelabed.label.string = undefined` 直接抛异常，面板构建中断、退不出去。三行的标题是从 `arenawinlayer.csb` 里读出来的（`战斗用时`/`人员伤亡`/`对手积分`） | `arena.exit_fight()` + [protocol.md §6.9](protocol.md) 第 6 条 |
 | 演习场**「挑战」「刷新对手」按钮点不动**（toast「木有挑战次数了！」） | `arenaInfo.change` 被理解成"上一次积分变化"，输一场发成 `-10` → 客户端 `_onClickFightButton`/`_onClickRefreshButton` 开头都是 `if (_arenaInfo.change <= 0) toast(1602); return`。它其实是**今日剩余挑战次数**（`default_change` = 8，跨 05:00 重置，每场扣 1） | `arena.state()`/`info_view()`；`change` 必须是正数 |
 | 演习场对手**头像画不出来**、日志刷 `JS: key is error`（8 次＝8 个对手） | `asstKey` 发成了**角色** key（`sgnw`），而客户端是 `new ItemIcon(asstKey)` → `Shop.getTypeById(key)`，它只认 `table_item`/`table_soldier`/`table_mecha`/`table_hero`/`table_equipment` 的 key —— 要发**军士卡** key（`sgnw010104`） | `arena.make_rivals()`；`arena_check` 会断言 |
+| 抽卡/扭蛋界面**显示「没有卡池」**（一个池子都没有） | 客户端 176 张表里**一张 gacha 表都没有**：池子配置全在登录块下发，而 `Gacha.update(data)` 只认 `gachaData`/`gachaInfoList`/`gachaMasterList` 三个键（**都是 map**）—— 早期只发了 `gachaData`，`getGachaMasterList()` 就是空数组。另外 `saleInfoObj` 必须是「按次数索引」的折扣表（`saleInfoObj[0]` 基准价），写成对象会让价格算成 NaN、界面显示不出价钱 | `gamesrv/gacha.py` + [protocol.md §6.10](protocol.md)（池子 id 照 `gachaconfig.GACHA_NAMES`，内容是服务端自己造的） |
+| 抽卡抽到军士**卡没了**（日志 `table_soldier 里没有 xxx，发不了这个军士`） | `items._add_soldier` 查的是 `soldier._row("table_soldier", key)`，而抽出来的 `table_soldier.json` 是**复合表**（`{card, master, constant, …}`）→ 永远查不到，**所有 SOLDIER 奖励都被静默丢掉**（抽卡/派遣/关卡奖励全中招）。正确表名是 `card`（压缩字段 `q` 品质 / `p` 站位） | `items._add_soldier`（2026-09-20 做抽卡时发现并修） |
 
 ### 6.1 SDK 桩里的「死键」——一类很容易误判成 JS 层 bug 的问题
 
@@ -837,14 +839,21 @@ WS 侧要替换构造函数（就出事）。定位靠的是**脱离游戏逻辑
       ⚠️ 两处形状坑：`refreshTime` **顶层和 `arenaInfo` 里都要发**、每条回包都要带
       `data.arena`（客户端这条路的 cb 不带参数，靠 RESP-DISPATCH 落数据）——
       见 [protocol.md §6.9](protocol.md)
+- [x] **抽卡 / 扭蛋**（`gacha.*` 3 条，路由仍是 90 —— 这 3 条以前是空桩）：客户端
+      **一张 gacha 表都没有**，卡池 master 全在登录块下发，所以这块是**内容缺口**：
+      池子 id 照 `gachaconfig.GACHA_NAMES`（1001 免费 / 2001·2010 碎片单抽十连 /
+      4001·4010 钻石单抽十连），卡池内容从 `table_soldier`（自军卡 152 张 = 每角色
+      4 档，q3=S、q4=SR）+ `table_hero`(2) + `table_mecha`(6) 里挑，消耗/概率/十连保底
+      是自己定的（§B/§D）。⚠️ 三件套必须是 **map**、`saleInfoObj` 要按次数索引
+      （否则价格变 NaN）—— 见 [protocol.md §6.10](protocol.md)。顺带修了一个**老 bug**：
+      `items._add_soldier` 查错表名（`table_soldier` 应为 `card`），导致**所有军士奖励
+      被静默丢掉**（抽卡/派遣/关卡奖励都中招）
 - [x] 文档：协议 / 逆向手法 / 打包逻辑 / 调试台 / 引擎调试 / 本总览 / **与原版的差异** / **从零复刻**
 
 ### 待办（按卡点排序）
 
-1. **扭蛋 / 抽卡** —— 缺 `gachaMasterList` 运营配置；现在只保证不崩。
-   `GUIDE_GACHA_KEY = 1002`（`GACHA_KEYS.GEM`）。
-2. **日常 / 成就任务** —— 只做了 `type=2`（主线）；日常 246 条 / 成就 91 条。
-3. **战果报告的「获得物资」还没在实机确认** —— 服务端现在把奖励块放在**对的那一层**了
+1. **日常 / 成就任务** —— 只做了 `type=2`（主线）；日常 246 条 / 成就 91 条。
+2. **战果报告的「获得物资」还没在实机确认** —— 服务端现在把奖励块放在**对的那一层**了
    （`data.rewards.dropReward / firstComplete / appraise / levelReward`，
    日志里能看到 `掉落={'100002': 593} 首通={'100001': 20} exp=60`）。
 
@@ -864,14 +873,14 @@ WS 侧要替换构造函数（就出事）。定位靠的是**脱离游戏逻辑
    少数对不齐的文件，`showCb` 的入参拼不出来）。如果实机面板还是空的，
    下一步就是在 `patch.js` 里包 `instanceManager` 的 `showCb` 入参，把 `ret` 塞进 `args.result`。
 
-4. **助战（好友支援）列表渲染不出来** —— 服务端已经能正确回 NPC 名单
+3. **助战（好友支援）列表渲染不出来** —— 服务端已经能正确回 NPC 名单
    （`friendsupport.getrecommendsoldiers` -> 20 个 `npcId`，客户端
    `FriendSupport._recommendList` 里也确实收到了 20 个），
    但 `SupportChoiceLayer` 那边渲染不出来。已确认的：
    `setSupportList()` 手动调是好的（会往 `_pushAsynList` 里塞 18 个
    `{item, innSize, index}`），所以卡在「层的 `_recommendList` 是 0」。
    **不影响战斗**（这个弹窗是可选的好友助战）。
-5. **其余未实现的 route** —— `python script/route_gap.py --static` 能列出全部。
+4. **其余未实现的 route** —— `python script/route_gap.py --static` 能列出全部。
    当前：客户端静态候选 **161** 条，服务端 **90** 条，缺 **79** 条。按单机价值排：
 
    | 命名空间 | 缺 | 说明 |
@@ -887,7 +896,7 @@ WS 侧要替换构造函数（就出事）。定位靠的是**脱离游戏逻辑
    ✅ 已经补完的：`equipment.*`(7)、`favor.*`(5)、`favorevent.*`(1)、
    **`char.upgradedaemon`**(1)、**`player.updateasst`**(1)、
    `player.selecttalent`/`upgradetalent`、`sign.*`(1)、`detect.*`(6)、**`arena.*`**(4)。
-6. `hashKey` / `hmac64` 还没复刻（登录靠单位元绕过）；自研 DH 的完整算法也没还原。
+5. `hashKey` / `hmac64` 还没复刻（登录靠单位元绕过）；自研 DH 的完整算法也没还原。
 
 ---
 
