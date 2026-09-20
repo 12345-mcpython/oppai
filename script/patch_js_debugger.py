@@ -54,8 +54,14 @@ import _paths  # noqa: F401,E402
 
 
 
-JSDIR = r"E:\code\zcsmw\engine\src\cocos2d-js\frameworks\js-bindings\bindings\script"
-DST = r"E:\code\zcsmw\game\assets\script"
+# ⚠️ 原来这两行是**写死的绝对路径**，于是 `GS_APK_DIR=<别的解包目录>` 时
+#    它照样去改 `game\`（2026-09-20 从零演练时发现的：换个目录跑，"删掉 0 个 .jsc"
+#    而那个目录里的 .jsc 一个没动）。现在统一走 `_paths.ROOT` + `GS_APK_DIR`，
+#    和别的脚本一致。
+JSDIR = os.path.join(_paths.ROOT, "engine", "src", "cocos2d-js", "frameworks",
+                     "js-bindings", "bindings", "script")
+APK_DIR = os.environ.get("GS_APK_DIR", os.path.join(_paths.ROOT, "game"))
+DST = os.path.join(APK_DIR, "assets", "script")
 
 # 要搬过去的明文源码（相对 bindings/script）
 FILES = [

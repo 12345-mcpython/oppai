@@ -41,7 +41,10 @@ for _s in (sys.stdout, sys.stderr):
         pass
 
 SERVER = os.path.join(ROOT, "server")
-GAME = os.path.join(ROOT, "game")
+# ⚠️ 解包目录允许用 GS_APK_DIR 覆盖（演练整条链时不想碰 game\ 就靠它）。
+#    这里原来是写死的 ROOT/game，于是用 `_paths.GAME` 的脚本（比如 smali_reach.py）
+#    在 GS_APK_DIR 指向别处时照样去分析 game\ —— 和别的脚本行为不一致。
+GAME = os.environ.get("GS_APK_DIR", os.path.join(ROOT, "game"))
 ENGINE = os.path.join(ROOT, "engine")
 OUT = os.path.join(ROOT, "out")
 SCRIPT = HERE

@@ -18,6 +18,32 @@ QuickSDK / 百度的服务器早就下线了，这个弹窗永远登不进去。
 这样点「开始游戏」走的还是游戏自己的原始流程（注册 SDK 回调 → op.login → SDK 回调），
 只是原生登录瞬间成功。
 
+这个脚本一共管 5 件事（都幂等，可以反复跑）：
+
+| # | 干什么 | 和 `sdk_strip/strip.py` 的关系 |
+|---|---|---|
+| 1 | 投放我们自己的 smali：`ServerLoginRunnable` / `PermissionHelper` / `GameShare` / `XGAdapter` | 必须**在 strip.py 之后**跑 |
+| 2 | `QuickAdapter.login()` 改成直接回调私服登录 | 同理 |
+| 3 | 修 `AppActivity$12`（退出弹窗）的乱码文案 | 无关 |
+| 4 | `com.quicksdk.Sdk.exit()` 从空桩改成 finish + killProcess | 依赖 strip.py 先重建桩类 |
+| 5 | `AppActivity`：删 3 处 TalkingData 调用 + 注入 `PermissionHelper.request(this)` | 同上 |
+
+⚠️ **第 1、5 条为什么在这里**（2026-09-20 第二轮 SDK 剥离）：
+
+`GameShare` / `XGAdapter` / `AppActivity` 里还吊着微信（com.tencent.mm）、微博
+（com.sina.weibo）、信鸽（com.tencent.android.tpush）、TalkingData（com.tendcloud）
+几个包。得先把这三个类处理成「保留签名、实现清空 / 去掉调用点」，那几个包在可达性上
+才变成死代码，`script/build_apk.py` 的 `DROP_SMALI` / `DROP_SMALI_GROUPS` 才肯删它们。
+
+早先这三处是**手工改**的，原件只备份在 `out/removed-smali-20260920/`（不进 git）——
+重新 `apktool d` 之后没人重做，闸门就会判「还有人引用」：那几个 SDK 包**删不掉**
+（包变大，且运行时 `NoClassDefFoundError`）。所以现在按下面这样脚本化：
+
+* `GameShare.smali` / `XGAdapter.smali` 是**我们自己写的代码**（87 / 91 行，只有签名和
+  空实现）→ 和 `ServerLoginRunnable.smali` 一样整文件放在 `client/` 下，内容不一致就覆盖；
+* `AppActivity.smali` 是**游戏自己的代码**（1100+ 行）→ 本仓库只放自己写的代码，
+  所以不整文件覆盖，只按下面 `TALKINGDATA_SITES` 做定点字符串手术 + 注入一行调用。
+
 用法：
     1. 先把 client/ServerLoginRunnable.smali 复制到解包目录的
        smali/org/cocos2dx/javascript/ 下（脚本会尝试自动复制）
@@ -25,7 +51,7 @@ QuickSDK / 百度的服务器早就下线了，这个弹窗永远登不进去。
     3. 用 apktool 重编译 smali（见 README）
 
 路径可用环境变量覆盖：
-    GS_APK_DIR   apktool 解包目录（默认 E:\\code\\apk\\zcsmw）
+    GS_APK_DIR   apktool 解包目录（默认 E:\\code\\zcsmw\\game）
 """
 
 from __future__ import annotations
@@ -42,6 +68,58 @@ SMALI_DIR = os.path.join(APK_DIR, "smali", "org", "cocos2dx", "javascript")
 SMALI = os.path.join(SMALI_DIR, "QuickAdapter.smali")
 RUNNABLE_SRC = os.path.join(BASE_DIR, "client", "ServerLoginRunnable.smali")
 RUNNABLE_DST = os.path.join(SMALI_DIR, "ServerLoginRunnable.smali")
+
+# 我们自己写的 smali（整文件投放；内容不一致就覆盖，见 install_own_smali）：
+#   * PermissionHelper       —— 运行时权限申请，由 AppActivity.onCreate 调一次
+#   * GameShare / XGAdapter  —— 微信/微博/信鸽 SDK 整包删掉后剩下的空实现桩
+OWN_SMALI = (
+    ("PermissionHelper.smali",
+     "运行时权限申请（targetSdk 28+ 必须），AppActivity.onCreate 里注入一次调用"),
+    ("GameShare.smali",
+     "微信(com.tencent.mm)/微博(com.sina.weibo)分享 SDK 已删 —— 只留 JS 与 .so 会调的签名"),
+    ("XGAdapter.smali",
+     "信鸽推送(com.tencent.android.tpush)已删 —— 只留签名，实现全空"),
+)
+
+# AppActivity：TalkingData(com.tendcloud) 统计后台早已下线，删掉 3 处调用点之后
+# 整包就没人引用了（build_apk.py 的闸门才肯删）。文本是**逐字节**从原始包
+# → 现在这份的差异里取的，所以脚本跑完和手工改的结果完全一致。
+APP_ACTIVITY = os.path.join(SMALI_DIR, "AppActivity.smali")
+
+TALKINGDATA_SITES = (
+    (
+        '    const-string v2, "2A0BD65E4889DEA3D6621BCC4F81BAD4"\n'
+        '\n'
+        '    sget-object v3, Lorg/cocos2dx/javascript/AppActivity;->packageName:Ljava/lang/String;\n'
+        '\n'
+        '    invoke-static {v1, v2, v3}, Lcom/tendcloud/tenddata/TalkingDataGA;->init(Landroid/content/Context;Ljava/lang/String;Ljava/lang/String;)V\n',
+        '    # 私服：TalkingData 统计 SDK 已删（原来这里三行是\n'
+        '    #   const-string v2, "2A0BD65E4889DEA3D6621BCC4F81BAD4"\n'
+        '    #   sget-object v3, ...AppActivity;->packageName:Ljava/lang/String;\n'
+        '    #   invoke-static {v1, v2, v3}, com.tendcloud.tenddata.TalkingDataGA.init(...)V\n'
+        '    # 统计后台早下线；删掉调用点之后 com.tendcloud 整包就没人引用了。\n'
+        '    # ⚠️ 包名写点号：build_apk.py 的 smali_users_of() 是纯文本匹配斜杠前缀，\n'
+        '    #    注释里写斜杠形式会被当成"还有人引用" → 那包删不掉。\n',
+    ),
+    (
+        '    invoke-static {p0}, Lcom/tendcloud/tenddata/TalkingDataGA;->onPause(Landroid/app/Activity;)V\n',
+        '    # 私服：TalkingData 统计已删（原来这一行是 com.tendcloud.tenddata.TalkingDataGA.onPause）\n',
+    ),
+    (
+        '    invoke-static {p0}, Lcom/tendcloud/tenddata/TalkingDataGA;->onResume(Landroid/app/Activity;)V\n',
+        '    # 私服：TalkingData 统计已删（原来这一行是 com.tendcloud.tenddata.TalkingDataGA.onResume）\n',
+    ),
+)
+
+# 和 server/client/modernize.py 里那份**完全一致**（两边都幂等，谁先跑都行）：
+# 注入点选在 instance 赋值那一行之后，和 modernize.py 的锚点相同 →
+# 两边产出的文本逐字节一致。
+PERM_INJECT = (
+    "\n    # 私服适配：targetSdk 提到 28 后危险权限要运行时申请\n"
+    "    invoke-static {p0}, Lorg/cocos2dx/javascript/PermissionHelper;->request(Landroid/app/Activity;)V\n"
+)
+PERM_ANCHOR = "sput-object p0, Lorg/cocos2dx/javascript/AppActivity;->instance:Lorg/cocos2dx/javascript/AppActivity;"
+
 
 # ---------------------------------------------------------------------------
 # AppActivity.exit() 的退出确认弹窗：官方包里的 4 个字符串本来就是乱码。
@@ -219,6 +297,68 @@ def patch_sdk_exit():
     print("Sdk.exit(): -> finish + killProcess（原来只 finish 会崩在下次进游戏）")
     return 0
 
+def install_own_smali():
+    """把 client/ 下我们自己写的 smali 投放到解包目录（内容不一致才覆盖，幂等）。"""
+    rc = 0
+    for name, why in OWN_SMALI:
+        src = os.path.join(BASE_DIR, "client", name)
+        dst = os.path.join(SMALI_DIR, name)
+        if not os.path.isfile(src):
+            print(f"!! 缺 {src}（脚本自己写在 client/ 下，仓库里应该有）", file=sys.stderr)
+            rc = 1
+            continue
+        new = open(src, "rb").read()
+        old = open(dst, "rb").read() if os.path.isfile(dst) else None
+        if old == new:
+            print(f"{name} 已是最新，跳过")
+        else:
+            shutil.copyfile(src, dst)
+            print(f"{'覆盖' if old is not None else '写入'} {name}（{why}）")
+    return rc
+
+
+def patch_app_activity():
+    """AppActivity：删 3 处 TalkingData 调用 + 注入 PermissionHelper（幂等）。
+
+    只做定点替换，不整文件覆盖 —— AppActivity 是游戏自己的代码（1100+ 行），
+    本仓库的规矩是只放自己写的代码（见 README §免责声明）。
+    """
+    if not os.path.isfile(APP_ACTIVITY):
+        print(f"!! 找不到 {APP_ACTIVITY}，跳过 AppActivity 修补", file=sys.stderr)
+        return 1
+    with open(APP_ACTIVITY, "r", encoding="utf-8") as fh:
+        src = fh.read()
+
+    changed = []
+    rc = 0
+    for i, (old, new) in enumerate(TALKINGDATA_SITES, 1):
+        if old in src:
+            src = src.replace(old, new, 1)
+            changed.append(f"TalkingData 调用点 {i}")
+        elif new not in src:
+            print(f"!! AppActivity 里第 {i} 处 TalkingData 调用既不认识原文、"
+                  f"也没有改过的痕迹，请人工核对", file=sys.stderr)
+            rc = 1
+
+    if "PermissionHelper;->request" in src:
+        pass
+    elif PERM_ANCHOR not in src:
+        print("!! AppActivity 里没找到 instance 赋值那一行，没法注入 PermissionHelper",
+              file=sys.stderr)
+        rc = 1
+    else:
+        src = src.replace(PERM_ANCHOR, PERM_ANCHOR + PERM_INJECT, 1)
+        changed.append("注入 PermissionHelper.request(this)")
+
+    if changed:
+        with open(APP_ACTIVITY, "w", encoding="utf-8", newline="\n") as fh:
+            fh.write(src)
+        print("AppActivity：" + "、".join(changed))
+    else:
+        print("AppActivity 已经处理过（没有 TalkingData 调用、权限申请也注入过）")
+    return rc
+
+
 OLD = """.method public static login()V
     .locals 1
 
@@ -260,12 +400,14 @@ def main():
 
     rc = 0
 
-    # 1) 投放 ServerLoginRunnable
+    # 1) 投放我们自己的 smali（ServerLoginRunnable + PermissionHelper + 两个 SDK 桩）
     if os.path.isfile(RUNNABLE_DST):
         print("ServerLoginRunnable.smali 已存在，跳过复制")
     else:
         shutil.copyfile(RUNNABLE_SRC, RUNNABLE_DST)
         print(f"已写入 {RUNNABLE_DST}")
+    if install_own_smali() != 0:
+        rc = 1
 
     # 2) 打 QuickAdapter.login()
     with open(SMALI, "r", encoding="utf-8") as fh:
@@ -288,6 +430,10 @@ def main():
 
     # 4) 让退出弹窗的「确定」真的结束游戏（Sdk.exit 是空桩）
     if patch_sdk_exit() != 0:
+        rc = 1
+
+    # 5) AppActivity：删 TalkingData 调用点 + 注入运行时权限申请
+    if patch_app_activity() != 0:
         rc = 1
     return rc
 

@@ -474,7 +474,13 @@ patch_smali.py     →  往 com\quicksdk\Sdk.smali 里写真实实现
 strip.py           →  删掉 com\quicksdk，重新生成空桩        ✗ 修复被冲掉
 ```
 
-正确顺序：`modernize.py` → `strip.py` → `gen_native_stubs.py` → **`patch_smali.py`** → `build_apk.py`。
+正确顺序：`modernize.py` → `strip.py` → `gen_native_stubs.py` → `merge_dex.py` →
+**`patch_smali.py`** → `patch_js_debugger.py` → `build_apk.py`。
+
+`merge_dex.py` 不是可选的：它把 `smali_classes2/**` 并进 `smali/`，而
+`build_apk.py` 的 `DROP_SMALI` 里那些路径（`smali/org/apache`、`smali/cn/gov`、
+`smali/okio` …）都写成**合并后**的位置 —— 不合并，那 461 个死类一个也删不掉
+（2026-09-20 从零复刻时实测：包比现在这份多带一坨 Apache HttpClient + Okio）。
 
 `build.ps1` 里不含 `strip.py`，所以不受影响；但照下面「完整重建命令」跑要按这个顺序。
 （`strip.py --dry-run` 就能看到它准备删 `smali\com\quicksdk`。）
@@ -578,13 +584,16 @@ else {
 
 ```powershell
 # 在仓库根 E:\code\zcsmw 下跑。script\ 下的脚本自带 _paths 自举，从哪个目录调都行。
+# ⚠️ 顺序不能变，2026-09-20 从原始包**逐步验证过**（跑完得到的就是仓库里 game\ 那份）。
 
-# 1) 四个补丁（幂等）—— ⚠️ patch_smali.py 必须最后，strip.py 会重建 com\quicksdk 的桩
-python server\client\modernize.py
+# 1) 客户端树补丁（全幂等）
+python server\client\modernize.py             # 补 <uses-sdk> / 明文 HTTP / 权限申请（原版清单里没有 uses-sdk）
 python script\sdk_strip\analyze.py --json script\sdk_strip\needed.json   # SDK 没动过可跳过
-python script\sdk_strip\strip.py
-python script\sdk_strip\gen_native_stubs.py
-python server\client\patch_smali.py
+python script\sdk_strip\strip.py              # 删渠道 SDK（内部会调 gen_stubs.py 重建桩类）
+python script\sdk_strip\gen_native_stubs.py   # 补 .so 硬依赖的桩类
+python script\merge_dex.py                    # smali_classes2 -> smali/（下面的 DROP 路径按合并后写的）
+python server\client\patch_smali.py           # ⚠️ 必须排在 strip.py 之后（它重建 com\quicksdk 的桩）
+python script\patch_js_debugger.py            # 调试器 JS 换成明文（.jsc -> .js）
 
 # 2) 改 assets + 打包 + 签名（一步）
 python script\build_apk.py --host 10.110.29.230
@@ -592,6 +601,16 @@ python script\build_apk.py --host 10.110.29.230
 # 3) 装
 adb install -r -d E:\code\zcsmw\out\zcsmw-mod-signed.apk
 ```
+
+几个顺序 / 依赖关系，踩过才知道：
+
+| 关系 | 原因 |
+|---|---|
+| `patch_smali.py` **在 `strip.py` 之后** | `strip.py` 会把 `smali\com\quicksdk` 整个删掉再按 `needed.json` 重建桩类，早跑会被冲掉 |
+| `merge_dex.py` **在 `patch_smali.py` / `build_apk.py` 之前** | `DROP_SMALI` 里的路径（`smali/org/apache`、`smali/cn/gov` …）都是**合并后**的位置；不合并的话它们还在 `smali_classes2/`，一个都删不掉（实测：461 个类白留在包里） |
+| `modernize.py` **第一** | 它给原版清单补 `<uses-sdk>`；`build_apk.py` 的规范化只改**已存在**的节点（不过现在 `normalize_android_manifest()` 也会自己造一个，见下） |
+| 全程 `GS_APK_DIR=<别处>` 可换解包目录 | 想在不碰 `game\` 的情况下演练整条链就用它（`GS_ORIGINAL_APK` 指定原版包） |
+
 
 `build_apk.py` 常用参数：
 

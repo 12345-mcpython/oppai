@@ -181,6 +181,18 @@ DROP_SMALI = (
     ("smali/com/sina", ("com/sina",)),                                # 微博分享 SDK
     ("smali/com/kurogame", ("com/kurogame",)),                        # 微博分享 Activity
     ("smali/com/tendcloud", ("com/tendcloud",)),                      # TalkingData 统计
+    # --- 2026-09-20 第三轮：`script/merge_dex.py` 把 smali_classes2 并进 smali/ 之后，
+    #     底下这批「孤儿包」才出现在 smali/ 下（上面那条 android/net 按 smali/ 写是对的，
+    #     但它只覆盖 http / compatibility 两个子目录）。判定依据：
+    #       * `script/smali_reach.py` 的闭包（清单组件 ∪ .so 里的类名 ∪ js/jsc 里的类名）；
+    #       * 两个 .so + 全部 asset 的字符串表里这些包名 0 命中；
+    #       * 前三个按 smali_reach.py 自己的说明是**框架类**（boot classpath 里就有，
+    #         打进 app dex 纯粹白占地方）→ 没人引用就该删。
+    #     闸门（`drop_dead_smali()`）每次打包都会复验一遍，将来真有人引用会自动保留。
+    ("smali/org/apache", ("org/apache",)),                            # Apache HttpClient
+    ("smali/okio", ("okio",)),                                        # OkHttp 的 IO 库，只剩自引用
+    ("smali/cn/gov", ("cn/gov",)),                                    # 银联 / 移动支付 SDK 残留
+    ("smali/com/android/internal/http", ("com/android/internal/http",)),  # AOSP HTTP legacy 的 multipart
 )
 
 # 单类级别的死代码，一组一组删。每组是 ((glob…), 说明)。
@@ -285,12 +297,24 @@ def Warn(*a):
     print("[build][warn]", *a, flush=True)
 
 
-def smali_users_of(rel: str, prefixes) -> list:
+def _excluded(path: str, exclude) -> bool:
+    """`path` 是否落在某个被排除的目录 / 文件里（「它反正要删，别算引用方」）。"""
+    ap = os.path.abspath(path)
+    for e in exclude:
+        if ap == e or ap.startswith(e + os.sep):
+            return True
+    return False
+
+
+def smali_users_of(rel: str, prefixes, exclude=frozenset()) -> list:
     """在 smali 里找谁还引用着 `rel` 这个包。
 
     `prefixes` 是类名前缀（斜杠写法，如 "android/support"）——smali 引用一个类
     永远是 `Landroid/support/v4/view/ViewPager;` 这种描述符，斜杠写法是准的。
     点号写法（反射用的 `Class.forName("android.support...")`）单独审过：全工程 0 处。
+
+    `exclude` 里的路径不算引用方（用于「这些也一并在删除清单上」的迭代判定，
+    见 `drop_dead_smali()`）。
     """
     root = os.path.join(APK_DIR, "smali")
     skip = os.path.abspath(os.path.join(APK_DIR, rel))
@@ -303,6 +327,8 @@ def smali_users_of(rel: str, prefixes) -> list:
             if not f.endswith(".smali"):
                 continue
             p = os.path.join(r, f)
+            if exclude and _excluded(p, exclude):
+                continue
             try:
                 with open(p, "rb") as fh:
                     b = fh.read()
@@ -322,11 +348,11 @@ def expand_smali_globs(patterns) -> list:
     return sorted(set(os.path.abspath(p) for p in out if os.path.isfile(p)))
 
 
-def smali_users_of_classes(members) -> list:
+def smali_users_of_classes(members, exclude=frozenset()) -> list:
     """整组一起看：组外还有谁引用组里的类？
 
     `members` 是绝对路径列表。判定用的「类名」直接从文件路径推出来，
-    所以调用方不用手写前缀，也不会写错。
+    所以调用方不用手写前缀，也不会写错。`exclude` 同 `smali_users_of()`。
     """
     root = os.path.join(APK_DIR, "smali")
     members = {os.path.abspath(m) for m in members}
@@ -342,6 +368,8 @@ def smali_users_of_classes(members) -> list:
             p = os.path.join(r, f)
             if os.path.abspath(p) in members:
                 continue
+            if exclude and _excluded(p, exclude):
+                continue
             try:
                 with open(p, "rb") as fh:
                     b = fh.read()
@@ -350,6 +378,94 @@ def smali_users_of_classes(members) -> list:
             if any(n in b for n in needles):
                 hits.append(os.path.relpath(p, APK_DIR))
     return hits
+
+
+def drop_dead_smali() -> None:
+    """删死代码：整包（`DROP_SMALI`）+ 单类 / 小组（`DROP_SMALI_GROUPS`）。
+
+    判定标准是「**除它自己之外**，还有没有别的 smali 引用它」，但有两个坑
+    （2026-09-20 从零复刻时实测到）：
+
+    1. **待删项之间会互相保**。`smali/com/tencent/mm`（微信 SDK 包）唯一的引用方是
+       `com/cm/zcsmw/baidu/wxapi/WXEntryActivity`，而它自己在 `DROP_SMALI_GROUPS`
+       的「微信回调 Activity」那一组里、也等着被删；反过来那组又被 com/tencent/mm
+       里的类引用着 —— 互相保的结果是**两个都删不掉**，包里白留一堆微信 SDK 类
+       （而且和仓库里 `game/` 的现状不一致）。
+    2. 所以不能"一轮定生死"：要**把所有待删项都当成"将来不存在"**再扫引用，
+       一轮轮迭代到不动点。最后仍被"存活文件"引用的才保留。
+
+    安全性方向不变：**只有候选集之外没人引用的才会被删** —— 绝不会删掉一个还被
+    存活文件引用着的包（那才是跑起来才崩的 NoClassDefFoundError）。
+    """
+    cands = []
+    for rel, prefixes in DROP_SMALI:
+        p = os.path.join(APK_DIR, rel)
+        if os.path.exists(p):
+            cands.append({"kind": "pkg", "label": rel, "rel": rel, "prefixes": prefixes,
+                          "paths": {os.path.abspath(p)}})
+    for pats, why in DROP_SMALI_GROUPS:
+        members = expand_smali_globs(pats)
+        if members:
+            cands.append({"kind": "group", "label": pats[0], "why": why,
+                          "members": members,
+                          "paths": {os.path.abspath(m) for m in members}})
+    if not cands:
+        return
+
+    kept = []
+    for _round in range(8):                     # 一般 1~2 轮就收敛
+        cand_paths = set().union(*(c["paths"] for c in cands))
+        losers = []
+        for c in cands:
+            if c["kind"] == "pkg":
+                users = smali_users_of(c["rel"], c["prefixes"], exclude=cand_paths)
+            else:
+                users = smali_users_of_classes(c["members"], exclude=cand_paths)
+            if users:
+                losers.append(c)
+        if not losers:
+            break
+        for c in losers:
+            cands.remove(c)
+            kept.append(c)
+    else:
+        # 8 轮还没收敛（理论上不该发生）：剩下的也一律保留，宁可包大
+        kept.extend(cands)
+        cands = []
+
+    for c in cands:
+        if c["kind"] == "pkg":
+            shutil.rmtree(os.path.join(APK_DIR, c["rel"]), ignore_errors=True)
+            log(f"  删除 {c['rel']}")
+        else:
+            # ⚠️ 组里的文件可能已经被上面的**包级**删除带走了（比如
+            #    com/tendcloud 那几个类），所以这里要按"还在不在"过滤一遍，
+            #    否则 getsize/remove 会 FileNotFoundError（实测踩过）。
+            members = [m for m in c["members"] if os.path.exists(m)]
+            if not members:
+                continue
+            kb = sum(os.path.getsize(m) for m in members) / 1024
+            for m in members:
+                os.remove(m)
+            log(f"  删除 {len(members)} 个类 ({kb:.0f} KB)  {c['why']}")
+
+    # 保留的：删完之后再扫一遍，报的引用方才是准的
+    for c in kept:
+        if c["kind"] == "pkg":
+            users = smali_users_of(c["rel"], c["prefixes"])
+            head = f"{c['rel']} 现在还有 {len(users)} 处引用，**保留不删**："
+            hint = "    这是新加回来的 SDK 依赖？那就把 DROP_SMALI 里对应那条去掉。"
+        else:
+            members = [m for m in c["members"] if os.path.exists(m)]
+            users = smali_users_of_classes(members)
+            head = f"{c['label']} 等 {len(members)} 个类还有 {len(users)} 处引用，**保留不删**："
+            hint = "    这些类变成「可达」了？那就把 DROP_SMALI_GROUPS 里对应那组去掉。"
+        # 宁可留着一个大的包，也不要出一个跑起来才崩的包。
+        Warn(head)
+        for u in users[:5]:
+            Warn(f"    {u}")
+        Warn(hint)
+
 
 
 # ---------------------------------------------------------------------------
@@ -672,6 +788,9 @@ def normalize_android_manifest() -> None:
        explicit value`。值按老语义取 —— 31 之前"有 intent-filter = 默认导出"，
        所以补 `true`（原样保留行为），不是 `false`。
     3. **删掉死掉的渠道 meta-data**、合并重复的 `<supports-screens>`。
+    4. **缺 `<uses-sdk>` 就自己造一个**，并补上 `usesCleartextTraffic` /
+       `extractNativeLibs`（见下面那段注释）—— 这两个兜底是为了"漏跑
+       `server/client/modernize.py` 也打不出装不上 / 连不上的包"。
     """
     import xml.etree.ElementTree as ET
 
@@ -683,13 +802,45 @@ def normalize_android_manifest() -> None:
     root = tree.getroot()
     changes = []
 
-    # 1) uses-sdk
-    for el in root.findall("uses-sdk"):
-        if el.get(A + "targetSdkVersion") != str(TARGET_SDK):
-            changes.append(f"targetSdkVersion {el.get(A + 'targetSdkVersion')} -> {TARGET_SDK}")
-            el.set(A + "targetSdkVersion", str(TARGET_SDK))
-        if el.get(A + "minSdkVersion") != str(MIN_SDK):
-            el.set(A + "minSdkVersion", str(MIN_SDK))
+    # 1) uses-sdk：**没有就创建**。
+    #    原版包的清单里压根没有这个节点（apktool.yml 的 sdkInfo 只写了 minSdkVersion 9），
+    #    而现代 Android 把"没写 targetSdkVersion"当成 targetSdk = minSdk = 9 →
+    #    Android 14+ 直接拒装。历史上前提是"必须跑一次 server/client/modernize.py"，
+    #    但那一步不在 build.ps1 里，漏跑就打出一个装不上的包（很难查）。
+    #    既然这里每次打包都会规范化清单，就顺手把它做成自给自足。
+    sdk_els = root.findall("uses-sdk")
+    if not sdk_els:
+        el = ET.Element("uses-sdk")
+        el.set(A + "minSdkVersion", str(MIN_SDK))
+        el.set(A + "targetSdkVersion", str(TARGET_SDK))
+        root.insert(0, el)
+        sdk_els = [el]
+        changes.append(f"补 <uses-sdk min={MIN_SDK} target={TARGET_SDK}>（原清单里没有）")
+    else:
+        for el in sdk_els:
+            if el.get(A + "targetSdkVersion") != str(TARGET_SDK):
+                changes.append(f"targetSdkVersion {el.get(A + 'targetSdkVersion')} -> {TARGET_SDK}")
+                el.set(A + "targetSdkVersion", str(TARGET_SDK))
+            if el.get(A + "minSdkVersion") != str(MIN_SDK):
+                el.set(A + "minSdkVersion", str(MIN_SDK))
+
+    # 1b) application 上的三个属性（同样由 modernize.py 负责，这里兜底）：
+    #     * usesCleartextTraffic —— targetSdk 28+ 默认禁止明文 HTTP，而我们的
+    #       CDN / 登录服务是 http://127.0.0.1:18080 这种明文地址 → 不写就连不上；
+    #     * extractNativeLibs —— 引擎 .so 在包里是压缩存的，得让系统解压出来；
+    #     * requestLegacyExternalStorage —— 老存储模型（targetSdk 29 以下才有意义，
+    #       留着是为了和 modernize.py 的产物一致）。
+    APP_ATTRS = (
+        ("usesCleartextTraffic", "true"),
+        ("extractNativeLibs", "true"),
+        ("requestLegacyExternalStorage", "true"),
+    )
+    for app in root.iter("application"):
+        for attr, val in APP_ATTRS:
+            if app.get(A + attr) != val:
+                app.set(A + attr, val)
+                changes.append(f"application: {attr}={val}")
+
 
     # 2) exported
     for tag in ("activity", "activity-alias", "service", "receiver", "provider"):
@@ -727,12 +878,18 @@ def normalize_android_manifest() -> None:
         fh.write(ET.tostring(root, encoding="unicode"))
         fh.write("\n")
 
-    # apktool.yml 的 sdkInfo 也一起改
+    # apktool.yml 的 sdkInfo 也一起改（apktool 重编译时会用它）：
+    # 老包这份里只有 `minSdkVersion: 9`、**没有** targetSdkVersion，所以要能补上。
     yml = os.path.join(APK_DIR, "apktool.yml")
     if os.path.isfile(yml):
         with open(yml, "r", encoding="utf-8") as fh:
             text = fh.read()
-        new = re.sub(r"(?m)^(\s*targetSdkVersion:\s*)\d+", rf"\g<1>{TARGET_SDK}", text)
+        new = re.sub(r"(?m)^(\s*minSdkVersion:\s*)\d+", rf"\g<1>{MIN_SDK}", text)
+        if re.search(r"(?m)^\s*targetSdkVersion:\s*\d+", new):
+            new = re.sub(r"(?m)^(\s*targetSdkVersion:\s*)\d+", rf"\g<1>{TARGET_SDK}", new)
+        else:
+            new = re.sub(r"(?m)^(\s*minSdkVersion:[^\n]*\n)",
+                         rf"\g<1>  targetSdkVersion: {TARGET_SDK}\n", new, count=1)
         if new != text:
             with open(yml, "w", encoding="utf-8", newline="\n") as fh:
                 fh.write(new)
@@ -989,38 +1146,8 @@ def prepare_assets(host: str, port: int, login_port: int, patch_path: str,
                 os.remove(p)
             log(f"  删除 {rel}")
 
-    # 删死掉的 smali（见 DROP_SMALI）—— 打出来的 classes.dex 会小一圈
-    for rel, prefixes in DROP_SMALI:
-        p = os.path.join(APK_DIR, rel)
-        if not os.path.exists(p):
-            continue
-        users = smali_users_of(rel, prefixes)
-        if users:
-            # 宁可留着一个大的包，也不要出一个跑起来才崩的包。
-            Warn(f"{rel} 现在还有 {len(users)} 处引用，**保留不删**：")
-            for u in users[:5]:
-                Warn(f"    {u}")
-            Warn("    这是新加回来的 SDK 依赖？那就把 DROP_SMALI 里对应那条去掉。")
-            continue
-        shutil.rmtree(p, ignore_errors=True)
-        log(f"  删除 {rel}")
-
-    # 删死掉的单类 / 小组（见 DROP_SMALI_GROUPS）
-    for pats, why in DROP_SMALI_GROUPS:
-        members = expand_smali_globs(pats)
-        if not members:
-            continue
-        users = smali_users_of_classes(members)
-        if users:
-            Warn(f"{pats[0]} 等 {len(members)} 个类还有 {len(users)} 处引用，**保留不删**：")
-            for u in users[:5]:
-                Warn(f"    {u}")
-            Warn("    这些类变成「可达」了？那就把 DROP_SMALI_GROUPS 里对应那组去掉。")
-            continue
-        kb = sum(os.path.getsize(m) for m in members) / 1024
-        for m in members:
-            os.remove(m)
-        log(f"  删除 {len(members)} 个类 ({kb:.0f} KB)  {why}")
+    # 删死掉的 smali（见 DROP_SMALI / DROP_SMALI_GROUPS）
+    drop_dead_smali()
 
     # 删 res/ 下的 SDK 资源（百度钱包 / 多酷 / ebpay / QuickSDK）
     drop_sdk_res()

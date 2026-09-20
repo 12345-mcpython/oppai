@@ -107,69 +107,64 @@ def strip_smali(dry: bool):
 
 
 def strip_manifest(dry: bool):
+    """删掉命中 SDK 包名的组件（activity / service / receiver / provider）。
+
+    ⚠️ 这里原来用**文本正则**整体删标签，对「带子标签（intent-filter）的多行组件」
+    只删得掉开始标签，把 `<intent-filter>…</intent-filter>` 和 `</activity>` 留在
+    原地 → 清单 XML 直接非法，`build_apk.py` 的 `ET.parse` 当场报
+    `ParseError: mismatched tag`（从零复刻时必踩：原版解包出来的清单里
+    微博那个分享 Activity 就是这种形状）。
+    改成 ElementTree 结构化删除，和 `build_apk.py` 的 `normalize_android_manifest()`
+    一致 —— 顺带也就免疫标签跨行 / 属性顺序 / 子标签这些格式差异。
+    """
+    import xml.etree.ElementTree as ET
+
     path = os.path.join(APK_DIR, "AndroidManifest.xml")
     if not os.path.isfile(path):
         print("  !! 找不到 AndroidManifest.xml")
         return
-    src = io.open(path, encoding="utf-8").read()
-    orig = src
 
-    tag_re = re.compile(
-        r"<(?P<tag>activity|activity-alias|service|receiver|provider)\b(?P<body>[^>]*?)"
-        r"android:name=\"(?P<name>[^\"]+)\"(?P<rest>[^>]*?)(?P<selfclose>/?)>",
-        re.S,
-    )
+    ANDROID_NS = "http://schemas.android.com/apk/res/android"
+    A = "{%s}" % ANDROID_NS
+    ET.register_namespace("android", ANDROID_NS)
+    tree = ET.parse(path)
+    root = tree.getroot()
+
+    parent_of = {child: parent for parent in root.iter() for child in parent}
 
     dropped = []
-
-    def repl(m):
-        name = m.group("name")
-        full = name.lstrip(".")
-        if name.startswith("."):
-            full = "com.cm.zcsmw.baidu" + name
-        if any(full.startswith(h) or full.startswith(h.rstrip(".")) for h in MANIFEST_PKG_HINTS) \
-                and full not in MANIFEST_KEEP:
-            dropped.append(full)
-            # 整个标签（含子标签）都要删
-            start = m.start()
-            end = src.find(f"</{m.group('tag')}>", m.end())
-            if m.group("selfclose") == "/" or end < 0:
-                return ""  # 自闭合
-            return ""  # 交给下面统一处理
-        return m.group(0)
-
-    # 简单起见：先找出所有要删的组件名，再按标签整体删除
-    to_drop = set()
-    for m in tag_re.finditer(src):
-        name = m.group("name").lstrip(".")
-        full = ("com.cm.zcsmw.baidu" + "." + name) if m.group("name").startswith(".") else name
-        if any(full.startswith(h.rstrip(".")) for h in MANIFEST_PKG_HINTS) and full not in MANIFEST_KEEP:
-            to_drop.add(full)
-
-    for full in sorted(to_drop):
-        short = full[len("com.cm.zcsmw.baidu") + 1:] if full.startswith("com.cm.zcsmw.baidu.") else full
-        # 匹配 <tag ... android:name="full" ... /> 或 ...>...</tag>
-        pat = re.compile(
-            r"\s*<(?P<tag>activity|activity-alias|service|receiver|provider)\b[^>]*?"
-            r'android:name="(?P<n>' + re.escape(full) + r'|' + re.escape(short) + r')"[^>]*?(?P<sc>/?)>'
-            r"(?:(?!</(?P=tag)>).)*?(?:</(?P=tag)>)?",
-            re.S,
-        )
-        new = pat.sub("", src)
-        if new != src:
-            src = new
+    for tag in ("activity", "activity-alias", "service", "receiver", "provider"):
+        for el in list(root.iter(tag)):
+            name = (el.get(A + "name") or "").strip()
+            if not name:
+                continue
+            full = name if not name.startswith(".") else "com.cm.zcsmw.baidu" + name
+            if not any(full.startswith(h.rstrip(".")) for h in MANIFEST_PKG_HINTS):
+                continue
+            if full in MANIFEST_KEEP:
+                continue
+            parent = parent_of.get(el)
+            if parent is None:
+                continue
+            parent.remove(el)
             dropped.append(full)
 
-    if src != orig:
-        print(f"  manifest: 删掉 {len(set(dropped))} 个 SDK 组件")
-        for d in sorted(set(dropped))[:25]:
-            print(f"      - {d}")
-        if len(set(dropped)) > 25:
-            print(f"      ... 还有 {len(set(dropped)) - 25} 个")
-        if not dry:
-            io.open(path, "w", encoding="utf-8", newline="\n").write(src)
-    else:
+    if not dropped:
         print("  manifest: 没有需要删的组件")
+        return
+
+    print(f"  manifest: 删掉 {len(dropped)} 个 SDK 组件")
+    for d in sorted(set(dropped))[:25]:
+        print(f"      - {d}")
+    if len(set(dropped)) > 25:
+        print(f"      ... 还有 {len(set(dropped)) - 25} 个")
+    if dry:
+        return
+    ET.indent(tree, space="    ")
+    with io.open(path, "w", encoding="utf-8", newline="\n") as fh:
+        fh.write("<?xml version='1.0' encoding='utf-8'?>\n")
+        fh.write(ET.tostring(root, encoding="unicode"))
+        fh.write("\n")
 
 
 def strip_assets_res_lib(dry: bool):

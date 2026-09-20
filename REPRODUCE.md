@@ -161,33 +161,32 @@ Get-ChildItem game\lib -Recurse -Filter *.so | Select-Object Name   # 有 libcoc
 
 ```powershell
 cd E:\code\zcsmw
-# 1) 一次性迁移：补 <uses-sdk>（原版压根没有这个节点）、usesCleartextTraffic、
-#    extractNativeLibs、投放 PermissionHelper.smali 并在 AppActivity 里注入一次调用
-python server\client\modernize.py
-
-# 2) 删掉 2016 年那套渠道 SDK（QuickSDK / 百度 / 微博 / 信鸽 / TalkingData …）
-python script\sdk_strip\analyze.py --json script\sdk_strip\needed.json   # 重新算「谁还必须留」；没动过可跳过
-python script\sdk_strip\strip.py
-python script\sdk_strip\gen_native_stubs.py                              # 补 .so 硬依赖的桩类
-python server\client\patch_smali.py                                      # 必须最后（strip.py 会重建 com\quicksdk 的桩）
+# 顺序不能变。2026-09-20 从原版包逐步验证过：跑完得到的树和仓库里 game\ 一致
+# （只差 ABI 选择和几个 apktool 中间产物；smali 文件数 134 = 134）。
+python server\client\modernize.py            # 1) 补 <uses-sdk> / 明文 HTTP / 运行时权限申请
+python script\sdk_strip\analyze.py --json script\sdk_strip\needed.json   # SDK 没动过可跳过
+python script\sdk_strip\strip.py             # 2) 删渠道 SDK（内部会调 gen_stubs.py 重建桩类）
+python script\sdk_strip\gen_native_stubs.py  # 3) 补 .so 硬依赖的桩类
+python script\merge_dex.py                   # 4) smali_classes2 -> smali/（DROP 路径按合并后写的）
+python server\client\patch_smali.py          # 5) ⚠️ 必须排在 strip.py 之后
+python script\patch_js_debugger.py           # 6) 调试器 JS 换成明文（并删掉同名 .jsc）
 ```
 
 不跑的后果（都验证过）：
 
 | 少了哪步 | 后果 |
 |---|---|
-| `modernize.py` | 原版清单里**没有 `<uses-sdk>`**，而 `build_apk.py` 的规范化只改**已存在**的节点 → 打出来的包没有 targetSdk（等同 minSdk 9）→ **Android 14+ 直接拒装**；另外少了 `usesCleartextTraffic` / `PermissionHelper` |
-| `strip.py` | 2016 年的渠道 SDK 还留在包里，它们的 Java 类会跟 targetSdk 33 打架（历史上就是它们逼得 targetSdk 只能停在 23） |
+| `modernize.py` | 原版清单里**没有 `<uses-sdk>`**（`apktool.yml` 也只有 `minSdkVersion: 9`）→ 打出来的包没有 targetSdk、Android 14+ 直接拒装；也少 `usesCleartextTraffic`（targetSdk 33 下明文 HTTP 被禁，连不上服务端）。**兜底**：`build_apk.py` 的 `normalize_android_manifest()` 现在自己会补 `<uses-sdk>` 和这两个属性，但它不补 `PermissionHelper` |
+| `strip.py` | 2016 年那套渠道 SDK 还留在包里，它们的 Java 类会跟 targetSdk 33 打架（历史上就是它们逼得 targetSdk 只能停在 23） |
+| `merge_dex.py` | `smali_classes2/**` 里的孤儿包（Apache HttpClient / Okio / 银联残留…共 461 个类）**一个都删不掉** —— `build_apk.py` 的 `DROP_SMALI` 路径都是按合并后写的 |
+| `patch_js_debugger.py` | 引擎优先读同名 `.jsc`，没删掉的那份会把我们改过的明文调试器 JS 盖掉 |
 
 > 顺序不能颠倒：`strip.py` 会把 `smali\com\quicksdk` 整个删掉再按 `needed.json` 重建桩类，
-> **`patch_smali.py` 必须排在它后面**。细节与完整命令见
-> [`server/docs/build.md`](server/docs/build.md) §「完整重建命令」。
+> **`patch_smali.py` 必须排在它后面**；`merge_dex.py` 必须排在 `patch_smali.py` / `build_apk.py`
+> 之前。细节与完整命令见 [`server/docs/build.md`](server/docs/build.md) §「完整重建命令」。
 >
-> ⚠️ 已知的一处**手工痕迹**（暂未脚本化）：`GameShare.smali` / `XGAdapter.smali` 被改写成
-> 「保留签名、实现清空」的桩，`AppActivity.smali` 删掉了 3 处 TalkingData 调用 ——
-> 这三处是手工改的，原件备份在 `out\removed-smali-20260920\`（**不进 git**）。
-> 重新解包后不重做这三处，`build_apk.py` 的可达性闸门会把那几个 SDK 包判成「还有人引用」
-> 而**拒绝删除**（包变大，且运行时 `NoClassDefFoundError`）。
+> 想在不碰 `game\` 的情况下演练整条链：给每一步都带上 `GS_APK_DIR=<别的解包目录>`
+> （打包时再加 `GS_ORIGINAL_APK=<原版包路径>`）。
 
 ---
 

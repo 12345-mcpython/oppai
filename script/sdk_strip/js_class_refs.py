@@ -7,6 +7,7 @@
 import io
 import os
 import re
+import sys
 from collections import Counter
 # --- 路径自举（项目已重排：脚本在 script/、服务端在 server/）---
 # 从自己往上找带 _paths.py 的那一层，把它和 server/ 都塞进 sys.path。
