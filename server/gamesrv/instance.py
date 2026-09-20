@@ -209,6 +209,39 @@ def unlock_module_levels(player: dict) -> list:
     return changed
 
 
+def _visible_levels(player: dict) -> dict:
+    """登录块里**只发非默认**的关卡行。
+
+    客户端 `Instance._updateLevels(data.levels)` 对每一行是
+    `this._starMark = level.starMark ?? -1`（次数/时间同理给 0）——
+    也就是说**没打过的关卡根本不用发**。
+
+    为什么必须裁：1142 行全发的话 `instance` 一块就 92 KB（整包 110 KB），
+    而响应要过一遍纯 Python DES（~85 KB/s）→ **一次登录光加密就 1.3 秒**，
+    自检一轮 20 多次登录块调用 = 149 秒。裁完只剩真正打过的那几行（~1 KB）。
+    """
+    out = {}
+    for key, row in _record(player).items():
+        if not isinstance(row, dict):
+            continue
+        try:
+            star = int(row.get("starMark") or -1)
+        except (TypeError, ValueError):
+            star = -1
+        try:
+            times = int(row.get("challengeTimes") or 0)
+        except (TypeError, ValueError):
+            times = 0
+        try:
+            last = int(row.get("lastUpdateTimeSec") or 0)
+        except (TypeError, ValueError):
+            last = 0
+        if star >= 0 or times > 0 or last > 0:
+            out[str(key)] = {"starMark": star, "challengeTimes": times,
+                             "lastUpdateTimeSec": last}
+    return out
+
+
 def login_block(player: dict) -> dict:
     """拼出 `data.instance`。
 
@@ -221,11 +254,12 @@ def login_block(player: dict) -> dict:
     跨天（05:00）要清零，而客户端自己不会清（`isCanBattle` 是裸比较）。
     ⚠️ 还要 `unlock_module_levels`：不然「黑市（抽卡）/宿舍/天赋/活动副本/困难副本/公会」
     这 6 个按钮根本不显示（见那个函数的注释）。
+    ⚠️ `levels` 走 `_visible_levels`（只发非默认行），别直接发 `_record(player)`。
     """
     sync_subarea_plays(player)
     unlock_module_levels(player)
     return {
-        "levels": _record(player),
+        "levels": _visible_levels(player),
         "chapters": {},
         "activityChapters": activity_chapters(player),
         "subareaLevels": subarea_levels(player),

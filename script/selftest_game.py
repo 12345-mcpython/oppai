@@ -1581,7 +1581,39 @@ def char_manual_check(ok: bool) -> bool:
     return ok
 
 
+# 可以让 `python script\selftest_game.py --only 抽卡` 只跑其中一项：
+# 自检里很多检查都会拉一次完整登录块（上百 KB，纯 Python DES 加密要 1 秒多），
+# 全跑一轮 2 分半 —— 迭代时按名字跑单项能秒回。
+ONLY = None
+
+
+def run_check(ok: bool, name: str, fn) -> bool:
+    """跑一项检查：支持 --only 过滤 + 打印用时（自检太慢，得知道时间花在哪）。"""
+    if ONLY and ONLY not in name:
+        return ok
+    import time as _time
+
+    print()
+    t0 = _time.time()
+    try:
+        ok = fn(ok)
+    except Exception as exc:  # noqa: BLE001
+        print(f"  BAD {name}自检异常: {exc}")
+        ok = False
+    short = name.replace("自检异常", "").replace("异常", "")
+    print(f"  ..  [{short}] 用时 {_time.time() - t0:.1f}s")
+    return ok
+
+
 def main():
+    global ONLY
+    import argparse
+
+    ap = argparse.ArgumentParser(description="业务协议自检（--only 只跑名字含该子串的检查）")
+    ap.add_argument("--only", default=None, help="只跑名字里含这个子串的检查，例：--only 抽卡")
+    args = ap.parse_args()
+    ONLY = args.only
+
     cases = [
         ("agent.getlogindata", {}),
         ("agent.gettimeinfo", {}),
@@ -1591,6 +1623,8 @@ def main():
         ("rank.getrankinglist", {}),
     ]
     ok = True
+    if ONLY:
+        cases = []          # --only 时不跑这批固定路由（省一次完整登录块 ≈ 省 1 秒多）
     for i, (route, msg) in enumerate(cases, 1):
         try:
             res = call(route, msg, i)
@@ -1604,19 +1638,9 @@ def main():
         if code != 200:
             ok = False
 
-    print()
-    try:
-        ok = roster_check(ok)
-    except Exception as exc:  # noqa: BLE001
-        print(f"  BAD 名单自检异常: {exc}")
-        ok = False
+    ok = run_check(ok, "名单自检异常", roster_check)
 
-    print()
-    try:
-        ok = replenish_check(ok)
-    except Exception as exc:  # noqa: BLE001
-        print(f"  BAD 军士补齐自检异常: {exc}")
-        ok = False
+    ok = run_check(ok, "军士补齐自检异常", replenish_check)
 
     print()
     try:
@@ -1634,96 +1658,31 @@ def main():
     except Exception as exc:  # noqa: BLE001
         print(f"  ..  收尾放回编成失败（不影响结论）: {exc}")
 
-    print()
-    try:
-        ok = team_save_check(ok)
-    except Exception as exc:  # noqa: BLE001
-        print(f"  BAD 编成保存自检异常: {exc}")
-        ok = False
+    ok = run_check(ok, "编成保存自检异常", team_save_check)
 
-    print()
-    try:
-        ok = subarea_check(ok)
-    except Exception as exc:  # noqa: BLE001
-        print(f"  BAD 分区关卡自检异常: {exc}")
-        ok = False
+    ok = run_check(ok, "分区关卡自检异常", subarea_check)
 
-    print()
-    try:
-        ok = level_result_check(ok)
-    except Exception as exc:  # noqa: BLE001
-        print(f"  BAD 战斗结算自检异常: {exc}")
-        ok = False
+    ok = run_check(ok, "战斗结算自检异常", level_result_check)
 
-    print()
-    try:
-        ok = subarea_achievement_check(ok)
-    except Exception as exc:  # noqa: BLE001
-        print(f"  BAD 分区成就自检异常: {exc}")
-        ok = False
+    ok = run_check(ok, "分区成就自检异常", subarea_achievement_check)
 
-    print()
-    try:
-        ok = exchange_check(ok)
-    except Exception as exc:  # noqa: BLE001
-        print(f"  BAD 交易所自检异常: {exc}")
-        ok = False
+    ok = run_check(ok, "交易所自检异常", exchange_check)
 
-    print()
-    try:
-        ok = detect_check(ok)
-    except Exception as exc:  # noqa: BLE001
-        print(f"  BAD 派遣自检异常: {exc}")
-        ok = False
+    ok = run_check(ok, "派遣自检异常", detect_check)
 
-    print()
-    try:
-        ok = sign_check(ok)
-    except Exception as exc:  # noqa: BLE001
-        print(f"  BAD 签到自检异常: {exc}")
-        ok = False
+    ok = run_check(ok, "签到自检异常", sign_check)
 
-    print()
-    try:
-        ok = module_open_check(ok)
-    except Exception as exc:  # noqa: BLE001
-        print(f"  BAD 功能开启弹窗自检异常: {exc}")
-        ok = False
+    ok = run_check(ok, "功能开启弹窗自检异常", module_open_check)
 
-    print()
-    try:
-        ok = arena_check(ok)
-    except Exception as exc:  # noqa: BLE001
-        print(f"  BAD 演习场自检异常: {exc}")
-        ok = False
+    ok = run_check(ok, "演习场自检异常", arena_check)
 
-    print()
-    try:
-        ok = char_manual_check(ok)
-    except Exception as exc:  # noqa: BLE001
-        print(f"  BAD 角色图鉴自检异常: {exc}")
-        ok = False
+    ok = run_check(ok, "角色图鉴自检异常", char_manual_check)
 
-    print()
-    try:
-        ok = gacha_check(ok)
-    except Exception as exc:  # noqa: BLE001
-        print(f"  BAD 抽卡自检异常: {exc}")
-        ok = False
+    ok = run_check(ok, "抽卡自检异常", gacha_check)
 
-    print()
-    try:
-        ok = item_icon_check(ok)
-    except Exception as exc:  # noqa: BLE001
-        print(f"  BAD 奖励图标自检异常: {exc}")
-        ok = False
+    ok = run_check(ok, "奖励图标自检异常", item_icon_check)
 
-    print()
-    try:
-        ok = favor_check(ok)
-    except Exception as exc:  # noqa: BLE001
-        print(f"  BAD 好感度自检异常: {exc}")
-        ok = False
+    ok = run_check(ok, "好感度自检异常", favor_check)
 
     print("\n全部通过 ✅" if ok else "\n有路由没回 200 ❌")
     return 0 if ok else 1
