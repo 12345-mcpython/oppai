@@ -226,6 +226,45 @@ CHAPTER_JS = r"""
 """
 
 
+# 分区成就三张表（成就 84 条 / 条件 84 条 / 奖励 232 条）。
+#
+# ⚠️ **条件判定不用服务端做 —— 客户端自己算**。
+# `subareaAchievementManager.formatBattleInfo(battleResult, battleId, team)` 在战斗结算时
+# 按 `table_subarea_achievement_condition` 逐条判定（条件类型就是方法名：1003~1021，
+# 拿 `param_1/param_2/param_3` 和 `battleInfo` 里的 ownUnitsInfo / enemyUnitsInfo /
+# missleName / heroSuperSkillCount / unitDiedCount … 比），然后拼出
+#
+#     subareaInfo = {time, battleId, victory,
+#                    modifyAchievements: {<id>: {progress, progressInfo, countKey, complete}},
+#                    newAchievements: ["100101", ...]}      // 玩家本地还没有的成就行
+#
+# 塞进 `instance.finishlevel` 的 msg 发上来（日志里抓到过完整样例）。
+#
+# 所以服务端只需要：
+#   ① `newAchievements` → 建行；`modifyAchievements` → 合并进度（`complete` → 写 `completeTime`）
+#   ② 回包带 `updateSubareaAchievements: [行…]`（patch.js 的 RESP-DISPATCH 已经接好了）
+#   ③ `subareaachievement.receivereward {achievementId}` → 按 reward 表发东西 + 置 `isReceiveReward`
+#
+# 行形状来自客户端 `SubareaAchievement.createAchievement`：
+#     {id, progress: 0, progressInfo: {}, isReceiveReward: 0}      // completeTime 由服务端给
+# 界面判可领：`_getSortIdx` = 无 completeTime → 2（未完成）／isReceiveReward → 3（已领）／其余 → 1（可领）。
+#
+#   table_subarea_achievement[<achievementId>]        = {condition_id, desc, jump_level_key, sub_area, times}
+#   table_subarea_achievement_condition[<conditionId>] = {param_1, param_2, param_3, type}
+#   table_subarea_achievement_reward["<achievementId>#<i>"] = {count, key, type}
+SUBAREA_ACHIEVEMENT_JS = r"""
+(function () { return JSON.stringify(table_subarea_achievement); })()
+"""
+
+SUBAREA_ACHIEVEMENT_CONDITION_JS = r"""
+(function () { return JSON.stringify(table_subarea_achievement_condition); })()
+"""
+
+SUBAREA_ACHIEVEMENT_REWARD_JS = r"""
+(function () { return JSON.stringify(table_subarea_achievement_reward); })()
+"""
+
+
 # 军士养成表。
 #
 # 「培养（升级）」这条链路的数值全在客户端本地算，服务端要复刻一遍才不会
@@ -584,6 +623,9 @@ def main() -> int:
         ("table_friend_support_npc.json", NPC_JS),
         ("table_level_reward.json", LEVEL_JS),
         ("table_chapter.json", CHAPTER_JS),
+        ("table_subarea_achievement.json", SUBAREA_ACHIEVEMENT_JS),
+        ("table_subarea_achievement_condition.json", SUBAREA_ACHIEVEMENT_CONDITION_JS),
+        ("table_subarea_achievement_reward.json", SUBAREA_ACHIEVEMENT_REWARD_JS),
         ("table_soldier.json", SOLDIER_JS),
         ("table_shelf.json", SHELF_JS),
         ("table_shop.json", SHOP_JS),

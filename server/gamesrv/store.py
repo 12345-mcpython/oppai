@@ -1013,6 +1013,11 @@ def new_player(account: str) -> dict:
         "worldChatCount": 0,
         "monthCardDueTimeSec": time_str(now),
         "msgPushMark": 0,
+        # 分区成就。**空 map**：行由客户端在战斗结算时上报
+        # （`instance.finishlevel` 的 `subareaInfo.newAchievements` / `modifyAchievements`），
+        # 服务端只落盘 + 发奖。形状见 gamesrv/subarea.py（`{id, progress, progressInfo,
+        # isReceiveReward, completeTime}`）。
+        "subareaAchievements": {},
         # 任务进度。放在 new_player 里（而不是等第一次用到再 setdefault），
         # 是为了让 updateTime 稳定：客户端会拿它跟服务端比来决定要不要拉新数据，
         # 每次请求现生成的话 sync.syncupclient 会永远认为「有变化」。

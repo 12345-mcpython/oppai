@@ -706,6 +706,17 @@ WS 侧要替换构造函数（就出事）。定位靠的是**脱离游戏逻辑
       现在 `new_team().id = index`，加载时 `normalize_team_ids()` 对齐老存档，
       handler 按 index 找。顺带让自检脚本收尾时把编成放回去（它的军士升级链路
       会真吃军士、顺带摘队伍）。见 §6 症状表
+- [x] **分区成就**（`subareaachievement.receivereward` 1 条，路由 72→73）：84 条成就 /
+       84 条条件 / 232 条奖励三张表进 `gamesrv/data/`。
+       ⚠️ **条件判定不用服务端做** —— 客户端 `subareaAchievementManager.formatBattleInfo()`
+       在结算时按 `table_subarea_achievement_condition` 判完，把
+       `subareaInfo = {victory, battleId, modifyAchievements, newAchievements}` 塞进
+       `instance.finishlevel`（日志里抓到过完整样例）。服务端只做三件事：
+       建行 / 合并进度（`complete` → 写 `completeTime`）、登录块给
+       `{achievements: {<id>: 行}}`(**map**)、领奖时按奖励表发道具。
+       行形状来自客户端 `SubareaAchievement.createAchievement`：
+       `{id, progress, progressInfo, isReceiveReward}`（`completeTime` 服务端写）。
+       领奖失败码照客户端 `ERROR_CODE` 回 201~206，客户端自己弹 `table_dictionary` 文案
 - [x] 文档：协议 / 逆向手法 / 打包逻辑 / 调试台 / 引擎调试 / 本总览 / **与原版的差异** / **从零复刻**
 
 ### 待办（按卡点排序）
@@ -741,13 +752,13 @@ WS 侧要替换构造函数（就出事）。定位靠的是**脱离游戏逻辑
    `{item, innSize, index}`），所以卡在「层的 `_recommendList` 是 0」。
    **不影响战斗**（这个弹窗是可选的好友助战）。
 5. **其余未实现的 route** —— `python script/route_gap.py --static` 能列出全部。
-   当前：客户端静态候选 **161** 条，服务端 **72** 条，缺 **97** 条。按单机价值排：
+   当前：客户端静态候选 **161** 条，服务端 **73** 条，缺 **96** 条。按单机价值排：
 
    | 命名空间 | 缺 | 说明 |
    |---|---|---|
    | `exchange.*` | 6 | 黑市交易所（`checkorder` 已实现）；要抽兑换表 |
    | `detect.*` | 6 | 侦查玩法 |
-   | `diary.*` / `sign.*` / `subareaachievement.*` / `convert.*` / `share.*` | 1+1+1+1+1 | 零散领奖类，工作量最小，适合热身 |
+   | `diary.*` / `sign.*` / `convert.*` / `share.*` | 1+1+1+1 | 零散领奖类，工作量最小，适合热身 |
    | `boss.*` | 5 | 好友 BOSS（`getbosslist` 已实现并回空表） |
    | `society.*` / `societyclg.*` | 33+6 | 军团——单机价值低、量最大 |
    | `friend.*` / `medal.*` / `arena.*` | 9+9+4 | 社交类，同上 |

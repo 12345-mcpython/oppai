@@ -78,7 +78,7 @@
 | `detect.*` | 6 | 侦查玩法 | 未开工 |
 | `boss.*` | 5 | 好友 BOSS | 私服**故意**回空 |
 | `gacha.*` | 内容缺口 | 扭蛋 | **不是接线缺口**：176 张客户端表里没有一张是卡池配置（那是服务端下发的），要做只能自己造 master 数据 |
-| `diary.*` / `sign.*` / `subareaachievement.*` / `convert.*` / `share.*` | 各 1 | 零散领奖 | 好做，只是还没做 |
+| `diary.*` / `sign.*` / `convert.*` / `share.*` | 各 1 | 零散领奖 | 好做，只是还没做（`subareaachievement.receivereward` 已做，见 [protocol.md §6.4](protocol.md)） |
 | 其他 | 若干 | —— | —— |
 
 **已知的"能看见但不完整"：**

@@ -9,7 +9,7 @@ route 名字来自客户端 src/manager/datamanager.js：
 from __future__ import annotations
 
 from ..gameproto import CODE_OK
-from .. import config, favor, instance, logx, quests, store
+from .. import config, favor, instance, logx, quests, store, subarea
 from . import route
 
 log = logx.get("handler.agent")
@@ -144,7 +144,11 @@ def _module_stubs(player: dict | None = None) -> dict:
         # initEquipment() 读 .length 时 TypeError。
         "equipment": store.equipment_block(player),
         "share": {"shareCount": 0, "isCanShare": 0},
-        "subareaachievement": {"achievements": []},
+        # 分区成就。`{"achievements": {<id>: 行}}` —— 行由客户端在战斗结算时上报
+        # （见 gamesrv/subarea.py）。以前这里是 `{"achievements": []}`（空数组），
+        # 客户端 `_initData` 直接把它当 map 用，`_achivevements[id] = 行` 写进数组里，
+        # 分组/领奖都对不上。
+        "subareaachievement": subarea.block(player),
         "consumeactivity": {"activityInfo": {}},
         "diary": {"storyDiarys": [], "levels": [], "newLevels": []},
         "friendsupport": {"soldiers": [], "userecord": {}},

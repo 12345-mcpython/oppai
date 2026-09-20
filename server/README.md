@@ -711,6 +711,10 @@ python script\disasm_func.py <file.jsc> cb4AfterLogin
 - [x] **引擎层 JS 调试器**（断点 / 单步 / 调用栈 / 暂停时求值，游戏真的会停住）
 - [x] **天赋（培养）** + **装备系统**（`equipment.*` 7 条）+ **好感度（宿舍，`favor.*` 5 条
       + `favorevent.*` 1 条）**
+- [x] **分区关卡 + 分区成就**（`subareaachievement.receivereward`）—— 成就的**条件判定
+      在客户端**（`subareaAchievementManager.formatBattleInfo()` 把结果塞进
+      `instance.finishlevel` 的 `subareaInfo`），服务端只落盘 + 发奖。见
+      [`docs/protocol.md` §6.4](docs/protocol.md)
 - [x] 文档：`docs/overview.md`（全景）/ `protocol.md` / `reverse-engineering.md` / `build.md` / `devtools.md` / `engine-debug.md`
 
 ### 待办

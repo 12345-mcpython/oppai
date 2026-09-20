@@ -440,6 +440,68 @@ Object.keys(table_mecha)   -> ["madfewt","madflj",...] // madflj = 六酱
 `actionPointTime` / `createTime` / `worldChatTime` 等必须是
 `"YYYY-MM-DD HH:mm:ss"` 字符串，不能是时间戳。
 
+### 6.4 分区成就（`subareaachievement.*`）
+
+**条件判定全在客户端** —— 这一条很重要，不然会想当然地在服务端复刻那 84 条条件。
+`game/assets/src/manager/subareaachievementmanager.jsc` 里：
+
+```js
+// 普通战斗（不是分区关也走这里）
+formatBattleInfo(battleResult, battleId, team):
+    newParam = battleResult.battleInfo            // 补 victory / battleId / missleName
+    checkAchievements(newParam)                   // 条件类型就是方法名：
+                                                  // 1003 击杀 / 1004 耗时 / 1005 机甲炮弹 /
+                                                  // 1008 全程血量 / 1020 全区勘察 / 1021 掉落
+    return {time, battleId, victory,
+            modifyAchievements: {<id>: {progress, progressInfo, countKey, complete}},
+            newAchievements:    ["100101", ...]}  // 玩家本地**还没有**的成就行
+```
+
+返回值就是 `instance.finishlevel` 请求体里的 `subareaInfo`（实测日志）：
+
+```json
+"subareaInfo": {"time": 22966.67, "battleId": "100102", "victory": true,
+                "modifyAchievements": {}, "newAchievements": ["100101", "..."]}
+```
+
+所以服务端协议只有三块：
+
+| 方向 | key / route | 形状 |
+|---|---|---|
+| 登录块 | `data.subareaachievement` | `{"achievements": {"<id>": 行}}` —— **map**（客户端 `_initData` 直接赋值给 `_achivevements`） |
+| 结算推送 | `instance.finishlevel` 回包 `data.updateSubareaAchievements` | `[行, ...]`（客户端 RESP-DISPATCH 的 customTargets 按 `list[i].id` 覆盖本地行） |
+| 领奖 | `subareaachievement.receivereward` `{achievementId}` | 成功 → `data` = 「道具key → 数量」map（直接进 `popupReward`）；失败 → `code` = 201~206 |
+
+行形状（客户端 `SubareaAchievement.createAchievement`）：
+
+```js
+{id: "100101", progress: 0, progressInfo: {}, isReceiveReward: 0}
+// completeTime 由服务端在收到 modifyAchievements.complete 时写
+```
+
+界面完全由这几个字段驱动（`SubareaChapterRewardLayer._getSortIdx`）：
+没有 `completeTime` → 未完成（显示 progress/times 进度）；`isReceiveReward` → 已领；
+其余 → 可领（显示领取按钮）。
+
+⚠️ 两个坑：
+
+1. **登录块里的行只能包含 `table_subarea_achievement` 里有的 id** ——
+   客户端 `_initSubareaAchievementInfo()` 是「遍历玩家行 → 查表拿 `sub_area`」，
+   表里查不到的 id 会 `info.sub_area` 抛 TypeError，整个成就页打不开。
+2. **领奖回包的 `data` 只能是奖励 map** ——
+   `SubareaChapterRewardLayer._receiveRewardSucc(achievementId, res.data)` 直接
+   `ccuiManager.popupReward(util.objectToArray(res.data))`，掺别的键会被当成道具。
+
+失败码（客户端 `SubareaAchievement.ERROR_CODE`，反汇编模块体）：
+
+```
+201 PARAM_ERROR            202 UPDATA_DB_ERROR       203 ACHIEVEMENT_NOT_EXIST
+204 REWARD_RECEIVED        205 REWARD_NOT_EXIST       206 RECEIVE_REWARD_ERROR
+```
+
+客户端按码弹 `table_dictionary`：201→10000、202→10001、203/205→4200、
+204→4201、206→4202。
+
 ---
 
 ## 7. 切主场景

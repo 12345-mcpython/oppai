@@ -46,7 +46,7 @@ import random
 import threading
 import time
 
-from . import favor, logx, quests, store
+from . import favor, logx, quests, store, subarea
 
 log = logx.get("instance")
 
@@ -444,6 +444,19 @@ def finish_level(player: dict, msg: dict) -> dict | None:
         level_reward["favor"] = favor_add
     rewards["levelReward"] = level_reward
 
+    # ---- 分区成就 ----
+    #
+    # ⚠️ 成就**是客户端算的**（`subareaAchievementManager.formatBattleInfo()` 在结算时按
+    # `table_subarea_achievement_condition` 逐条判定），结果塞在 msg.subareaInfo 里：
+    #
+    #     {time, battleId, victory,
+    #      modifyAchievements: {<id>: {progress, progressInfo, countKey, complete}},
+    #      newAchievements: ["100101", ...]}
+    #
+    # 服务端不复刻条件判定，只落盘 + 把改动的行回给客户端
+    # （客户端 RESP-DISPATCH 的 `updateSubareaAchievements` 会按 list[i].id 覆盖本地行）。
+    achievement_rows = subarea.sync_from_battle(player, (msg or {}).get("subareaInfo") or {})
+
     # data.level 会走客户端的 _updateResult -> level.updateLevel()，
     # 所以星级/次数必须放在这里；
     # data.quest / data.player / data.favor 由客户端的响应派发处理。
@@ -454,6 +467,8 @@ def finish_level(player: dict, msg: dict) -> dict | None:
         "quest": quests.block(player),
         "player": {"playerAttr": player_attr},
     }
+    if achievement_rows:
+        data["updateSubareaAchievements"] = achievement_rows
     if favor_gain:
         data["favor"] = favor.rows_block(player, favor_gain)
         block = favor.new_event_block(new_events)

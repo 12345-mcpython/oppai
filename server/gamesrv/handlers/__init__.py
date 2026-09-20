@@ -56,3 +56,4 @@ def load_all():
     from . import rank  # noqa: F401
     from . import score  # noqa: F401
     from . import shop  # noqa: F401
+    from . import subareaachievement  # noqa: F401

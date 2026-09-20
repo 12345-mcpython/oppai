@@ -540,6 +540,149 @@ def level_result_check(ok: bool) -> bool:
     return ok
 
 
+def subarea_achievement_check(ok: bool) -> bool:
+    """分区成就：结算上报 → 落盘 → 领奖 → 重复领奖被拒。
+
+    这条链路的关键是「**成就是客户端算的**」：
+    `subareaAchievementManager.formatBattleInfo()` 在结算时判完条件，
+    把 `newAchievements` / `modifyAchievements` 塞进 `instance.finishlevel` 的
+    `subareaInfo`。所以这里照客户端那个形状自己造一份 payload：
+
+        {"victory": true, "battleId": <levelId>,
+         "newAchievements": [aid],
+         "modifyAchievements": {aid: {"progress": 1, "progressInfo": {"x": true}, "complete": true}}}
+
+    要验的四件事：
+      ① 回包里 `data.updateSubareaAchievements` 带着这条行（客户端靠它刷新界面）
+      ② 登录块 `data.subareaachievement.achievements` 是 **map** 且含这条行，
+         而且 `completeTime` 真的写进去了（客户端靠它判「已完成」，也靠它跳过重复判定）
+      ③ `subareaachievement.receivereward` 发的道具和 `table_subarea_achievement_reward`
+         对得上，并且**落盘**（再登录一次还在）
+      ④ 再领一次回 204（REWARD_RECEIVED），表里没有的 id 回 203
+
+    ⚠️ 会真发道具、真记一次通关，所以开头先把这条成就**删掉**、把道具数记下来，
+    收尾时恢复（这样脚本可以反复跑）。
+    """
+    from gamesrv import config, items, store, subarea
+
+    table = subarea.ach_table()
+    if not table:
+        print("  BAD 没有 table_subarea_achievement，抽表没跑？")
+        return False
+
+    # 挑奖励件数最少的一条（少发点道具，收尾也好还原）
+    aid = min(table, key=lambda k: (len(subarea.reward_rows(k)), k))
+    expected = {}
+    for _rtype, key, cnt in subarea.reward_rows(aid):
+        expected[str(key)] = expected.get(str(key), 0) + int(cnt)
+
+    player = store.get_or_create_player(config.DEFAULT_ACCOUNT)
+    before_items = dict(items.items_of(player))
+    old_row = subarea.rows(player).pop(aid, None)
+    store.save_player(player)
+    print(f"  ..  用例前先把成就 {aid}（{table[aid].get('desc')}）从存档摘掉，"
+          f"期望奖励 {expected}")
+
+    bad = []
+    level_id = ""
+    try:
+        # 借一个真关卡来做 finishlevel（顺手把 subareaInfo 带上）
+        from gamesrv import instance as inst_mod
+
+        levels = (inst_mod._level_table().get("level") or {})
+        level_id = sorted(levels)[0]
+
+        res = call("instance.finishlevel",
+                   {"levelId": level_id, "starMark": 1, "curTeamIdx": 0,
+                    "subareaInfo": {"time": 1, "battleId": level_id, "victory": True,
+                                    "newAchievements": [aid],
+                                    "modifyAchievements": {aid: {
+                                        "progress": 1, "progressInfo": {"x": True},
+                                        "complete": True}}}}, 130)
+        if res.get("code") != 200:
+            bad.append(f"instance.finishlevel code={res.get('code')} {res}")
+        data = res.get("data") or {}
+        rows = data.get("updateSubareaAchievements")
+        if not isinstance(rows, list) or not rows:
+            bad.append(f"回包缺 data.updateSubareaAchievements：{str(data)[:120]}")
+        else:
+            row = rows[0]
+            if row.get("id") != aid:
+                bad.append(f"回包成就 id={row.get('id')!r} 期望 {aid}")
+            if not row.get("completeTime"):
+                bad.append("回包行没有 completeTime（客户端会当成没完成）")
+            if int(row.get("isReceiveReward") or 0) != 0:
+                bad.append("回包行 isReceiveReward 应该是 0")
+
+        block = ((call("agent.getlogindata", {}, 131).get("data") or {})
+                 .get("subareaachievement") or {}).get("achievements")
+        if not isinstance(block, dict):
+            bad.append(f"登录块 achievements 不是 map：{type(block).__name__}")
+        elif aid not in block:
+            bad.append(f"登录块里没有 {aid}（没落盘？）")
+        elif not block[aid].get("completeTime"):
+            bad.append("登录块里那条没有 completeTime")
+
+        # 再来一场：这次只报进度增量（客户端 `recordModify` 报的是**增量**，
+        # 服务端要累加，不是覆盖）。第一条已经报过 progress=1，再 +50 应该是 51。
+        call("instance.finishlevel",
+             {"levelId": level_id, "starMark": 1, "curTeamIdx": 0,
+              "subareaInfo": {"time": 2, "battleId": level_id, "victory": True,
+                              "newAchievements": [],
+                              "modifyAchievements": {aid: {"progress": 50,
+                                                           "progressInfo": {"y": True}}}}}, 136)
+        row2 = (((call("agent.getlogindata", {}, 137).get("data") or {})
+                 .get("subareaachievement") or {}).get("achievements") or {}).get(aid) or {}
+        if int(row2.get("progress") or 0) != 51:
+            bad.append(f"进度没累加：progress={row2.get('progress')!r} 期望 51")
+        if not (row2.get("progressInfo") or {}).get("y"):
+            bad.append(f"progressInfo 没合并：{row2.get('progressInfo')!r}")
+
+        claim = call("subareaachievement.receivereward", {"achievementId": aid}, 132)
+        if claim.get("code") != 200:
+            bad.append(f"receivereward code={claim.get('code')} {claim}")
+        elif dict(claim.get("data") or {}) != expected:
+            bad.append(f"领奖回包道具 {claim.get('data')} 期望 {expected}")
+
+        after_login = ((call("agent.getlogindata", {}, 133).get("data") or {})
+                       .get("item") or {})
+        for key, cnt in expected.items():
+            if int(after_login.get(key) or 0) != int(before_items.get(key) or 0) + cnt:
+                bad.append(f"道具 {key} 没到账：{before_items.get(key)} -> "
+                           f"{after_login.get(key)}（期望 +{cnt}）")
+
+        again = call("subareaachievement.receivereward", {"achievementId": aid}, 134)
+        if again.get("code") != subarea.REWARD_RECEIVED:
+            bad.append(f"重复领奖 code={again.get('code')} 期望 {subarea.REWARD_RECEIVED}")
+
+        bogus = call("subareaachievement.receivereward",
+                     {"achievementId": "999999"}, 135)
+        if bogus.get("code") != subarea.ACHIEVEMENT_NOT_EXIST:
+            bad.append(f"不存在的成就 code={bogus.get('code')} "
+                       f"期望 {subarea.ACHIEVEMENT_NOT_EXIST}")
+    finally:
+        # 收尾：行恢复原样、道具恢复原数
+        player = store.get_or_create_player(config.DEFAULT_ACCOUNT)
+        rows_now = subarea.rows(player)
+        if old_row is None:
+            rows_now.pop(aid, None)
+        else:
+            rows_now[aid] = old_row
+        live = items.items_of(player)
+        for key, cnt in before_items.items():
+            live[key] = cnt
+        store.save_player(player)
+
+    if bad:
+        for one in bad:
+            print(f"  BAD {one}")
+        return False
+    print(f"  OK  分区成就：{aid}（{table[aid].get('desc')}）结算上报 → 落盘 → 领奖 "
+          f"{expected} → 重复领奖 {subarea.REWARD_RECEIVED} / 不存在 "
+          f"{subarea.ACHIEVEMENT_NOT_EXIST}（收尾已还原）")
+    return ok
+
+
 def main():
     cases = [
         ("agent.getlogindata", {}),
@@ -612,6 +755,13 @@ def main():
         ok = level_result_check(ok)
     except Exception as exc:  # noqa: BLE001
         print(f"  BAD 战斗结算自检异常: {exc}")
+        ok = False
+
+    print()
+    try:
+        ok = subarea_achievement_check(ok)
+    except Exception as exc:  # noqa: BLE001
+        print(f"  BAD 分区成就自检异常: {exc}")
         ok = False
 
     print()
