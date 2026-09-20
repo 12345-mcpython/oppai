@@ -180,6 +180,7 @@ vanilla 不传参 → 游戏代码 `function (eventName) { if (/began\d/.test(ev
 | **`RESP-DISPATCH`** | 客户端 `responseConfig` 在这套引擎上根本没被派发，自己补一层响应分发。**三类写法都要补**（收整个 `res` 的 / `updateByServer` 的 / 方法名各不相同的），只补中间那批的话好感度整条是死的 —— 见 [protocol.md §5.2](protocol.md) |
 | **`URL-REWRITE`** | jsc 里的官方地址只能**等长**替换（`<host>:18080` 必须 19 字节 → host 必须 13 字符），而且换 IP 会静默跳过、整包作废。改成运行时改写 `cc.loader.getXMLHttpRequest()` 与 `window.WebSocket`（**默认**；老路子是 `-JscUrlPatch`），地址不再有长度约束 —— 配合 `adb reverse` 连局域网/root/hosts 都不需要（见 [`REPRODUCE.md`](../../REPRODUCE.md) Step 4b） |
 | 宿舍互动判定框放大 | ⚠️ **这条是私服体验改动，不是修 bug**（原版 100×100 且不可见） |
+| **`ITEM-EVENT`** | `Bag.updateItems` 改数量走 `item.count = n` setter，而这个 setter **不派发** `item_count_updated_<key>`（实测：手动派发时货币条的监听器立刻收到，走 setter 收不到）→ **顶部货币条永远是进层那一刻的旧数字**（服务端和背包里都是对的）。包一层 `updateItems`，对这次改到的每个 key 补派发一次 |
 
 ### `probe.js` —— 诊断（`--no-probe` 时不打包）
 
@@ -257,6 +258,7 @@ vanilla 不传参 → 游戏代码 `function (eventName) { if (/began\d/.test(ev
 | 演习场对手**头像画不出来**、日志刷 `JS: key is error`（8 次＝8 个对手） | `asstKey` 发成了**角色** key（`sgnw`），而客户端是 `new ItemIcon(asstKey)` → `Shop.getTypeById(key)`，它只认 `table_item`/`table_soldier`/`table_mecha`/`table_hero`/`table_equipment` 的 key —— 要发**军士卡** key（`sgnw010104`） | `arena.make_rivals()`；`arena_check` 会断言 |
 | 抽卡/扭蛋界面**显示「没有卡池」**（一个池子都没有） | 客户端 176 张表里**一张 gacha 表都没有**：池子配置全在登录块下发，而 `Gacha.update(data)` 只认 `gachaData`/`gachaInfoList`/`gachaMasterList` 三个键（**都是 map**）—— 早期只发了 `gachaData`，`getGachaMasterList()` 就是空数组。另外 `saleInfoObj` 必须是「按次数索引」的折扣表（`saleInfoObj[0]` 基准价），写成对象会让价格算成 NaN、界面显示不出价钱 | `gamesrv/gacha.py` + [protocol.md §6.10](protocol.md)（池子 id 照 `gachaconfig.GACHA_NAMES`，内容是服务端自己造的） |
 | 抽卡抽到军士**卡没了**（日志 `table_soldier 里没有 xxx，发不了这个军士`） | `items._add_soldier` 查的是 `soldier._row("table_soldier", key)`，而抽出来的 `table_soldier.json` 是**复合表**（`{card, master, constant, …}`）→ 永远查不到，**所有 SOLDIER 奖励都被静默丢掉**（抽卡/派遣/关卡奖励全中招）。正确表名是 `card`（压缩字段 `q` 品质 / `p` 站位） | `items._add_soldier`（2026-09-20 做抽卡时发现并修） |
+| 抽卡**「没扣我货币」**（顶部货币条不刷新，重登才对） | **服务端没少扣，是客户端没刷新**：`Bag.updateItems` 走 `item.count = n` setter，而那个 setter **不派发** `item_count_updated_<key>`（手动派发同一个事件名，货币条的监听器立刻收到 → 监听侧是好的）。货币条只在进层那一刻读一次 → 抽卡/领奖/买东西之后它一直显示旧数字。实测：金条 100157→99257、好人卡 98→89，`bag.getItemCount()` 已经是新值，货币条还挂 100157/98 | `patch.js` 的 **ITEM-EVENT**（包一层 `updateItems` 补派发）；这条是客户端 bug，服务端没有杠杆 |
 
 ### 6.1 SDK 桩里的「死键」——一类很容易误判成 JS 层 bug 的问题
 

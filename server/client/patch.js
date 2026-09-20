@@ -55,6 +55,15 @@
 //      在开战前被夹到第 4 队，所以服务端没有可用杠杆，只能在客户端补。
 //      详见文件末尾 TEAM-DETAIL 那段。
 //
+//  10. 道具数量变化后补发 `item_count_updated_<key>`（顶部货币条不刷新）
+//      抽卡/领奖/买东西之后，服务端和背包里的数字都对，但**顶部货币条还是旧数字**
+//      （重登或重进那一层才变）。玩家反馈「我抽卡没扣我货币」就是这个。
+//      根因：货币条注册的是 `bag.addCountUpdateListener(key, cb)` →
+//      `item.addPropListener("item_count_updated_" + key, cb)`，而 `Bag.updateItems`
+//      走的是 `item.count = n`（setter），实测这个 setter **不派发**那个事件
+//      （手动 `dispatchPropEvent` 同名事件，监听方立刻收到 → 监听侧是好的）。
+//      详见文件末尾 ITEM-EVENT 那段。
+//
 // 探针/诊断部分在 probe.js —— release 可以不打包那个文件。
 // 两个文件互相独立，这个文件不依赖 probe.js 的任何东西。
 // ===========================================================================
@@ -1354,6 +1363,84 @@
                 if (patch()) {
                     clearInterval(window.__oppaiTeamDetailTimer);
                     window.__oppaiTeamDetailTimer = null;
+                }
+            }, 500);
+        }
+    })();
+
+    // -----------------------------------------------------------------------
+    // 10) 道具数量变化后补发 `item_count_updated_<key>`
+    //
+    // 症状：抽卡（或任何服务端驱动的加/扣道具）之后，**顶部货币条不刷新** ——
+    //   服务端存档和客户端背包里的数字都是对的（`bag.getItemCount("100001")`
+    //   已经是新值），但货币条还显示旧数字，重登 / 重进那一层才变。
+    //   玩家报「我抽卡没扣我货币」说的就是这个（实测：金条 100157→99257、
+    //   好人卡 98→89，背包对、货币条还挂 100157/98）。
+    //
+    // 根因（活客户端实测）：
+    //   * 货币条 `TopCurrencyLayer._registerListener` 是
+    //     `dataManager.bag.addCountUpdateListener(key, cb.bind(this))`；
+    //   * `Bag.addCountUpdateListener` = `item.addPropListener(
+    //         ITEM_PROP_EVENT.ITEM_COUNT_UPDATED + key, cb)`（事件名
+    //     `item_count_updated_100019`，见 config/bagconfig.jsc）；
+    //   * 而 `Bag.updateItems` 改数量走的是 `item.count = n` 这个 setter ——
+    //     实测**不派发**上面那个事件：手动 `it.dispatchPropEvent("item_count_updated_" + k)`
+    //     时监听器立刻被调用（hits=1），走 `it.count = n+1` 时 hits 不变（=1）。
+    //     base `Item._setCount` 里没有派发；`Currency._setCount` 里那段派发
+    //     在这套 build 上到不了（`count` 的 getter/setter 绑的是基类实现）。
+    //
+    // 修法：包一层 `Bag.prototype.updateItems` —— 原逻辑跑完之后，对**这次改到的
+    //   每个 key** 手动派发一次 `item_count_updated_<key>`，把货币条（以及以后任何
+    //   监听这个事件的 UI）叫醒。`dispatchPropEvent` 来自 `assets/src/base/entity.jsc`，
+    //   `ITEM_PROP_EVENT` 是全局常量。
+    // -----------------------------------------------------------------------
+    (function installItemCountEvent() {
+        function patch() {
+            var W = window;
+            if (!W.Bag || !W.ITEM_PROP_EVENT) {
+                return false;
+            }
+            var proto = W.Bag.prototype;
+            if (proto.__oppaiCountEvent) {
+                return true;
+            }
+            var orig = proto.updateItems;
+            if (typeof orig !== "function") {
+                return false;
+            }
+            proto.updateItems = function (items) {
+                var keys = [];
+                try {
+                    for (var k in items) {
+                        keys.push(k);
+                    }
+                } catch (e) { /* 不是对象就当没有 */ }
+                var ret = orig.apply(this, arguments);
+                var ev = W.ITEM_PROP_EVENT.ITEM_COUNT_UPDATED;
+                for (var i = 0; i < keys.length; i++) {
+                    try {
+                        var it = this._items && this._items[keys[i]];
+                        if (it && typeof it.dispatchPropEvent === "function") {
+                            it.dispatchPropEvent(ev + keys[i]);
+                        }
+                    } catch (e) { /* 单个道具失败不影响其它 */ }
+                }
+                return ret;
+            };
+            proto.__oppaiCountEvent = true;
+            emit("ITEM-EVENT 补上（updateItems 后派发 item_count_updated_<key>，"
+                 + "顶部货币条才会当场刷新）");
+            return true;
+        }
+
+        if (patch()) {
+            return;
+        }
+        if (!window.__oppaiItemEventTimer) {
+            window.__oppaiItemEventTimer = setInterval(function () {
+                if (patch()) {
+                    clearInterval(window.__oppaiItemEventTimer);
+                    window.__oppaiItemEventTimer = null;
                 }
             }, 500);
         }
