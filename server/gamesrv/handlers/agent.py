@@ -9,7 +9,7 @@ route 名字来自客户端 src/manager/datamanager.js：
 from __future__ import annotations
 
 from ..gameproto import CODE_OK
-from .. import config, favor, instance, logx, quests, store, subarea
+from .. import config, exchange, favor, instance, logx, quests, store, subarea
 from . import route
 
 log = logx.get("handler.agent")
@@ -103,7 +103,9 @@ def _module_stubs(player: dict | None = None) -> dict:
         #   正好是这里建的那 19 条。见 favor.py「宿舍事件」段 + overview §6.8）
         "favorevent": favor.event_block(player),
         "friend": {"friendMapList": [], "recommendationList": [], "isNeedShowTip": 0},
-        "exchange": {},
+        # 黑市交易所 / 充值页。形状 `{<itemKey>: 行}` —— 客户端 `_exchangeData` 直接用它，
+        # 行里的 `todayExchangeTimes` 决定下一次兑换用哪一档（见 gamesrv/exchange.py）。
+        "exchange": exchange.block(player),
         # 天赋（培养）。**形状由客户端字节码定死**，反汇编摘录见 store.new_talents()：
         # `{type: {curTalentKey, lv}}` —— 每个 value 必须是对象。
         #

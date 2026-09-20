@@ -502,6 +502,70 @@ formatBattleInfo(battleResult, battleId, team):
 客户端按码弹 `table_dictionary`：201→10000、202→10001、203/205→4200、
 204→4201、206→4202。
 
+### 6.5 黑市交易所 / 充值页（`exchange.*`）
+
+客户端里叫 `ExchangeCenter`，是**一整个商店中枢**：月卡 / 充值礼包（IAP）、
+金条↔萌钞、行动力 / BP / 卡槽兑换，全走它。
+
+**登录块**：`data.exchange` = 一整张 map，值是玩家那一段的行：
+
+```js
+_exchangeData["300001"] = {
+    exchangeKey: "300001",          // 当前档位（见下）
+    todayExchangeTimes: 2,          // 今天换了几次 —— 决定下一次用哪一档
+    totalExchangeTimes: 5,
+    lastExchangeTimeSec: 1789885973 // 客户端拿它跟 table_constant.common_reset_time 比，自己清天
+}
+```
+
+**档位规则**（`ExchangeCenter.getExchangeInfoKey`，服务端必须照抄）：
+
+```js
+var times      = 行 ? 行.todayExchangeTimes + 1 : 1;   // 这一次是第几次
+var exchangeKey = "exchange_key_" + times;             // EXCHANGE_KEY_PRE
+if (!table_exchange_item[key][exchangeKey])             // 表里没有这一档
+    exchangeKey = "exchange_key_default";               // 就一直用默认档
+var info = table_resource_exchange[exchangeKey];        // 这一档的消耗/产出
+```
+
+`table_resource_exchange[档位]` 的字段：
+
+```
+spend_key / spend_count                  花什么、花多少
+receive_key_<i> / receive_count_<i>      给什么、给多少（i = 1..15，表里最多用到 6）
+presented_key / presented_count          额外赠送
+```
+
+⚠️ 两个坑：
+
+1. `receive_count = -1` 是「**补满**」哨兵（400001 的说明就是「每次可回满行动力。」，
+   700001 同理补 BP）。补满上限取玩家自己的 `maxActionPoint`（行动力）或
+   `table_item[<key>].limit_count`（BP = 6）—— 直接按 -1 发道具会变成"倒扣"。
+2. 客户端显示的数值是 `floor(数值 * percentage / 100)`，`percentage` 默认 100，
+   **只有第一次兑换且表里有 `first_exchange_percentage`** 时才变
+   （`getInfoByKey` 里那段）。服务端要按同一条规则折算，否则界面显示的和实际给的对不上。
+
+**路由**：
+
+| route | 请求 | 回包 |
+|---|---|---|
+| `exchange.getexchangebycategory` | `{category}`（只有礼包页发 `"80"`） | `data` = 该分类的商品 key 列表 |
+| `exchange.exchange` | `{key}`（**只带 key，档位服务端算**） | `data` = 新的那一段行（带 `exchangeKey`），客户端 `update(data)` 合并 |
+| `exchange.exchangecrystal` | `{count}`（扭蛋钻石直购） | 私服扭蛋未开放 → 非 200 |
+| `exchange.checkmonthcard` | `{}` | `data = {remainDay}`（注意不是 `days`） |
+| `exchange.judgeexchangestate` | `{key}`（IAP 下单前） | `data = {state, item}`，`state≠0` 客户端按 1/2/3 弹 `table_dictionary` |
+| `exchange.payment` / `exchange.checkorder` | IAP 回执 | 私服**故意非 200**（`201` 的文案就是「充值成功」，回 200 会被当成充值成功） |
+
+**失败码**（客户端 `EXCHANGE_ERR_CODE_DICT`，实测取的值）：
+
+```
+201 充值成功   202 未知兑换类型   203 购买卡槽次数已达上限
+204 今天购买次数已用完   205 资源不够啦……OAQ   405 更新数据错误
+```
+
+非 200 时客户端 `ccuiManager.toast(EXCHANGE_ERR_CODE_DICT[code])`，
+所以码必须是表里这几个，**不能自己编**（编了 `toast(undefined)`）。
+
 ---
 
 ## 7. 切主场景

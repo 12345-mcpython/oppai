@@ -715,6 +715,10 @@ python script\disasm_func.py <file.jsc> cb4AfterLogin
       在客户端**（`subareaAchievementManager.formatBattleInfo()` 把结果塞进
       `instance.finishlevel` 的 `subareaInfo`），服务端只落盘 + 发奖。见
       [`docs/protocol.md` §6.4](docs/protocol.md)
+- [x] **黑市交易所 / 充值页**（`exchange.*` 7 条）—— 金条↔萌钞、行动力/BP/卡槽兑换全通，
+      档位（`exchange_key_<次数>`）+「补满」哨兵 + 首换百分比都照客户端规则算；
+      充值/月卡/礼包那半边**故意不通**（没有支付渠道）。见
+      [`docs/protocol.md` §6.5](docs/protocol.md)
 - [x] 文档：`docs/overview.md`（全景）/ `protocol.md` / `reverse-engineering.md` / `build.md` / `devtools.md` / `engine-debug.md`
 
 ### 待办

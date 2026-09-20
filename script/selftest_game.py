@@ -683,6 +683,129 @@ def subarea_achievement_check(ok: bool) -> bool:
     return ok
 
 
+def exchange_check(ok: bool) -> bool:
+    """黑市交易所：兑换一次（金条 → 萌钞），验扣钱/发货/档位/落盘。
+
+    挑的是 `type = "30"` 里最便宜的一条（`spend = 金条 x5 → 萌钞 x500`），
+    跑完把金条/萌钞/兑换行都还原，所以可以反复跑。
+
+    要验的四件事：
+      ① `exchange.exchange` 回 200，`data` 是**新的那一段行**（带 `exchangeKey`）
+      ② 金条真的扣了、萌钞真的发了（数量和表里 `table_resource_exchange` 对得上）
+      ③ 第 2 次的档位会往上走（`todayExchangeTimes` 累加；固定档的那条会一直用 default）
+      ④ 重登后那一段行还在（落盘）
+    """
+    from gamesrv import config, exchange, items, store
+
+    table = exchange.item_table()
+    if not table:
+        print("  BAD 没有 table_exchange_item，抽表没跑？")
+        return False
+
+    # 挑一个「非 IAP、消耗是纯道具、产出也是道具」且**玩家现在买得起**的最便宜商品
+    player = store.get_or_create_player(config.DEFAULT_ACCOUNT)
+    have = dict(items.items_of(player))
+    cands = []
+    for key, item in table.items():
+        if str(item.get("type")) not in exchange.IN_GAME_TYPES:
+            continue
+        p = exchange.plan(key, 1)
+        if not p or not p["spend"] or not p["receive"]:
+            continue
+        if any(c < 0 for c in p["receive"].values()):     # -1 = 补满，换算麻烦，跳过
+            continue
+        if any(int(have.get(ik) or 0) < int(need) for ik, need in p["spend"].items()):
+            continue                                       # 买不起的不测（下面专门测"不足"）
+        cands.append((sum(p["spend"].values()), key, p))
+    if not cands:
+        print("  BAD 没有可测的兑换商品（买得起的）")
+        return False
+    _cost, key, p1 = min(cands)
+    print(f"  ..  用例：兑换 {key}（{table[key].get('name')}）花 {p1['spend']} 得 {p1['receive']}")
+
+    before_items = dict(items.items_of(player))
+    old_row = exchange.rows(player).pop(key, None)
+    store.save_player(player)
+
+    bad = []
+    try:
+        res = call("exchange.exchange", {"key": key}, 140)
+        if res.get("code") != 200:
+            bad.append(f"exchange.exchange code={res.get('code')} {res}")
+        row = res.get("data") or {}
+        # 回包要带 exchangeKey（客户端 `update(data)` 按它认这是哪一段行）。
+        # 注意它**不一定**等于 item key：固定档的商品 `exchange_key_default` 就是自己，
+        # 带阶梯的（如 400001）第 N 次会指向另一档。
+        if not row.get("exchangeKey"):
+            bad.append(f"回包行缺 exchangeKey：{row}")
+        elif row["exchangeKey"] != p1["ladder"]:
+            bad.append(f"exchangeKey={row['exchangeKey']!r} 期望档位 {p1['ladder']!r}")
+        if int(row.get("todayExchangeTimes") or 0) != 1:
+            bad.append(f"todayExchangeTimes={row.get('todayExchangeTimes')!r} 期望 1")
+
+        login_item = (call("agent.getlogindata", {}, 141).get("data") or {}).get("item") or {}
+        for ik, need in p1["spend"].items():
+            got = int(login_item.get(ik) or 0)
+            want = int(before_items.get(ik) or 0) - int(need)
+            if got != want:
+                bad.append(f"金条 {ik} 扣得不对：{before_items.get(ik)} -> {got}（期望 {want}）")
+        for ik, cnt in p1["receive"].items():
+            got = int(login_item.get(ik) or 0)
+            want = int(before_items.get(ik) or 0) + int(cnt)
+            if got != want:
+                bad.append(f"产出 {ik} 没到账：{before_items.get(ik)} -> {got}（期望 {want}）")
+
+        # 再兑一次：次数要累加
+        res2 = call("exchange.exchange", {"key": key}, 142)
+        if res2.get("code") != 200:
+            bad.append(f"第二次兑换 code={res2.get('code')} {res2}")
+        elif int((res2.get("data") or {}).get("todayExchangeTimes") or 0) != 2:
+            bad.append(f"第二次 todayExchangeTimes={(res2.get('data') or {}).get('todayExchangeTimes')!r} 期望 2")
+
+        # 落盘：重登后还在
+        block = ((call("agent.getlogindata", {}, 143).get("data") or {})
+                 .get("exchange") or {})
+        if not isinstance(block, dict) or key not in block:
+            bad.append(f"登录块 exchange 里没有 {key}（没落盘？）")
+        elif int(block[key].get("todayExchangeTimes") or 0) != 2:
+            bad.append(f"登录块 todayExchangeTimes={block[key].get('todayExchangeTimes')!r} 期望 2")
+
+        # 材料不足要拒绝（造一个买不起的：把金条清空后试最贵的）
+        rich = max(cands, key=lambda x: x[0])
+        saved = items.count_of(player, list(rich[2]["spend"])[0])
+        # 直接改存档再试，避免把玩家真金条清掉后忘了还原
+        p2 = store.get_or_create_player(config.DEFAULT_ACCOUNT)
+        sk = list(rich[2]["spend"])[0]
+        items.items_of(p2)[sk] = 0
+        store.save_player(p2)
+        r3 = call("exchange.exchange", {"key": rich[1]}, 144)
+        if r3.get("code") == 200:
+            bad.append(f"金条为 0 时兑换 {rich[1]} 竟然成功了")
+        p3 = store.get_or_create_player(config.DEFAULT_ACCOUNT)
+        items.items_of(p3)[sk] = saved
+        store.save_player(p3)
+    finally:
+        # 收尾：道具恢复原数、兑换行恢复原样
+        player = store.get_or_create_player(config.DEFAULT_ACCOUNT)
+        got = items.items_of(player)
+        for k, v in before_items.items():
+            got[k] = v
+        rows_now = exchange.rows(player)
+        if old_row is None:
+            rows_now.pop(key, None)
+        else:
+            rows_now[key] = old_row
+        store.save_player(player)
+
+    if bad:
+        for one in bad:
+            print(f"  BAD {one}")
+        return False
+    print(f"  OK  交易所：{key} 花 {p1['spend']} 得 {p1['receive']}，次数累加 + 落盘 + "
+          f"金条不足被拒（收尾已还原）")
+    return ok
+
+
 def main():
     cases = [
         ("agent.getlogindata", {}),
@@ -762,6 +885,13 @@ def main():
         ok = subarea_achievement_check(ok)
     except Exception as exc:  # noqa: BLE001
         print(f"  BAD 分区成就自检异常: {exc}")
+        ok = False
+
+    print()
+    try:
+        ok = exchange_check(ok)
+    except Exception as exc:  # noqa: BLE001
+        print(f"  BAD 交易所自检异常: {exc}")
         ok = False
 
     print()

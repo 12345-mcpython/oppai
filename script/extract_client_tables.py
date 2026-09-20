@@ -265,6 +265,35 @@ SUBAREA_ACHIEVEMENT_REWARD_JS = r"""
 """
 
 
+# 黑市交易所（ExchangeCenter）。
+#
+# 客户端的数据模型（反汇编 `exchangecenter.jsc`）：
+#
+#   `_exchangeData[<key>]` = 这一段交易所的玩家行
+#       {exchangeKey, todayExchangeTimes, totalExchangeTimes, lastExchangeTimeSec}
+#       —— `todayExchangeTimes` 的每日清零是**客户端自己**按
+#       `table_constant.common_reset_time` + `lastExchangeTimeSec` 算的（`_resetData`）。
+#
+#   `table_exchange_item[<key>]` 是**价格阶梯**：里面再按次数分档
+#       getExchangeInfoKey(key)：times = (行 ? 行.todayExchangeTimes + 1 : 1)
+#                                 exchangeKey = key + times        // 字符串拼接！
+#                                 取不到就退回 key + "default"
+#   也就是「第 N 次兑换」有各自的消耗/产出，服务端按同一个规则算档位。
+#
+#   `table_resource_exchange` 是资源兑换（`getExchangeResourceByKey`：
+#       receive_key_<i> / receive_count_<i> 逐条读）。
+#
+#   `exchange.exchange {key}` 只带 item key（次数服务端自己推），
+#   回包是**新的那一段行**（带 exchangeKey），客户端 `update(res.data)` 合并。
+EXCHANGE_ITEM_JS = r"""
+(function () { return JSON.stringify(table_exchange_item); })()
+"""
+
+EXCHANGE_RESOURCE_JS = r"""
+(function () { return JSON.stringify(table_resource_exchange); })()
+"""
+
+
 # 军士养成表。
 #
 # 「培养（升级）」这条链路的数值全在客户端本地算，服务端要复刻一遍才不会
@@ -626,6 +655,8 @@ def main() -> int:
         ("table_subarea_achievement.json", SUBAREA_ACHIEVEMENT_JS),
         ("table_subarea_achievement_condition.json", SUBAREA_ACHIEVEMENT_CONDITION_JS),
         ("table_subarea_achievement_reward.json", SUBAREA_ACHIEVEMENT_REWARD_JS),
+        ("table_exchange_item.json", EXCHANGE_ITEM_JS),
+        ("table_resource_exchange.json", EXCHANGE_RESOURCE_JS),
         ("table_soldier.json", SOLDIER_JS),
         ("table_shelf.json", SHELF_JS),
         ("table_shop.json", SHOP_JS),

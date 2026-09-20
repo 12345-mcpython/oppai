@@ -238,6 +238,8 @@ vanilla 不传参 → 游戏代码 `function (eventName) { if (/began\d/.test(ev
 | 通关后**好感度弹窗不出现/显示 +0** | 数量要回在 `rewards.levelReward.favor`（"给谁"由客户端拿自己 `table_level.favor_char_key` 算）；回了 `data.rewards.favorReward.favors` 会走到客户端一个 `.count` 写错的死分支 | `gamesrv/favor.py` + `instance.py` |
 | 编成 →「队伍」**一进去就停在第二队**（点左箭头才回到第一队） | 客户端自己的 off-by-one：入口是 `new TeamDetailLayer()`（**不带下标**），于是走 `_initData` 的兜底 `this.curTeamIdx = _.findIndex(this.teams, {index: DEFAULT_TEAM_IDX})`，而模块常量 `DEFAULT_TEAM_IDX = 1`；`team.index` 是**服务端下发**的，本服 0 起 ⇒ 命中下标 1 = 第 2 队。队伍 index 必须 0 起是客户端自己定的（`TEAM_COUNT_LIMIT = 5`、`_setCurTeamIdx` 夹到 [0,4]、`getCurTeam()` = `findIndex{index: curTeamIdx}`、`CommonTeamItem` 传 `getCurTeamIdx() - 1`），改服务端 index 会让**第 5 队**开战前被夹成第 4 队 ⇒ 服务端没有杠杆 | `patch.js` 末尾 TEAM-DETAIL（运行时改成「当前队伍」）；反汇编依据：`differences.md` A3d |
 | 宿舍**换完衣服整个界面点不动**（画面在动、音乐照放，屏幕上留着「着裝中…」） | **不是卡顿、也不是服务端**：客户端 `FavorLayer._playChangeClothes` 会把全局触摸闸 `op.touchEnabled = false`，而**唯一开闸的地方是 `end` 动画的最后一帧回调**；引擎 `ActionTimeline::step()` 在回调返回后又执行 `_playing = _loop`（用刚播完那段的 loop）并把新动画直接拽到最后一帧（`_currentFrame = _endFrame`）→ `end` 一帧没播、它的回调永远不响 ⇒ 闸门再也开不回来。探针实测：`touchEnabled=false`、时间轴停在新动画的 `endFrame`、trace 里只有 `FIRE …anim=began` 没有 `end`。换背景 `_replaceBg` / `LoadingLayer.show` 等同款写法都会中招 | 引擎补丁 **③b**（`engine/build/fix_lastframe_replay.py`，见 [`ENGINE_PATCHES.md`](../../engine/ENGINE_PATCHES.md)）；**引擎还没重编时：重启游戏**（回到登录）即可恢复 |
+| 商店里**金条换萌钞点下去弹不出东西/提示"资源不够啦……OAQ"** | 兑换的档位和「补满」规则都在客户端（`exchange_key_<次数>` + `receive_count = -1`），服务端要按同一套算：`times = todayExchangeTimes + 1` → 档位 → `table_resource_exchange[档位]`；`-1` 要补到上限而不是发 -1；失败码必须用客户端 `EXCHANGE_ERR_CODE_DICT` 里真有的（205 = 资源不够、204 = 今天次数用完），自己编的码会 `toast(undefined)` | `gamesrv/exchange.py` + [protocol.md §6.5](protocol.md) |
+| 点**充值 / 月卡 / 礼包**一直弹提示、买不了 | **故意的**：私服没有支付渠道。客户端的 `judgeexchangestate` 先回 `state≠0` 弹提示，`exchange.payment` 也回非 200（`201` 的文案是「充值成功」，回 200 会被当成充值成功） | `gamesrv/exchange.py` 的 `judge_state` + `differences.md` §B |
 
 ### 6.1 SDK 桩里的「死键」——一类很容易误判成 JS 层 bug 的问题
 
@@ -718,6 +720,16 @@ WS 侧要替换构造函数（就出事）。定位靠的是**脱离游戏逻辑
        行形状来自客户端 `SubareaAchievement.createAchievement`：
        `{id, progress, progressInfo, isReceiveReward}`（`completeTime` 服务端写）。
        领奖失败码照客户端 `ERROR_CODE` 回 201~206，客户端自己弹 `table_dictionary` 文案
+- [x] **黑市交易所 / 充值页**（`exchange.*` 7 条全注册，路由 73→78）：客户端叫
+       `ExchangeCenter`，实际是商店中枢 —— 月卡/充值礼包（IAP）+ 金条↔萌钞 +
+       行动力/BP/卡槽兑换。⚠️ **档位规则在客户端**：
+       `times = todayExchangeTimes + 1` → `table_exchange_item[key]["exchange_key_"+times]`，
+       取不到退回 `exchange_key_default`，再拿 `table_resource_exchange[档位]` 的
+       `spend_*`/`receive_*` 扣发；`receive_count = -1` 是「补满」哨兵（行动力补到
+       `maxActionPoint`、BP 补到 `limit_count`）；首次兑换还要按
+       `first_exchange_percentage` 折算。失败码必须用客户端
+       `EXCHANGE_ERR_CODE_DICT` 里真有的（205 = 资源不够），否则 `toast(undefined)`。
+       IAP 那半边**故意不通**（没有支付渠道），见 §6 症状表 + [protocol.md §6.5](protocol.md)
 - [x] 文档：协议 / 逆向手法 / 打包逻辑 / 调试台 / 引擎调试 / 本总览 / **与原版的差异** / **从零复刻**
 
 ### 待办（按卡点排序）
@@ -753,11 +765,10 @@ WS 侧要替换构造函数（就出事）。定位靠的是**脱离游戏逻辑
    `{item, innSize, index}`），所以卡在「层的 `_recommendList` 是 0」。
    **不影响战斗**（这个弹窗是可选的好友助战）。
 5. **其余未实现的 route** —— `python script/route_gap.py --static` 能列出全部。
-   当前：客户端静态候选 **161** 条，服务端 **73** 条，缺 **96** 条。按单机价值排：
+   当前：客户端静态候选 **161** 条，服务端 **78** 条，缺 **83** 条。按单机价值排：
 
    | 命名空间 | 缺 | 说明 |
    |---|---|---|
-   | `exchange.*` | 6 | 黑市交易所（`checkorder` 已实现）；要抽兑换表 |
    | `detect.*` | 6 | 侦查玩法 |
    | `diary.*` / `sign.*` / `convert.*` / `share.*` | 1+1+1+1 | 零散领奖类，工作量最小，适合热身 |
    | `boss.*` | 5 | 好友 BOSS（`getbosslist` 已实现并回空表） |

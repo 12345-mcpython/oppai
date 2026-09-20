@@ -43,6 +43,7 @@ def load_all():
     from . import boss  # noqa: F401
     from . import char  # noqa: F401
     from . import equipment  # noqa: F401
+    from . import exchange  # noqa: F401
     from . import favor  # noqa: F401
     from . import favorevent  # noqa: F401
     from . import friendsupport  # noqa: F401
