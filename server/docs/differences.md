@@ -21,7 +21,7 @@
 
 | # | 改了什么 | 为什么 | 在哪 |
 |---|---|---|---|
-| A1 | **整个服务端自研** | 原版服务端已随停服消失。纯标准库 Python，CDN/gate/login/game 四个端口 | `server/` |
+| A1 | **整个服务端自研** | 原版服务端已随停服消失。纯标准库 Python（无 pip 依赖；DES 会顺带用 `ctypes` 加载设备上的 OpenSSL 加速，验不过就退回纯 Python，见 A8），CDN/gate/login/game 四个端口 | `server/` |
 | A2 | **重建 `libcocos2djs.so`** | 原版 `.so` 是用**改过的** cocos2d-js 3.6 编的，仓库里那版对不上。按 v3.6 重建 + 14 个补丁 | `engine/`、[`engine-debug.md`](engine-debug.md) |
 | A3 | **客户端适配 10 条**（`patch.js`） | 引擎换了，几个绑定名对不上，不改直接黑屏；另外引擎里 `responseConfig` 不派发、少了几个绑定，还有一条是客户端自己的 off-by-one（见 A3d）、一条是客户端道具数量事件不派发（见 A3e） | `server/client/patch.js` 头部 |
 | A3b | **响应派发自己补一层** | 原版靠 `src/util/server.js` 的 `responseConfig` 把响应里的模块块推给各中心，这套引擎上**一次都没跑**（实测 `Favor.prototype.update` 调用 0 次）。`patch.js` 的 RESP-DISPATCH 照它的三类写法补齐才生效 | [protocol.md §5.2](protocol.md) |
@@ -32,6 +32,7 @@
 | A5 | **删掉第三方 SDK（46.6MB）** | 统计/推送/广告/渠道全下线了，留着只是体积 | `script/sdk_strip/` |
 | A6 | **登录不走真实 DH** | 原版握手用自研 DH + `hashKey`/`hmac64`，算法没还原。私服用 **DH 单位元**当共享密钥 | [`protocol.md`](protocol.md) |
 | A7 | **`.ps1` 全部加 UTF-8 BOM** | PowerShell 5.1 对无 BOM 的 `.ps1` 按 GBK 读，中文注释会吃掉引号 → **解析失败 = 一行都不执行** | [`build.md`](build.md) |
+| A8 | **DES 走 libcrypto 加速**（可选，不装也能跑） | 业务响应是 `base64(des(JSON))`，**每个请求都要把整包加密一遍**：登录包明文 219.8 KB，纯 Python 查表版 157 KB/s → **光加密 1.4 秒**（占该响应 98%，组包/JSON/base64 加起来不到 2%）；一轮 `selftest_game.py` 146 秒，基本全是等 DES。改用 `ctypes` 调 `libcrypto` 的 `DES_ecb_encrypt` 后同机 14 MB/s：登录包 1.43 s → 36 ms，自检 146.5 s → 2.8 s。**不是硬依赖**：第一次用到时拿一条公开的已知答案向量验加解密，验不过（或找不到库）自动退回纯 Python 并写一行日志；`GS_DES_PURE=1` 强制纯 Python | `server/gamesrv/crypto/des.py`；两条路线都逐字节对拍参考向量，`script/check_des.py` |
 
 > A6 是**唯一一处"协议上和原版不一样"**的地方。它只影响握手强度，
 > 不影响业务包（业务包是标准 DES + base64，和原版逐字节一致）。

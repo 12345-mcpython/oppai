@@ -79,7 +79,7 @@ gamesrv/
   store.py        玩家存档（players.json）+ 字段迁移
   quests.py       主线任务（窗口推进、领奖状态机）
   repl.py         下发给探针的命令队列
-  crypto/des.py   标准 DES（用客户端真实密文对拍验证过）
+  crypto/des.py   标准 DES（纯 Python 参考实现 + 可选 libcrypto 加速，两条路线都对拍过）
   handlers/       agent.*  player.*  quest.*（16 条路由）
   data/           table_quest.json（从客户端抽出来的表）
   apps.py         cdn / gate / login / game 四个端口的实现

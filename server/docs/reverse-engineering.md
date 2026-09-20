@@ -308,6 +308,8 @@ JS 主线程被死循环卡住时，REPL 也发不出去（探针本身跑在 JS
 | `script/probe.py` | 重启客户端 + 批量执行 + 打日志 |
 | `script/bisect_init.py` | 逐模块二分找死的循环 |
 | `script/selftest_game.py` | 不开游戏自测业务协议 |
+| `script/check_des.py` | DES 两条路线（纯 Python / libcrypto）对拍参考向量 + 测速率 |
+| `script/bench_login.py` | 量登录包耗时（`--parts` 拆到 组包 / JSON / DES / base64） |
 | `script/shots.py` | 连续截图 |
 | `script/sdk_strip/` | 删掉没用的第三方 SDK（见 README 4.0） |
 
