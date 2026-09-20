@@ -31,6 +31,7 @@ QuickSDK / 百度的服务器早就下线了，这个弹窗永远登不进去。
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import sys
 
@@ -118,8 +119,24 @@ def patch_exit_dialog():
 #
 #     AppActivity$12$1.onClick -> Sdk.getInstance().exit(activity)   # 空桩，啥也不干
 #
-# 所以弹窗文字正常、按钮却毫无反应。真 SDK 在这里会走渠道退出流程（并再弹它自己的
-# 确认框）；私服没有渠道，直接结束进程。顺带把 GL 线程一起收掉，不然它会留在后台。
+# 所以弹窗文字正常、按钮却毫无反应。真 SDK 在这里走渠道退出流程（并再弹它自己的
+# 确认框）；私服没有渠道 —— **finish 之后必须把进程也结束掉**。
+#
+# ⚠️ 只 finish 不杀进程 = 埋了一个"第二次进游戏闪退"（2026-09-20 实测）：
+#     finish() 之后进程留在 cached，玩家再点「进入游戏」时**复用同一个进程**，
+#     而引擎（GL 线程 / native AppDelegate / JS VM）在 Activity 销毁时已经拆过一半，
+#     重新初始化就崩在 libcocos2djs.so 的 GL 线程里：
+#
+#       11:25:23 Start proc 22041             ← 冷启动
+#       12:07:29 AppActivity 图层销毁          ← 退出（finish），没有 "Killing 22041"
+#       12:07:31 START SplashActivity          ← 复用同一进程再进
+#       12:07:31 Fatal signal 11 (SIGSEGV) fault addr 0x14  GLThread  libcocos2djs.so
+#       12:07:32 Process 22041 has died        ← 崩溃把进程杀了
+#       12:07:34 Start proc 5878               ← 所以"再进一次反而正常"
+#
+#     加上 killProcess 之后，下一次启动必然是全新冷启动，这条路径就不存在了。
+#     （早先不杀进程是怕 logcat 里留 signal 9 看着像崩溃 —— 那个顾虑是错的：
+#      killProcess 是自杀，不会进 tombstone，日志里只有一句 "has died"。）
 SDK_SMALI = os.path.join(APK_DIR, "smali", "com", "quicksdk", "Sdk.smali")
 
 SDK_EXIT_OLD = """.method public exit(Landroid/app/Activity;)V
@@ -128,11 +145,16 @@ SDK_EXIT_OLD = """.method public exit(Landroid/app/Activity;)V
     return-void
 .end method"""
 
+# 目标实现：finish + 结束自己这个进程
 SDK_EXIT_HARD = """.method public exit(Landroid/app/Activity;)V
     .locals 1
 
-    # 私服适配：原桩是空实现，导致退出确认弹窗点「确定」没反应。
-    # 真 SDK 走渠道退出流程；私服直接结束进程（顺便收掉 GL 线程）。
+    # 私服适配：原桩是空实现，退出弹窗点「确定」没反应。
+    # 真 SDK 走渠道退出流程；私服 = finish() + 结束进程。
+    #
+    # ⚠️ killProcess 不能省：只 finish 的话进程留在 cached，玩家下次进游戏会
+    # 复用同一进程，而引擎已经拆过一半 → GL 线程 SIGSEGV（实测：主界面一闪而过闪退，
+    # 再进一次才好——因为那次是被崩掉的进程，等于冷启动）。
     invoke-virtual {p1}, Landroid/app/Activity;->finish()V
 
     invoke-static {}, Landroid/os/Process;->myPid()I
@@ -144,26 +166,29 @@ SDK_EXIT_HARD = """.method public exit(Landroid/app/Activity;)V
     return-void
 .end method"""
 
+# 历史形态：只 finish（会踩上面那个坑），保留用于识别
 SDK_EXIT_SOFT = """.method public exit(Landroid/app/Activity;)V
     .locals 1
 
-    # 私服适配：原桩是空实现，导致退出确认弹窗点「确定」没反应。
-    # 真 SDK 走渠道退出流程并再弹它自己的确认框；私服只做**软退** —— finish 掉
-    # Activity 就回桌面。不用 killProcess 硬杀：那会留一条 signal 9 的日志，
-    # 而且真机上看着像崩溃。
-    # 这里 finish 足够，因为 SplashActivity 启动 AppActivity 后自己就 finish 了
-    # （见 SplashActivity.smali 第 45 行），返回栈里只剩 AppActivity。
     invoke-virtual {p1}, Landroid/app/Activity;->finish()V
 
     return-void
 .end method"""
 
+# 整个方法块（含注释）一把换掉。
+# ⚠️ 原来按"整段文本 + 注释"精确匹配，结果一改注释就匹配不上（实测踩过：
+#    game/smali 里是旧注释、常量是新注释 → 报"形状不认识"）。注释不是接口，
+#    所以这里只认方法签名，正文按特征判断。
+SDK_EXIT_RE = re.compile(
+    r"\.method public exit\(Landroid/app/Activity;\)V.*?\.end method", re.S)
+
 
 def patch_sdk_exit():
-    """让退出弹窗的「确定」真的退出（软退，幂等）。
+    """让退出弹窗的「确定」真的退出（finish + 杀进程，幂等）。
 
-    三种历史形态都要认：生成器产的空桩、早先用过的硬退（killProcess）、
-    以及现在的软退。这样换过实现也能自动迁移过去。
+    按方法签名匹配、按特征迁移，认三种形态：生成器产的空桩（`return-void`）、
+    只 finish 的软退（会崩，见上面那段）、以及目标实现（含 killProcess）。
+    不认识就报错让人看一眼 —— 宁可不动，也别把不认识的代码覆盖掉。
     """
     if not os.path.isfile(SDK_SMALI):
         print(f"!! 找不到 {SDK_SMALI}，跳过 Sdk.exit 修补", file=sys.stderr)
@@ -172,20 +197,27 @@ def patch_sdk_exit():
     with open(SDK_SMALI, "r", encoding="utf-8") as fh:
         src = fh.read()
 
-    if SDK_EXIT_SOFT in src:
-        print("Sdk.exit() 已经是软退（finish），跳过")
+    m = SDK_EXIT_RE.search(src)
+    if not m:
+        print(f"!! Sdk.exit(Activity) 方法块找不到，请人工核对 {SDK_SMALI}",
+              file=sys.stderr)
+        return 1
+
+    body = m.group(0)
+    # ⚠️ 认**指令**而不是关键词：旧实现的注释里就写着 "不用 killProcess 硬杀…"，
+    #    按关键词判断会误判成"已经打过补丁"（实测踩过）。
+    if "Landroid/os/Process;->killProcess" in body:
+        print("Sdk.exit() 已经是 finish + killProcess，跳过")
         return 0
+    if "finish" not in body and "return-void" not in body:
+        print(f"!! Sdk.exit() 里有不认识的逻辑，没敢动，请人工核对 {SDK_SMALI}",
+              file=sys.stderr)
+        return 1
 
-    for old, why in ((SDK_EXIT_OLD, "空桩"),
-                     (SDK_EXIT_HARD, "上一版硬退 killProcess")):
-        if old in src:
-            with open(SDK_SMALI, "w", encoding="utf-8") as fh:
-                fh.write(src.replace(old, SDK_EXIT_SOFT, 1))
-            print(f"Sdk.exit(): {why} -> 软退 finish（不杀进程）")
-            return 0
-
-    print(f"!! Sdk.exit() 形状不认识，请人工核对 {SDK_SMALI}", file=sys.stderr)
-    return 1
+    with open(SDK_SMALI, "w", encoding="utf-8") as fh:
+        fh.write(src[:m.start()] + SDK_EXIT_HARD + src[m.end():])
+    print("Sdk.exit(): -> finish + killProcess（原来只 finish 会崩在下次进游戏）")
+    return 0
 
 OLD = """.method public static login()V
     .locals 1

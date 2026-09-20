@@ -223,6 +223,7 @@ vanilla 不传参 → 游戏代码 `function (eventName) { if (/began\d/.test(ev
 | 客户端 `console.log` 在日志面板里**看不到** | JSB 里 `console.log` 是 `writable:false, configurable:false`，**客户端没法包一层**（赋值静默失败），探针一直没转发到；只有 `cc.log` 被包上了 | 调试台改成从 logcat 收 `cocos2d-x debug info` tag 的原文，单独一档「console.log」；要转发请用 `cc.log` —— 见 §11.4 |
 | `console.log('a', b)` 抛 `js_console_log : wrong number of arguments` | 原生 `console.log` **只接受一个参数** | 自己 `[a, b].join(' ')` |
 | Java 层退出确认弹窗**文字是乱码**（一片"盒子问号"，偶尔漏出正常汉字） | **官方包自带的**：原版 `classes2.dex` 里这 4 个串本来就有 26 个 U+FFFD（同一个 dex 里别的「确定」「取消」是正常 UTF-8），字节已被替换符抹掉 | `patch_smali.py` → `patch_exit_dialog()` |
+| 退出后再进游戏：**主界面一闪而过闪退**，再进一次又正常 | 退出时只 `finish()` 不杀进程 → 进程留在 cached；再进游戏**复用同一进程**，而引擎（GL 线程/native AppDelegate/JS VM）已拆一半 → 重新初始化 SIGSEGV（`libcocos2djs.so`，fault addr 0x14）。崩掉进程反而让"再进一次"变成冷启动，所以看着像"第二次才好" | `patch_smali.py` → `patch_sdk_exit()`：`finish()` **+ `Process.killProcess(myPid())`** |
 | 退出弹窗**点「确定」没反应**（「取消」正常） | `Sdk.exit()` 是 `sdk_strip/gen_stubs.py` 生成的**空桩**，按钮调它等于没调 | `patch_smali.py` → `patch_sdk_exit()` |
 | 关卡列表**不显示通关**、章节星级恒为 0；按通关解锁的功能（如「萌源增幅」）**永远锁着** | 登录包里 `instance` 被 `_module_stubs` 的桩覆盖成 `{"levels": []}` —— `data.update()` 排在真实进度**之后**，把整块顶掉。客户端 1142 个 Level 全停在 `_starMark = -1` | `agent.get_login_data` / `_module_stubs`（**桩里不要再出现 `instance`**）—— 见 §6.2 |
 | 用调试台「全部三星通关」作弊、甚至**重登都不生效** | 同一个根因：服务端存档早写对了，但**进度从没发到客户端**。客户端只在登录那一刻读一次关卡，所以"重登"也救不了没发出去的数据 | 同上 |
@@ -645,8 +646,11 @@ WS 侧要替换构造函数（就出事）。定位靠的是**脱离游戏逻辑
 - [x] 编成 / 上阵队伍（含士兵数据）
 - [x] **军士培养 / 突破 / 技能**（升级公式和客户端逐字段对齐，材料会被真的吃掉）
 - [x] 主线任务（窗口推进 + 领奖 + 刷新）
-- [x] Java 层退出确认弹窗：官方包自带乱码文案 → 换成正常中文；空桩 `Sdk.exit()` → 软退
-      （`finish`，回桌面但进程进 cached，不留 signal 9）——见 §6.1
+- [x] Java 层退出确认弹窗：官方包自带乱码文案 → 换成正常中文；空桩 `Sdk.exit()` →
+      **`finish()` + `Process.killProcess(myPid())`**
+      ⚠️ 早先只做 `finish()`（"软退"，怕 killProcess 留 signal 9 看着像崩溃）——
+      那个顾虑是错的，而且**埋了个崩溃**：进程留在 cached，下次进游戏复用同一进程
+      就 SIGSEGV（主界面一闪而过闪退，再进一次才好）。详见 §6 症状表 —— 见 §6.1
 - [x] **天赋（培养）**：三条课题 + `player.selecttalent` / `player.upgradetalent`，
       落盘、升级真扣材料（`table_talent_upgrade` 的三张表进了 `gamesrv/data/`）。
       顺带修掉「登录包 `instance` 被桩覆盖」—— 那个 bug **把整个关卡进度吞掉了**，
