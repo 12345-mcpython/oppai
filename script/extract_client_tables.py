@@ -265,6 +265,31 @@ SUBAREA_ACHIEVEMENT_REWARD_JS = r"""
 """
 
 
+# 功能开启表（`table_function_open`，32 条）。
+#
+# 客户端两处读它：
+#   * `Player.initModuleState()`：`module.markIndex = row.mark_index`、`unlockLv = row.unlock_lv` …
+#     然后 `module.isOpened = moduleOpenMark[module.markIndex]`（登录块里的字段）；
+#   * `moduleManager.popModuleOpen()`：第一次进主界面时，把所有 `!isOpened` 且已解锁的
+#     模块**挨个弹一遍**「功能开启」动画（32 个一起弹就是这么来的）。
+#
+# 所以服务端只要在登录块里把 `moduleOpenMark` 全标成"已弹过"，这些弹窗就没了 ——
+# 不用动客户端。另外 `unlock_lv` 也是「XX 系统几级开」的唯一出处
+# （比如 100005 培养系统 = 6 级，这也是私服建号直接给 30 级的原因）。
+FUNCTION_OPEN_JS = r"""
+(function () {
+    var out = {};
+    for (var k in table_function_open) {
+        var r = table_function_open[k];
+        if (!r) { continue; }
+        out[k] = {mi: r.mark_index, n: r.name, lv: r.unlock_lv,
+                  lk: r.unlock_level_key, gk: r.unlock_guide_key};
+    }
+    return JSON.stringify(out);
+})()
+"""
+
+
 # 黑市交易所（ExchangeCenter）。
 #
 # 客户端的数据模型（反汇编 `exchangecenter.jsc`）：
@@ -657,6 +682,7 @@ def main() -> int:
         ("table_subarea_achievement_reward.json", SUBAREA_ACHIEVEMENT_REWARD_JS),
         ("table_exchange_item.json", EXCHANGE_ITEM_JS),
         ("table_resource_exchange.json", EXCHANGE_RESOURCE_JS),
+        ("table_function_open.json", FUNCTION_OPEN_JS),
         ("table_soldier.json", SOLDIER_JS),
         ("table_shelf.json", SHELF_JS),
         ("table_shop.json", SHOP_JS),

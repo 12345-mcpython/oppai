@@ -103,6 +103,10 @@ def _module_stubs(player: dict | None = None) -> dict:
         #   正好是这里建的那 19 条。见 favor.py「宿舍事件」段 + overview §6.8）
         "favorevent": favor.event_block(player),
         "friend": {"friendMapList": [], "recommendationList": [], "isNeedShowTip": 0},
+        # 功能开启标记。客户端 `Player.initModuleState()` 用它算 `isOpened`，
+        # 而 `moduleManager.popModuleOpen()` 会把 `!isOpened` 的模块挨个弹「功能开启」。
+        # 私服把 32 个 mark 全标成已弹过 → 一进游戏不再连弹 32 个（见 store.MODULE_OPEN_POPUP_SKIP）。
+        "moduleOpenMark": _module_open_mark(player),
         # 黑市交易所 / 充值页。形状 `{<itemKey>: 行}` —— 客户端 `_exchangeData` 直接用它，
         # 行里的 `todayExchangeTimes` 决定下一次兑换用哪一档（见 gamesrv/exchange.py）。
         "exchange": exchange.block(player),
@@ -156,6 +160,38 @@ def _module_stubs(player: dict | None = None) -> dict:
         "friendsupport": {"soldiers": [], "userecord": {}},
         "novicequest": {"noviceQuest": {"chars": [], "lines": []}, "lines": [], "chars": []},
     }
+
+
+def _module_open_mark(player: dict) -> dict:
+    """登录块 `moduleOpenMark` —— 客户端拿它决定「功能开启」弹窗要不要弹。
+
+    `Player.initModuleState()`：`module.isOpened = moduleOpenMark[module.markIndex]`；
+    `moduleManager.popModuleOpen()` 会把所有 `!isOpened` 且已解锁的模块挨个弹一遍
+    （`table_function_open` 32 条，我们建号就全解锁 + 30 级 → 一进游戏连弹 32 个）。
+    弹完客户端会把这些 mark 写回 `player.setmoduleopenmark`，服务端存下来。
+
+    私服默认（`store.MODULE_OPEN_POPUP_SKIP`）把 mark **全标成已弹过** → 不弹。
+    形状是 `{markIndex: 1}`（客户端是 `moduleOpenMark[module.markIndex]` 取值判断），
+    markIndex 就是 `table_function_open[key].mark_index`（这张表 32 条，1..32 连续）。
+    """
+    marks = player.get("moduleOpenMark")
+    out: dict = {}
+    if isinstance(marks, dict):
+        out = {str(k): v for k, v in marks.items()}
+    elif isinstance(marks, (list, tuple)):
+        # 老存档里存的是客户端直接报上来的**数组** `[1,2,3,…]`。
+        # ⚠️ 不能原样回给客户端：它读的是 `moduleOpenMark[module.markIndex]`
+        # （markIndex 从 1 起），拿数组当下标会整体错一位。
+        out = {str(mi): 1 for mi in marks}
+    if not store.MODULE_OPEN_POPUP_SKIP:
+        return out
+    from .. import items as items_mod
+
+    for row in (items_mod.table("table_function_open") or {}).values():
+        mi = (row or {}).get("mi")
+        if mi is not None:
+            out[str(mi)] = 1
+    return out
 
 
 def _agent_block() -> dict:

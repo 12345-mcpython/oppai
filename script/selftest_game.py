@@ -819,6 +819,45 @@ def exchange_check(ok: bool) -> bool:
     return ok
 
 
+def module_open_check(ok: bool) -> bool:
+    """「功能开启」弹窗的开关（服务端控制，不动客户端）。
+
+    客户端 `MainLayer._updateAnimation()` 里有 `moduleManager.popModuleOpen()`：
+    它把所有「已解锁但 `isOpened` 还是假」的模块挨个弹一遍动画（`table_function_open`
+    32 条）。而 `isOpened` 来自登录块的 `moduleOpenMark[mark_index]`
+    （`Player.initModuleState`），弹完客户端会回写 `player.setmoduleopenmark`。
+    私服默认把 32 个 mark 全标成已弹过 → 一进游戏不再连弹 32 个。
+    """
+    login = call("agent.getlogindata", {}, 147)
+    marks = (login.get("data") or {}).get("moduleOpenMark")
+    if not isinstance(marks, dict):
+        print(f"  BAD moduleOpenMark 不是 map：{type(marks)}（客户端是 [markIndex] 取值）")
+        return False
+    from gamesrv import items as items_mod
+
+    table = items_mod.table("table_function_open") or {}
+    want = sorted({str(int((row or {}).get("mi"))) for row in table.values()
+                   if (row or {}).get("mi") is not None})
+    missing = [mi for mi in want if not marks.get(mi)]
+    if missing:
+        print(f"  BAD moduleOpenMark 缺 {len(missing)} 个 mark（{missing[:6]}…）"
+              f"→ 这些功能的开启弹窗还会弹")
+        return False
+    # 客户端弹完会回写；服务端要能收（并且别把数组当 map 回给它）
+    r = call("player.setmoduleopenmark", [1, 2, 3], 148)
+    if r.get("code") != 200:
+        print(f"  BAD player.setmoduleopenmark code={r.get('code')} {r}")
+        return False
+    marks2 = ((call("agent.getlogindata", {}, 149).get("data") or {})
+              .get("moduleOpenMark"))
+    if not isinstance(marks2, dict) or not marks2.get("1"):
+        print(f"  BAD 回写后 moduleOpenMark 形状不对：{type(marks2)} {str(marks2)[:80]}")
+        return False
+    print(f"  OK  功能开启弹窗：登录块 moduleOpenMark 覆盖 {len(want)} 个 mark"
+          f"（默认不弹）；player.setmoduleopenmark 可回写")
+    return ok
+
+
 def main():
     cases = [
         ("agent.getlogindata", {}),
@@ -905,6 +944,13 @@ def main():
         ok = exchange_check(ok)
     except Exception as exc:  # noqa: BLE001
         print(f"  BAD 交易所自检异常: {exc}")
+        ok = False
+
+    print()
+    try:
+        ok = module_open_check(ok)
+    except Exception as exc:  # noqa: BLE001
+        print(f"  BAD 功能开启弹窗自检异常: {exc}")
         ok = False
 
     print()

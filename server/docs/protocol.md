@@ -566,6 +566,51 @@ presented_key / presented_count          额外赠送
 非 200 时客户端 `ccuiManager.toast(EXCHANGE_ERR_CODE_DICT[code])`，
 所以码必须是表里这几个，**不能自己编**（编了 `toast(undefined)`）。
 
+### 6.6 功能开启标记（`moduleOpenMark`）
+
+进主界面时客户端会弹「功能开启」动画，触发链是：
+
+```js
+MainLayer._updateAnimation()  →  moduleManager.popModuleOpen()
+popModuleOpen():  list = dataManager.player.updateModuleState()   // 见下
+                  if (!list) return;                              // 空 = 不弹
+                  op.touchEnabled = false;
+                  for (each) ccuiManager.createModuleUnlockEffect(module.unlockDesc);
+
+Player.updateModuleState():
+    for (k in this._moduleState) {
+        var module = this._moduleState[k];
+        if (!module.isOpened) {                       // ★ 要不要弹就看它
+            if (等级/关卡/引导条件都满足) {
+                if (module.unlockDesc) updateList.push(module);
+                requestList.push(module.markIndex);
+                module.isOpened = true;
+            }
+        }
+    }
+    if (requestList.length) this.requestUpdateModuleOpenMark(requestList);
+    return updateList;
+
+Player.initModuleState():   module.isOpened = moduleOpenMark[module.markIndex];
+                            // ↑ 这个 moduleOpenMark 是**登录块**里的字段
+```
+
+也就是说弹窗由**服务端的一个字段**决定：登录块 `moduleOpenMark` 里
+`mark_index`（`table_function_open[key].mark_index`，这张表 32 条、1..32 连续）
+对应的值是不是真。
+
+* 私服默认把 32 个 mark 全标成已弹过 → **一个都不弹**
+  （`store.MODULE_OPEN_POPUP_SKIP = False` 还原原版：每个系统第一次开启弹一次；
+  建号就 30 级 + 全解锁，所以原版行为是一进游戏连弹 32 个）。
+* 客户端弹完会把这一批 `markIndex` 用 `player.setmoduleopenmark` 回写，
+  请求体是一个**裸数组** `[1,2,3,…]`（`server.request(route, arg, null, true)`）。
+  服务端存成 `{markIndex: 1}` 的 **map** —— 直接回数组的话客户端
+  `moduleOpenMark[module.markIndex]` 会整体错一位。
+
+顺带：`table_function_open.unlock_lv` 是「XX 系统几级开」的唯一出处
+（如 `100005` 培养系统 = 6 级、`100029` 分区战场 = 25 级），
+私服建号直接给 30 级就是为了这个（见 `store.MIN_PLAYER_LV`）。
+
 ---
 
 ## 7. 切主场景

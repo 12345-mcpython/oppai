@@ -657,6 +657,20 @@ def favor_char_keys(player: dict) -> list:
 
 # 新手引导位掩码全 1 = 所有引导都已完成。见 new_player() 里的说明。
 GUIDE_MARK_DONE = 0x7FFFFFFF
+
+# 「功能开启」弹窗：私服默认**不弹**。
+#
+# 客户端 `MainLayer._updateAnimation()` 里有一条 `moduleManager.popModuleOpen()`：
+# 它遍历 `player.updateModuleState()`，把所有 **已解锁但 `isOpened` 还是假**的模块
+# 挨个弹一遍「功能开启」动画（`table_function_open` 有 32 条，我们建号就把
+# `moduleState[*].isUnlock` 全给了 1、等级也直接 30，所以一进游戏会连弹 32 个）。
+#
+# 而 `isOpened` 是 `Player.initModuleState()` 从**登录块的 `moduleOpenMark[mark_index]`**
+# 读的（`Player.updateModuleState` 里弹完会把这些 mark 写回 `player.setmoduleopenmark`）。
+# ⇒ 服务端只要在登录块里把 mark 全标成"已弹过"就不会弹，**不用动客户端**。
+#
+# 想还原原版手感：`MODULE_OPEN_POPUP_SKIP = False`（老存档里被写回的 mark 仍然生效）。
+MODULE_OPEN_POPUP_SKIP = True
 # 玩家「指挥部」初始等级。客户端按等级解锁功能，最靠前的门槛是编成里的
 # 「培养 / 升级军士」= 6 级，所以默认给 30 一步到位（顺带过了 25 级那批）。
 MIN_PLAYER_LV = 30
