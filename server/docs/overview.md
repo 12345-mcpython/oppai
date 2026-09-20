@@ -237,6 +237,7 @@ vanilla 不传参 → 游戏代码 `function (eventName) { if (/began\d/.test(ev
 | 分区关卡一进去就提示**「挑战次数用完啦~TuT」** | 客户端 `isCanBattle` 末尾是**裸比较** `challengeTimes >= challengeTimeLimit`，**没有** `!limit` 那层保护（那层只在 `checkLevelChallengeTimes` 里，而它没被调用）。服务端给 `challengeTimes: 0` 时 `0 >= 0` 成立 → 直接判没次数 | `gamesrv/instance.py` 的 `SUBAREA_DAILY_TIMES` 必须 **> 0**；跨天重置也得服务端做（`sync_subarea_plays`） |
 | 通关后**好感度弹窗不出现/显示 +0** | 数量要回在 `rewards.levelReward.favor`（"给谁"由客户端拿自己 `table_level.favor_char_key` 算）；回了 `data.rewards.favorReward.favors` 会走到客户端一个 `.count` 写错的死分支 | `gamesrv/favor.py` + `instance.py` |
 | 编成 →「队伍」**一进去就停在第二队**（点左箭头才回到第一队） | 客户端自己的 off-by-one：入口是 `new TeamDetailLayer()`（**不带下标**），于是走 `_initData` 的兜底 `this.curTeamIdx = _.findIndex(this.teams, {index: DEFAULT_TEAM_IDX})`，而模块常量 `DEFAULT_TEAM_IDX = 1`；`team.index` 是**服务端下发**的，本服 0 起 ⇒ 命中下标 1 = 第 2 队。队伍 index 必须 0 起是客户端自己定的（`TEAM_COUNT_LIMIT = 5`、`_setCurTeamIdx` 夹到 [0,4]、`getCurTeam()` = `findIndex{index: curTeamIdx}`、`CommonTeamItem` 传 `getCurTeamIdx() - 1`），改服务端 index 会让**第 5 队**开战前被夹成第 4 队 ⇒ 服务端没有杠杆 | `patch.js` 末尾 TEAM-DETAIL（运行时改成「当前队伍」）；反汇编依据：`differences.md` A3d |
+| 宿舍**换完衣服整个界面点不动**（画面在动、音乐照放，屏幕上留着「着裝中…」） | **不是卡顿、也不是服务端**：客户端 `FavorLayer._playChangeClothes` 会把全局触摸闸 `op.touchEnabled = false`，而**唯一开闸的地方是 `end` 动画的最后一帧回调**；引擎 `ActionTimeline::step()` 在回调返回后又执行 `_playing = _loop`（用刚播完那段的 loop）并把新动画直接拽到最后一帧（`_currentFrame = _endFrame`）→ `end` 一帧没播、它的回调永远不响 ⇒ 闸门再也开不回来。探针实测：`touchEnabled=false`、时间轴停在新动画的 `endFrame`、trace 里只有 `FIRE …anim=began` 没有 `end`。换背景 `_replaceBg` / `LoadingLayer.show` 等同款写法都会中招 | 引擎补丁 **③b**（`engine/build/fix_lastframe_replay.py`，见 [`ENGINE_PATCHES.md`](../../engine/ENGINE_PATCHES.md)）；**引擎还没重编时：重启游戏**（回到登录）即可恢复 |
 
 ### 6.1 SDK 桩里的「死键」——一类很容易误判成 JS 层 bug 的问题
 
@@ -886,7 +887,7 @@ python script\repl.py "jsb.reflection.callStaticMethod('org/cocos2dx/javascript/
 | `docs/reverse-engineering.md` | jsc 反汇编器原理、运行时探测手法、排障套路 |
 | `docs/build.md` | 打包逻辑（为什么这么做） |
 | `script/README.md` | 工具索引（哪个脚本干什么、加新模块的推荐流程） |
-| `E:\code\zcsmw\engine\ENGINE_PATCHES.md` | 13 个引擎补丁的证据链与复现脚本 |
+| `E:\code\zcsmw\engine\ENGINE_PATCHES.md` | 14 个引擎补丁的证据链与复现脚本 |
 
 仓库外的关键路径：
 

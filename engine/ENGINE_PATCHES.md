@@ -10,6 +10,7 @@
 cd E:\code\zcsmw\engine\build
 python fix_lastframe_engine.py      # ① 最后一帧回调传动画名（战斗收尾根因）
 python fix_precedence.py            # ② RotationSkewFrame 运算符优先级（原生崩溃根因）
+python fix_lastframe_replay.py      # ③b 回调里再 play 新动画时别按「播完」收尾（宿舍换装卡死根因）
 python quiet_engine.py              # ③ JniHelper 日志降噪
 python add_bugly.py                 # ④ Bugly 全局函数
 python add_touch.py                 # ⑤ cc.Touch 力度方法（战斗摇杆）
@@ -28,7 +29,7 @@ python fix_scrollview_propagate.py  # ⑯ 触摸传播穿不过裸 Node（列表
 
 > ⚠️ **只要目标文件在 `engine/src/`（第三方源码、被 .gitignore 挡着）的补丁，
 > 每次重编都得重跑** —— 别人的 `src/` 是干净的。`build.ps1 -Engine` 会自动重跑
-> 上面这 8 个（① ② ③ ⑫ ⑬ ⑭ ⑮ ⑯，都写成幂等的）。
+> 上面这 9 个（① ② ③b ③ ⑫ ⑬ ⑭ ⑮ ⑯，都写成幂等的）。
 > 改 `engine/build/oppai-engine/**` 的那些（④~⑪）结果**已经跟着仓库发布了**，不用重跑。
 
 > ⚠️ `build.ps1` **必须是 UTF-8 带 BOM**。Windows PowerShell 5.1 会把无 BOM 的
@@ -189,6 +190,96 @@ tl.setLastFrameCallFunc(function (eventName) {
 ```
 
 一个引擎 bug 同时造成两处症状。
+
+---
+
+## ③b 在「最后一帧回调」里再 play 新动画 —— 宿舍换装后整个界面不响应
+
+**现象**（用户报的）：宿舍里给角色换衣服，换完**画面正常、音乐照放，但点哪都没反应**，
+屏幕上留着「着裝中…」。不是卡顿（`cc.director` 还在跑），是输入没了。
+
+**探针实测**（`op.touchEnabled` 上挂 setter + 包 `ActionTimeline`，见 trace）：
+
+```
+SET touchEnabled=false :: FavorLayer<._playChangeClothes@favorlayer.js:1080:13
+PLAY began loop=false tl=1
+REG  lastFrame tl=1 anim=began
+FIRE lastFrame tl=1 anim=began          ← began 的回调响了
+CB 到达
+PLAY end loop=false tl=1
+REG  lastFrame tl=1 anim=end            ← 注册了……
+<<< 没有 FIRE lastFrame tl=1 anim=end >>>   ← 永远不响
+```
+
+换装那段 JS（`src/ui/favor/favorlayer.js`）：
+
+```js
+op.touchEnabled = false;                      // 关掉全局触摸闸
+tl.play("began", false);
+tl.setLastFrameCallFunc(function () {
+    asstLayer.fadeIn(...);
+    tl.play("end", false);                    // ← 在回调里 play 了**非循环**动画
+    tl.setLastFrameCallFunc(function () {
+        op.touchEnabled = true;               // 唯一开闸的地方
+        tl.clearLastFrameCallFunc();
+    });
+    if (cb) cb();
+});
+```
+
+**根因**（cocostudio `CCActionTimeline.cpp` 的 `step()` 收尾分支）：
+
+```cpp
+    else
+    {
+        if(_lastFrameListener != nullptr)
+            _lastFrameListener();     // 回调里 play("end", false)：
+                                      //   _loop=false / _currentFrame=130 / _playing=true
+        _playing = _loop;             // ← 用**刚播完那段**的 loop 覆盖，新动画被按下暂停
+        if(!_playing) {
+            _time = _endFrame * _frameInternal;
+            _currentFrame = (int)(_time / _frameInternal);   // ← 直接拽到新动画最后一帧
+            stepToFrame(_currentFrame);
+        }
+        else
+            gotoFrameAndPlay(_startFrame, _endFrame, _loop);
+    }
+```
+
+新动画一帧都没播就被判定"播完了"，于是**它自己的最后一帧回调永远不会响** ——
+`op.touchEnabled` 卡在 `false`。实测状态完全吻合：探针读到
+`frame=236 / endFrame=236 / playing=false`（就是被拽过去的那一帧）。
+
+> 战斗那套（`began1→loop1→end1→…`）没踩到，是因为它回调里 play 的是
+> **循环**动画（`playAnimation("loop"+N, true)`），`_playing = _loop` 恰好是 true，
+> 不进那个"拽到最后一帧"的分支；`end1` 是从 **frameEvent** 回调里 play 的，
+> 走的是另一条路径（`stepToFrame → emitFrameEvent`），不受影响。
+> 宿舍换装/换背景、`LoadingLayer.show`（began→loop）、HeroList、QuestLayer
+> 等十几处都是「回调里再 play」的写法，只要那一段是非循环就会中招。
+
+**修法**：加一个 play 代数计数器，回调返回后发现代数变了就直接 return，
+把收尾交给新动画自己：
+
+```cpp
+    else
+    {
+        unsigned int playGen = _playGen;      // oppai
+        if(_lastFrameListener != nullptr)
+            _lastFrameListener();
+        if (_playGen != playGen)              // 回调里又 play 了 → 别按"播完"收尾
+            return;
+
+        _playing = _loop;
+        ...
+    }
+```
+
+`_playGen` 在 `gotoFrameAndPlay(...)` 里自增（所有 `play` 都汇到那里）。
+循环动画原路径行为不变。
+
+**验证**：重编引擎后，宿舍换装走完 `began→end`，`touchEnabled` 能回到 true；
+`out/` 里那个 trace 探针可以复现（`probe.js` 的 REPL 注入，
+给 `op.touchEnabled` 挂 setter + 包 `ActionTimeline.setLastFrameCallFunc`）。
 
 ---
 

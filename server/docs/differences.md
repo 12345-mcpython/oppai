@@ -22,7 +22,7 @@
 | # | 改了什么 | 为什么 | 在哪 |
 |---|---|---|---|
 | A1 | **整个服务端自研** | 原版服务端已随停服消失。纯标准库 Python，CDN/gate/login/game 四个端口 | `server/` |
-| A2 | **重建 `libcocos2djs.so`** | 原版 `.so` 是用**改过的** cocos2d-js 3.6 编的，仓库里那版对不上。按 v3.6 重建 + 13 个补丁 | `engine/`、[`engine-debug.md`](engine-debug.md) |
+| A2 | **重建 `libcocos2djs.so`** | 原版 `.so` 是用**改过的** cocos2d-js 3.6 编的，仓库里那版对不上。按 v3.6 重建 + 14 个补丁 | `engine/`、[`engine-debug.md`](engine-debug.md) |
 | A3 | **客户端适配 9 条**（`patch.js`） | 引擎换了，几个绑定名对不上，不改直接黑屏；另外引擎里 `responseConfig` 不派发、少了几个绑定，还有一条是客户端自己的 off-by-one（见 A3d） | `server/client/patch.js` 头部 |
 | A3b | **响应派发自己补一层** | 原版靠 `src/util/server.js` 的 `responseConfig` 把响应里的模块块推给各中心，这套引擎上**一次都没跑**（实测 `Favor.prototype.update` 调用 0 次）。`patch.js` 的 RESP-DISPATCH 照它的三类写法补齐才生效 | [protocol.md §5.2](protocol.md) |
 | A3c | **地址改成运行时改写**（`URL-REWRITE`，默认行为） | jsc 里的地址只能等长替换（`<host>:18080` 必须 19 字节 → **host 必须 13 字符**），而且那几个文件是就地改写的，换地址时替换逻辑找不到旧串会**静默跳过**、整包作废。现在 jsc 保留原始地址，改由 `patch.js` 在运行时改写 XHR / WebSocket；`project.manifest` 按 JSON 重写（它走原生 curl，拦不到）。代价：包内仍带官方地址 | [`REPRODUCE.md`](../../REPRODUCE.md) Step 4b、`script/build_apk.py`（老路子 `--patch-jsc-urls`） |

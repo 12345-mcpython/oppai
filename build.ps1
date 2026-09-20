@@ -122,6 +122,7 @@ if ($Engine) {
     foreach ($fx in @(
         "fix_lastframe_engine.py",   # ① 最后一帧回调传动画名（战斗收尾根因）
         "fix_precedence.py",         # ② RotationSkewFrame 运算符优先级（原生崩溃根因）
+        "fix_lastframe_replay.py",   # ③b 回调里再 play 新动画时别按「播完」收尾（宿舍换装卡死根因）
         "patch_scriptingcore.py",    #    JS 异常内容打到 logcat（否则只有 evaluatedOK == JS_FALSE）
         "fix_js_log.py",             # ⑬ 让引擎自己的 JS log() 在 release 包里也能打
         "fix_null_texture.py",       #    Sprite::draw 的空贴图崩溃
