@@ -1534,6 +1534,53 @@ def gacha_check(ok: bool) -> bool:
     return ok
 
 
+def char_manual_check(ok: bool) -> bool:
+    """登录块 `char.charManual` 不能是空的 —— 空了「菜单 → 情报室」里一个角色都没有。
+
+    情报室的列表是 `Illustratedcommonlayer._init` 里的
+    `dataManager.character.getSoldierManualKeys()`，而它是
+
+        for (k in _charManual)
+            if (charManager.getCharType(k) === CHAR_TYPE.SOLDIER &&
+                charManager.getSoldierCardType(k) === CARD_TYPE.TEAMMATE) res.push(k)
+
+    ⇒ **`charManual` 空 = 情报室空**（实机表现就是「情报室里无角色」）。
+    客户端自己按 `card_type` 过滤（自军/敌兵两个页签都吃这份），所以服务端把
+    `table_soldier` 里出现过的角色 key 全发过去即可。
+    """
+    from gamesrv import items, store
+
+    bad = []
+    char = ((call("agent.getlogindata", {}, 200).get("data") or {}).get("char") or {})
+    manual = char.get("charManual")
+    if not isinstance(manual, dict) or not manual:
+        bad.append(f"char.charManual 是空的（{type(manual).__name__}）→ 情报室里没角色")
+    else:
+        # 键必须是客户端查得到的角色 key，值要能合并（isNewHead）
+        cards = (items.table("table_soldier") or {}).get("card") or {}
+        known = {str(r.get("ck")) for r in cards.values() if isinstance(r, dict)}
+        known |= {str(k) for k in (items.table("table_hero") or {})}
+        known |= {str(k) for k in (items.table("table_mecha") or {})}
+        unknown = [k for k in list(manual)[:200] if k not in known]
+        if unknown:
+            bad.append(f"charManual 里有客户端不认识的 key：{unknown[:5]}")
+        if not all(isinstance(v, dict) for v in list(manual.values())[:20]):
+            bad.append("charManual 的值要是对象（客户端读 isNewHead 并逐字段合并）")
+        # 自军军士的数量应该 > 0（情报室第一个页签要有东西）
+        self_keys = [k for k, v in (items.table("table_soldier") or {}).get("master", {}).items()
+                     if str(v) == "1"]
+        if self_keys and not any(k in manual for k in self_keys):
+            bad.append("charManual 里一个「自军军士」都没有（情报室军士页会空）")
+
+    if bad:
+        for one in bad:
+            print(f"  BAD {one}")
+        return False
+    print(f"  OK  角色图鉴：登录块 char.charManual 有 {len(manual)} 个角色 key"
+          f"（菜单→情报室的列表就是它的键，非空即不会「无角色」）")
+    return ok
+
+
 def main():
     cases = [
         ("agent.getlogindata", {}),
@@ -1648,6 +1695,13 @@ def main():
         ok = arena_check(ok)
     except Exception as exc:  # noqa: BLE001
         print(f"  BAD 演习场自检异常: {exc}")
+        ok = False
+
+    print()
+    try:
+        ok = char_manual_check(ok)
+    except Exception as exc:  # noqa: BLE001
+        print(f"  BAD 角色图鉴自检异常: {exc}")
         ok = False
 
     print()

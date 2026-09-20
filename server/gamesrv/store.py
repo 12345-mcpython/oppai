@@ -981,6 +981,44 @@ def player_heros(player: dict) -> list:
     return got
 
 
+# ---------------------------------------------------------------------------
+# 角色图鉴（主界面 → 菜单 → 情报室）
+# ---------------------------------------------------------------------------
+CHAR_MANUAL_VERSION = 1
+
+
+def player_char_manual(player: dict) -> dict:
+    """登录块 `char.charManual`：`{charKey: {"isNewHead": 0}}`。
+
+    **情报室的角色列表就是这个 map 的键**（`Illustratedcommonlayer._init` 取
+    `dataManager.character.getSoldierManualKeys()`，而它是
+    `for (k in _charManual) if (getCharType(k) === SOLDIER && getSoldierCardType(k) ===
+    TEAMMATE) push(k)`）—— 原来我们发空 `{}`，所以玩家看到的是「**情报室里无角色**」。
+
+    客户端自己按 `card_type` 分页过滤（自军/敌兵两个页签都吃这份数据），
+    所以这里把 `table_soldier` 里出现过的**所有角色 key** 都发过去，
+    私服取舍：图鉴全解锁（原版靠"第一次获得/遇到"逐个解锁，见 differences.md §B）。
+    `isNewHead` 给 0，免得每个角色头上挂"新"点。
+
+    要还原原版就把 `CHAR_MANUAL_VERSION` 清掉并让它只发玩家已拥有的角色
+    （`player["soldiers"]` 里的 key + `player["heros"]`）。
+    """
+    from . import items as items_mod   # 局部 import：循环依赖
+
+    if int(player.get("charManualVersion") or 0) < CHAR_MANUAL_VERSION:
+        player["charManualVersion"] = CHAR_MANUAL_VERSION
+    keys = set()
+    cards = (items_mod.table("table_soldier") or {}).get("card") or {}
+    for row in cards.values():
+        if isinstance(row, dict) and row.get("ck"):
+            keys.add(str(row["ck"]))
+    for k in (items_mod.table("table_hero") or {}):
+        keys.add(str(k))
+    for k in (items_mod.table("table_mecha") or {}):
+        keys.add(str(k))
+    return {k: {"isNewHead": 0} for k in sorted(keys)}
+
+
 def player_mechas(player: dict) -> list:
     """玩家拥有的机甲列表（`data.char.mechas`）。"""
     got = player.get("mechas")
