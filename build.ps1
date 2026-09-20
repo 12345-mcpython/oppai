@@ -7,12 +7,22 @@
     .\build.ps1 -Install -Launch    # 装完直接启动
     .\build.ps1 -NoProbe            # 出正式包（不带 probe.js / REPL / 调试台）
     .\build.ps1 -Engine -Abi x86    # 只重编 x86 引擎
+    .\build.ps1 -PackAbis armeabi-v7a,armeabi
+                                    # 包里只带这两个 .so（不带 x86，省 24 MB）。
+                                    # 没选中的挪到 out\lib-abi-cache\，不删，能来回切。
+                                    # 真机就配 -Serial 用这套：-Install -Serial <手机>
 
 为什么默认两个 ABI 都编：MuMu 是 **x86** 模拟器，只带 armeabi 的包会被
 houdini（ARM->x86 二进制翻译层）接管，实测会在新手引导那段代码里被
 houdini 自己 trap 掉（tombstone 里唯一一帧永远是 /system/lib/libhoudini.so）。
 包里同时放 lib/x86 和 lib/armeabi，Android 按 abilist32 = x86,armeabi-v7a,armeabi
 自动优先选 x86，原生跑就不会再走 houdini。
+
+现成可用的 ABI（`game\lib\` 下）：armeabi（原版）、x86（自己编）、
+**armeabi-v7a（2026-09-20 自己编，NEON + 硬浮点，比 armeabi 快一截）**。
+arm64-v8a 编不了 —— 第三方预编译库（chipmunk/curl/freetype2/jpeg/lua/png/tiff/webp/
+websockets/zlib）和 SpiderMonkey 的 libjs_static.a 都**只有 armeabi / armeabi-v7a /
+x86** 三套，见 server\docs\build.md 的「ABI」那节。
 
 产物统一落在 out\ 下：
 
@@ -31,6 +41,13 @@ param(
     [switch]$Launch,
     [switch]$NoProbe,
     [string[]]$Abi = @("armeabi", "x86"),
+    # 【只有打包用】只带这几个 ABI 的 .so（引擎产物在 game\lib\<abi>\）。
+    #   留空 = 现有的全带上（默认，行为不变）。
+    #   例：真机包 .\build.ps1 -Install -Serial <手机> -PackAbis armeabi-v7a,armeabi
+    #       模拟器包 .\build.ps1 -Install -PackAbis x86
+    #   ⚠️ 和 -Abi 不是一回事：-Abi 是"重编哪几个引擎"，这个是"包里带哪几个"。
+    #   没选中的 .so 会被挪到 out\lib-abi-cache\（不删），下次选上自动挪回来。
+    [string[]]$PackAbis = @(),
     # 打包用的对外地址。**留空 = 读服务端配置**（gamesrv/config.py 的 PUBLIC_HOST，
     # 也就是 GS_PUBLIC_HOST，默认 127.0.0.1），这样只有一处要设。
     #   （默认 127.0.0.1 = adb reverse 工作流：真机插 USB 就能跑，不需要局域网/
@@ -202,6 +219,7 @@ if (-not $HostName) {
 $buildArgs += @("--host", $HostName, "--port", "$Port", "--login-port", "$LoginPort")
 if ($NoProbe) { $buildArgs += "--no-probe" }
 if ($JscUrlPatch) { $buildArgs += "--patch-jsc-urls" }
+if ($PackAbis.Count -gt 0) { $buildArgs += @("--abis", ($PackAbis -join ",")) }
 & python @buildArgs
 if ($LASTEXITCODE -ne 0) { throw "build_apk.py 退出码 $LASTEXITCODE" }
 $apk = Join-Path $Out "zcsmw-mod-signed.apk"

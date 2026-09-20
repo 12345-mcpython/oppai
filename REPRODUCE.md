@@ -342,12 +342,18 @@ adb -s <手机序列号> reverse --list
 python script\serve.py
 
 # 3) 打包 + 装到真机（-Serial 指到手机；不带任何地址参数，读服务端配置）
-.\build.ps1 -Install -Serial <手机序列号>
+#    真机建议顺手只带 arm 的 .so（省 8.3 MB，不用带模拟器那份 x86）：
+.\build.ps1 -Install -Serial <手机序列号> -PackAbis armeabi-v7a,armeabi
 
 # 4) 现在直接装就行（targetSdk 已经是 33，见上面「装得上」那行）
 #    万一你手上的包还是旧的 targetSdk=23，才需要这条官方开关（不需要 root）：
 adb -s <手机序列号> install -r --bypass-low-target-sdk-block out\zcsmw-mod-signed.apk
 ```
+
+> **ABI**：包里现在有 `armeabi`（原版）/ `armeabi-v7a`（2026-09-20 自己编）/ `x86`（模拟器）三份，
+> 系统自己按设备挑 —— 实测一加 PLZ110 挑的是 **`primaryCpuAbi=armeabi-v7a`**，
+> MEmu 挑 `x86`。`arm64-v8a` 暂时编不了（第三方预编译库和 SpiderMonkey 都没有 arm64 那套），
+> 详见 [`build.md`](server/docs/build.md) 的「ABI」一节。
 
 **实测结论（一加 PLZ110，Android 16 / SDK 36）**：
 

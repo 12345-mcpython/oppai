@@ -742,6 +742,97 @@ def normalize_android_manifest() -> None:
         log(f"      - {c}")
 
 
+# ---------------------------------------------------------------------------
+# 打包哪几个 ABI 的 .so（`--abis`）
+# ---------------------------------------------------------------------------
+# `game/lib/<abi>/libcocos2djs.so` 是引擎产物：原版包只有 armeabi / x86，
+# 我们后来自己编了 armeabi-v7a（`build.ps1 -Engine -Abi armeabi-v7a` 会把产物
+# 直接拷进 `game/lib/armeabi-v7a/`）。
+#
+# 真机只用得上 arm 那套；x86 那 24 MB 纯粹是给模拟器/Nox 这类 x86 环境用的。
+# 所以打包支持只带指定 ABI：
+#
+#     python script\build_apk.py --abis armeabi-v7a,armeabi
+#
+# 不选的 ABI **不删**，挪到 `out\lib-abi-cache\<abi>\` 存着，下次选上再挪回来
+# —— `game/lib` 是 gitignore 的解包树，删了只能重新 apktool d，所以绝不真删。
+LIB_ABI_CACHE = os.path.join(WORK, "lib-abi-cache")
+KNOWN_ABIS = ("armeabi", "armeabi-v7a", "arm64-v8a", "x86", "x86_64")
+
+
+def _abi_dirs_in(root: str) -> dict:
+    """`{abi: [该目录下的 .so 文件]}`。"""
+    out = {}
+    if not os.path.isdir(root):
+        return out
+    for name in os.listdir(root):
+        d = os.path.join(root, name)
+        if not os.path.isdir(d):
+            continue
+        sos = [os.path.join(d, f) for f in os.listdir(d) if f.endswith(".so")]
+        if sos:
+            out[name] = sos
+    return out
+
+
+def select_lib_abis(want) -> None:
+    """只保留 `want` 里的 ABI（空 = 不动，保持现在的样子）。
+
+    没选中的挪进 `LIB_ABI_CACHE`，选中的（哪怕之前被挪走过）挪回来 —— 幂等，可来回切。
+    """
+    libdir = os.path.join(APK_DIR, "lib")
+    in_tree = _abi_dirs_in(libdir)
+    in_cache = _abi_dirs_in(LIB_ABI_CACHE)
+
+    if not want:
+        if in_tree:
+            detail = "、".join(f"{a} {sum(os.path.getsize(f) for f in fs)/1048576:.1f}MB"
+                               for a, fs in sorted(in_tree.items()))
+            log(f"  .so ABI 全部打包（{detail}）；只带一部分用 --abis armeabi-v7a,armeabi")
+        return
+
+    want = [w.strip() for w in want if w.strip()]
+    bad = [w for w in want if w not in KNOWN_ABIS]
+    if bad:
+        raise SystemExit(f"!! 不认识的 ABI：{bad}（可用：{'、'.join(KNOWN_ABIS)}）")
+    miss = [w for w in want if w not in in_tree and w not in in_cache]
+    if miss:
+        hint = f"   要自己编：.\\build.ps1 -Engine -Abi {' '.join(miss)}"
+        if "arm64-v8a" in miss:
+            hint += (
+                "\n   ⚠️ 但 **arm64-v8a 现在编不了**：进 engine 的第三方预编译库"
+                "（chipmunk/curl/freetype2/jpeg/lua/png/tiff/webp/websockets/zlib）和"
+                "SpiderMonkey 的 libjs_static.a 都只有 armeabi / armeabi-v7a / x86 三套，"
+                "得先把这些依赖交叉编译出 arm64 版本（见 server\\docs\\build.md 的「ABI」节）")
+        raise SystemExit(
+            f"!! 要的 ABI 在 game/lib 和 {os.path.relpath(LIB_ABI_CACHE)} 里都没有：{miss}\n"
+            f"   现有：{sorted(set(in_tree) | set(in_cache))}\n{hint}")
+
+    os.makedirs(LIB_ABI_CACHE, exist_ok=True)
+    restored, parked = [], []
+    for abi in sorted(set(in_tree) | set(in_cache)):
+        src_tree = os.path.join(libdir, abi)
+        src_cache = os.path.join(LIB_ABI_CACHE, abi)
+        if abi in want:
+            if not os.path.isdir(src_tree) and os.path.isdir(src_cache):
+                shutil.move(src_cache, src_tree)
+                restored.append(abi)
+        else:
+            if os.path.isdir(src_tree):
+                if os.path.isdir(src_cache):
+                    shutil.rmtree(src_cache, ignore_errors=True)
+                shutil.move(src_tree, src_cache)
+                parked.append(abi)
+
+    kept = _abi_dirs_in(libdir)
+    size = sum(os.path.getsize(f) for fs in kept.values() for f in fs) / 1048576
+    log(f"  .so ABI 只打包 {sorted(kept)}（{size:.1f} MB）")
+    if restored:
+        log(f"      从缓存挪回：{restored}")
+    if parked:
+        log(f"      挪出（留在 {os.path.relpath(LIB_ABI_CACHE)}）：{parked}")
+
+
 def prune_stale_dex() -> None:
     """清理 apktool 增量缓存里已经不存在的 dex。
 
@@ -1021,6 +1112,9 @@ def main():
     ap.add_argument("--no-url-patch", action="store_true",
                     help=argparse.SUPPRESS)   # 已默认，保留只为兼容老命令
     ap.add_argument("--out", default=os.path.join(WORK, "zcsmw-mod.apk"))
+    ap.add_argument("--abis", default="",
+                    help="只打包这几个 ABI 的 .so，逗号分隔（如 armeabi-v7a,armeabi）。"
+                         "留空 = game/lib 里现有的全都带上；不选的挪到 out\\lib-abi-cache\\ 不删")
     ap.add_argument("--skip-prepare", action="store_true", help="只打包，不重新改资源")
     ap.add_argument("--keep-intermediate", action="store_true", help="保留 aligned 中间产物")
     ap.add_argument("--print-host", action="store_true",
@@ -1039,6 +1133,9 @@ def main():
                        args.probe, not args.no_probe,
                        patch_urls=args.patch_jsc_urls)
         prune_stale_dex()
+
+    # 打包哪几个 ABI 的 .so（--abis；留空 = 全带）
+    select_lib_abis([a for a in args.abis.split(",") if a.strip()])
 
     apktool_build(args.out)
     aligned = align(args.out)

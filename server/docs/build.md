@@ -306,6 +306,74 @@ apktool 会照样按「不压缩」处理，有时还会把原版 APK 里的 unk
 
 ---
 
+## ABI：打包哪几个 `.so`，以及能编哪几个
+
+### 包里现有的三份（`game\lib\<abi>\libcocos2djs.so`）
+
+| ABI | 来源 | 未压缩 | 包里（DEFLATE） |
+|---|---|---|---|
+| `armeabi` | 原版包自带 | 19.0 MB | 7.2 MB |
+| `armeabi-v7a` | **2026-09-20 自己编**（`.\build.ps1 -Engine -Abi armeabi-v7a`） | 18.1 MB | 6.9 MB |
+| `x86` | 自己编（MuMu 是 x86 模拟器，不走 houdini） | 24.0 MB | 8.3 MB |
+
+`manifest` 里是 `android:extractNativeLibs="true"`，所以 `.so` 在包里是**压缩**存放的
+（18 MB 的 so 只占 6.9 MB）—— 别拿 `libs/` 的字节数估包体积。
+
+### 只带一部分：`--abis` / `-PackAbis`
+
+```powershell
+.\build.ps1 -Install -Serial <手机序列号> -PackAbis armeabi-v7a,armeabi   # 真机
+.\build.ps1 -Install -PackAbis x86                                       # 模拟器
+python script\build_apk.py --abis armeabi-v7a --out out\zcsmw-mod-arm.apk # 只要 v7a
+```
+
+* 留空（默认）= `game\lib` 里现有的**全带上**，行为和以前一样。
+* 没选中的 ABI **不删**，挪到 `out\lib-abi-cache\<abi>\`；下次选上自动挪回来（幂等、能来回切）。
+  —— `game\lib` 是 gitignore 的解包树，删了只能重新 `apktool d`，所以这里绝不真删。
+* 要的 ABI 到处都没有时直接报错，并提示怎么编（`arm64-v8a` 会额外说明它为什么编不了）。
+
+实测体积：三份全带 **558.2 MB** → 只带 arm 两份 **549.9 MB**（省 8.3 MB = x86 那份压缩后的大小）；
+真机再用 `--abis armeabi-v7a` 单独打还能再省 7.2 MB（现代 ARM 设备都支持 v7a，`armeabi` 只剩兼容意义）。
+
+### 设备实际会挑哪一份
+
+Android 按包的 `lib/<abi>/` 和设备的 `abilist` 自己挑，**编出来的包不用管**；查结果：
+
+```powershell
+adb -s <设备> shell "dumpsys package com.cm.zcsmw.baidu | grep -iE 'primaryCpuAbi'"
+```
+
+实测（同一份「v7a + armeabi」的包）：
+
+* 一加 PLZ110（Android 16，`abilist=arm64-v8a`、`abilist32` 空 → 走厂商 32 位兼容层）
+  → **`primaryCpuAbi=armeabi-v7a`**（挑的是 v7a，不是 armeabi）；装上后冷启动正常、能登录、
+  logcat 无 `UnsatisfiedLinkError` / `dlopen failed`。
+* MEmu（Android 9，x86）→ `primaryCpuAbi=x86`。
+
+### 能编哪些 ABI（能不能出 arm64？）
+
+编 `libcocos2djs.so` 要用 NDK r10e 把 cocos2d-x 3.6 + SpiderMonkey 33.1.1 一起编，
+依赖两类**预编译库**，而它们只有三套：
+
+```
+engine\src\...\cocos2d-x\external\{chipmunk,curl,freetype2,jpeg,lua,png,tiff,webp,websockets,zlib}
+        → armeabi / armeabi-v7a / x86
+engine\src\...\js-bindings\external\spidermonkey\prebuilt\android\
+        → armeabi / armeabi-v7a / x86 的 libjs_static.a
+```
+
+所以：
+
+* **`armeabi-v7a`：能编**（上面三套都有），命令 `.\build.ps1 -Engine -Abi armeabi-v7a`，
+  产物会自动拷进 `game\lib\armeabi-v7a\`。v7a 有 NEON + 硬浮点，比 `armeabi`（ARMv5 软浮点）快。
+  > `build.ps1` 里 `-latomic` 只给 `armeabi` 加（`APP_LDFLAGS`），v7a 用空值链接通过 —— 实测如此。
+* **`arm64-v8a`：现在编不了**。缺的不是命令而是依赖：上面那 10 个第三方库 + SpiderMonkey
+  都**没有 arm64 版本**，得先把它们逐个交叉编译出来（SM 33 是 2014 年的代码，用现在的
+  NDK 编大概率还要改构建脚本），再让 `Application.mk` 走 `APP_PLATFORM=android-21`
+  （arm64 最低 API 21）。真机本来就能靠厂商 32 位兼容层跑 v7a，所以这件事优先级不高。
+
+---
+
 ## URL 怎么进客户端：默认**运行时改写**，老路子才是「等长替换」
 
 `.jsc` 里的字符串是 **长度前缀**存储的（像 Pascal 字符串），
