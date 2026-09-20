@@ -250,6 +250,9 @@ vanilla 不传参 → 游戏代码 `function (eventName) { if (/began\d/.test(ev
 | 商店里**金条换萌钞点下去弹不出东西/提示"资源不够啦……OAQ"** | 兑换的档位和「补满」规则都在客户端（`exchange_key_<次数>` + `receive_count = -1`），服务端要按同一套算：`times = todayExchangeTimes + 1` → 档位 → `table_resource_exchange[档位]`；`-1` 要补到上限而不是发 -1；失败码必须用客户端 `EXCHANGE_ERR_CODE_DICT` 里真有的（205 = 资源不够、204 = 今天次数用完），自己编的码会 `toast(undefined)` | `gamesrv/exchange.py` + [protocol.md §6.5](protocol.md) |
 | 点**充值 / 月卡 / 礼包**一直弹提示、买不了 | **故意的**：私服没有支付渠道。客户端的 `judgeexchangestate` 先回 `state≠0` 弹提示，`exchange.payment` 也回非 200（`201` 的文案是「充值成功」，回 200 会被当成充值成功） | `gamesrv/exchange.py` 的 `judge_state` + `differences.md` §B |
 
+| 点**演习场**没用（进去一个对手都没有、面板空的） | 登录块 `arena` 原来是桩 `{arenaInfo:{}, mechaSuperSkillCorrectOwn:{}}`，而 `ArenaCenter.ctor` 要 `{arenaInfo, rivals, resetTime, refreshTime}`——`rivals` 空就没有对手；另外 `arena.*` 那 4 条路由也没实现，点「挑战」连请求都发不出去 | `gamesrv/arena.py` + [protocol.md §6.9](protocol.md)（对手从 `table_friend_support_npc` 生成） |
+| 演习场打了**不弹结算面板** / 积分不动 | 结算回包的字段是 `ArenaLayer._fightResult(err, data)` **平铺**读的（`success`/`rewards`/`winsRewards`/`scoreInfo`/`battleData`/`winPoints`），回非 200 它直接 `return`（用户就卡在战斗结束、什么都不弹）；另外每条 `arena.*` 回包都要带 `data.arena`，否则 RESP-DISPATCH 没法把对手列表/积分刷回界面 | 同上 |
+
 ### 6.1 SDK 桩里的「死键」——一类很容易误判成 JS 层 bug 的问题
 
 `strip.py` / `gen_stubs.py` 删掉第三方 SDK 后，是按 `needed.json` **补空桩**：
@@ -807,7 +810,9 @@ WS 侧要替换构造函数（就出事）。定位靠的是**脱离游戏逻辑
       而客户端 `SignCenter` 把它当 **map**（`for (k in _signs)`）用 → 一条签到都没有，
       表现就是「点签到没用」（`normalSigns`/`eventSigns`… 那几个键客户端压根不读）。
       现在给真行：`{signKey, type, count, rewardCount, rewards, canSignToday,
-      beginTimeSec, endTimeSec, dialogue, soldierKey}`；`rewards` 是**按天分组的二维数组**。
+      beginTimeSec, endTimeSec, dialogue, soldierKey}`；`rewards` 是 **1 基的二维数组**
+      （客户端 `rewards[i + 1][j]`，i 从 0、j 从 1），而且**每天恰好一件**奖励
+      （`SignRewardItem._init` 只在 `length === 1` 时画真图标，多件一律用通用图标）。
       排期/奖励客户端表里**没有** → 自己定了一套 7 天循环（§D，旋钮 `sign.SIGN_REWARDS`）。
       顺带修了「领了东西背包不刷新」：回包带 `items` 块（`items.changed_block`，
       新道具不能塞进去，见 [protocol.md §5.2](protocol.md)）
@@ -820,6 +825,15 @@ WS 侧要替换构造函数（就出事）。定位靠的是**脱离游戏逻辑
       `table_soldier_master[charKey].type`（新抽了 `table_soldier_type.json`）。
       ⚠️ 表里 15 个派遣全要 20/30 级军士，建号发的 18 个是 1 级 → 得先培养军士才能派（原版设计）。
       掉落内容见 §D（`gainItemGroup` 的真实道具组客户端没有）
+- [x] **演习场**（`arena.*` 4 条，路由 86→90）：主界面「演习场」。登录块原来只有
+      `{arenaInfo:{}, mechaSuperSkillCorrectOwn:{}}`，而 `ArenaCenter.ctor` 要
+      `{arenaInfo, rivals, resetTime, refreshTime}` —— 一个对手都没有，点进去是空面板。
+      现在从 `table_friend_support_npc`（101 个 NPC，自带名字/等级/5 个军士 key）生成
+      8 个对手；积分/段位/连胜/刷新倒计时按 `table_arena_constant`（新抽了 4 张
+      `table_arena*`）算；赢了发 `pvp_rewards`（14 演习萌币）。
+      ⚠️ 两处形状坑：`refreshTime` **顶层和 `arenaInfo` 里都要发**、每条回包都要带
+      `data.arena`（客户端这条路的 cb 不带参数，靠 RESP-DISPATCH 落数据）——
+      见 [protocol.md §6.9](protocol.md)
 - [x] 文档：协议 / 逆向手法 / 打包逻辑 / 调试台 / 引擎调试 / 本总览 / **与原版的差异** / **从零复刻**
 
 ### 待办（按卡点排序）
@@ -855,22 +869,21 @@ WS 侧要替换构造函数（就出事）。定位靠的是**脱离游戏逻辑
    `{item, innSize, index}`），所以卡在「层的 `_recommendList` 是 0」。
    **不影响战斗**（这个弹窗是可选的好友助战）。
 5. **其余未实现的 route** —— `python script/route_gap.py --static` 能列出全部。
-   当前：客户端静态候选 **161** 条，服务端 **80** 条，缺 **81** 条。按单机价值排：
+   当前：客户端静态候选 **161** 条，服务端 **90** 条，缺 **79** 条。按单机价值排：
 
    | 命名空间 | 缺 | 说明 |
    |---|---|---|
-   | `detect.*` | 6 | 侦查玩法 |
-   | `diary.*` / `sign.*` / `convert.*` / `share.*` | 1+1+1+1 | 零散领奖类，工作量最小，适合热身 |
+   | `diary.*` / `convert.*` / `share.*` | 1+1+1 | 零散领奖类，工作量最小，适合热身 |
    | `boss.*` | 5 | 好友 BOSS（`getbosslist` 已实现并回空表） |
    | `society.*` / `societyclg.*` | 33+6 | 军团——单机价值低、量最大 |
-   | `friend.*` / `medal.*` / `arena.*` | 9+9+4 | 社交类，同上 |
+   | `friend.*` / `medal.*` | 9+9 | 社交类，同上 |
 
    ⚠️ **`rank.*` / `boss.getbosslist` 这类"回空表"不算缺口**：私服没有榜、没有好友，
    回空才是对的（见 `handlers/rank.py` 的论证），别当成没实现去"补"。
 
    ✅ 已经补完的：`equipment.*`(7)、`favor.*`(5)、`favorevent.*`(1)、
    **`char.upgradedaemon`**(1)、**`player.updateasst`**(1)、
-   `player.selecttalent`/`upgradetalent`。
+   `player.selecttalent`/`upgradetalent`、`sign.*`(1)、`detect.*`(6)、**`arena.*`**(4)。
 6. `hashKey` / `hmac64` 还没复刻（登录靠单位元绕过）；自研 DH 的完整算法也没还原。
 
 ---

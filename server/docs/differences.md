@@ -61,6 +61,8 @@
 | 扭蛋 | **空卡池**（界面显示"没有卡池"） | 正常 | 缺的是**运营配置**（见 §C） |
 | 公告 | 服务端 `var/notice.html` | 官方公告 | —— |
 | **充值 / 月卡 / 礼包（IAP）** | **不可购买**（客户端的 `judgeexchangestate` 会先回 state≠0，直接弹提示；`exchange.payment` 也故意非 200） | 真实支付渠道 | 要有支付渠道才能开；道具兑换本身没关（见 [protocol.md §6.5](protocol.md)） |
+| **演习场对手** | 从 `table_friend_support_npc`（101 个 NPC）里按等级挑 8 个，名字/等级/5 个军士全抄 NPC 行 | 真人的 PvP 匹配（原版是别的玩家的阵容） | 单机没有别的玩家，只能拿 NPC 顶。想换口味改 `arena.make_rivals()` |
+| **演习场重复打同一个对手** | 照给积分和萌币（`state` 只影响「已挑战」标记） | 未知；理论上一个对手只能打一次，但结算面板上有「再来一次」，客户端会拿同一个 `index` 再进战斗 —— 这里回非 200 会让用户卡在战斗结束什么都不弹 | 想限制就在 `arena.exit_fight()` 里按 `state` 拒绝（注意上面那个副作用） |
 
 > ⚠️ 行动力道具（100003）客户端 `limit_count` 是 **300**，而初始包发的是 999 ——
 > 这个是原版数据和我们初始值的冲突，`add_item` 已经不回缩了，但界面上仍可能对不齐。
@@ -126,6 +128,10 @@
 | 分区关卡开放时间 | **不给**（`deadline`/`limitDay`/`limitTime` 全缺 = 永久开放） | 客户端 `isSubareaLevelOpen` 在这三个字段全缺时直接 `return true`，所以这是**客户端自己认的"不限时"**，不是我编的时间表。原版的排期（哪个区几点开）没处可查 |
 | 分区章节次数 | **不限次**（`challengeTimes: -1`） | 这是**客户端自己的约定**：`Instance.updateActivityInstance/<` 见到 `-1` 就转成 `Number.MAX_VALUE`。所以不算我编的 |
 | 分区关卡**列表**从哪来 | 服务端只认 `table_chapter.type == "5"` 的 4 个章节（5001~5004） | 章节清单**只存在客户端表**里（服务端没有别的来源），所以抽了 `table_chapter.json`；顺序照表里的 `priority` |
+| 演习场**积分增减公式** | `swing = round((对手分 - 我分) * points_range / points_formula_a)`；赢 `+clamp(points_formula_c + swing, 1, points_volatility)`，输 `-clamp(points_formula_c - swing, 1, points_volatility)`（势均力敌 ±10） | 表里只给了系数（a=800 / c=15 / range=5 / volatility=10）、**没有任何公式**；原版服务端没了，无从考证。旋钮在 `arena.points_change()` |
+| 演习场**对手的段位/积分** | 段位在「我的段位 ±1」内随机，积分取该段位区间内、往我的积分附近靠（±`points_volatility*points_range`） | 表里有 `arena_rival_condition_weight_a/b/c`（100/100/100）但**语义无从考证**，`robot_rival_lv_range_mode1..4` 也只知道是等级区间 → 这里只用它做了「挑等级接近的 NPC」这个意图 |
+| 演习场**输了的奖励** | 给 `fail_coins`（14）个演习萌币，和赢的 `pvp_rewards`（`100019#14`）同量 | `pvp_rewards` 是客户端自己解析的（`ArenaSelectTeam` 显示「胜利奖励」），`fail_coins` 只是表里一个孤零零的 14，推断成"失败补偿" |
+| 演习场**赛季重置时间** | `arena_reset_first_date`(2016-01-01) 起每 `arena_reset_cycle_day`(14) 天一轮，取下一个轮次 | 这是照表算的（不是编的），但**原版到底重不重置积分**无从考证 —— 现在只把这个时间发下去给客户端显示倒计时，服务端不做赛季清零 |
 
 **反过来说，这些是"表里写死、和原版一致"的**（不用担心）：
 好感度升级曲线（`table_favor_upgrade`，500/700/…/90000，满级 15）、

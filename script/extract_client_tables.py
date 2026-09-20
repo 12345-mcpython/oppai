@@ -710,6 +710,46 @@ DAEMON_EXP_JS = r"""
 """
 
 
+# 演习场（ArenaCenter）。
+#
+#   `table_arena_constant` 玩法常量，服务端要用的几个：
+#       rival_count = 8                 一次给几个对手
+#       update_interval_by_player = 7200  对手列表刷新间隔（秒）—— `ArenaCenter.ctor`
+#                                       直接把它加到 `refreshTime` 上
+#       refresh_cost = "5" / refresh_cooldown = 120   手动刷新一次的花费与冷却
+#       rating_1..5 = 100/1000/2000/3000/4000        积分段位阈值（`rating` 1..5）
+#       level_rating_1..5 = "800001#800003"          该段位随机取的**战斗关卡 id**
+#       points_formula_a/b/c = 800/700/15            积分增减公式系数
+#       default_arena_points = 300 / min/max_arena_points = 100/10000
+#       pvp_rewards = "100019#14"       胜利奖励串（客户端 `ArenaSelectTeam` 自己解析）
+#       robot_rival_lv_range_mode1..4 = "1~55"/"56~62"/"62~70"/"70~120"  机器人等级区间
+#       arena_team_requirement_*        进场要求（等级 27 / 军士 3 个 / 14 天内有登录）
+#
+#   `table_arena_attr_correct_own` / `..._enemy`：战斗内的属性修正，键是 charKey
+#   （外加一个 "common"），值是 "起始#成长" 这种字符串 —— 客户端战斗自己读，服务端不用发。
+#
+#   `table_arena_mecha_super_skill_correct_own`：演习场里机甲超必杀的展示数据
+#   （键形如 "madfewt#1"），登录块的 `arena.mechaSuperSkillCorrectOwn` 用它。
+#
+#   `rival.soldier<i>` 是**table_soldier 的 key 字符串**（客户端 `ArenaCenter._init`
+#   用 `charManager.decodeSoldier()` 解出来挂到 `rival.soldiers[i]`），不是对象。
+ARENA_CONSTANT_JS = r"""
+(function () { return JSON.stringify(table_arena_constant); })()
+"""
+
+ARENA_ATTR_OWN_JS = r"""
+(function () { return JSON.stringify(table_arena_attr_correct_own); })()
+"""
+
+ARENA_ATTR_ENEMY_JS = r"""
+(function () { return JSON.stringify(table_arena_attr_correct_enemy); })()
+"""
+
+ARENA_MECHA_SKILL_JS = r"""
+(function () { return JSON.stringify(table_arena_mecha_super_skill_correct_own); })()
+"""
+
+
 def _dump(base: str, js: str, name: str):
     result = eval_remote(base, js, timeout=30.0)
     if not result.get("ok"):
@@ -783,6 +823,10 @@ def main() -> int:
         ("table_daemon_upgrade.json", DAEMON_UPGRADE_JS),
         ("table_daemon.json", DAEMON_JS),
         ("table_daemon_exp.json", DAEMON_EXP_JS),
+        ("table_arena_constant.json", ARENA_CONSTANT_JS),
+        ("table_arena_attr_correct_own.json", ARENA_ATTR_OWN_JS),
+        ("table_arena_attr_correct_enemy.json", ARENA_ATTR_ENEMY_JS),
+        ("table_arena_mecha_super_skill_correct_own.json", ARENA_MECHA_SKILL_JS),
         ("table_item.json", ITEM_JS),
     ]
     if args.only:

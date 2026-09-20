@@ -9,7 +9,8 @@ route 名字来自客户端 src/manager/datamanager.js：
 from __future__ import annotations
 
 from ..gameproto import CODE_OK
-from .. import config, detect, exchange, favor, instance, logx, quests, sign, store, subarea
+from .. import (arena, config, detect, exchange, favor, instance, logx, quests, sign,
+                store, subarea)
 from . import route
 
 log = logx.get("handler.agent")
@@ -126,7 +127,10 @@ def _module_stubs(player: dict | None = None) -> dict:
         # 排期/奖励服务端自己定（客户端没有签到表），见 gamesrv/sign.py。
         "sign": sign.block(player),
         "shop": {"shopObj": {}, "buyRecordObj": {}, "activityShopList": []},
-        "arena": {"arenaInfo": {}, "mechaSuperSkillCorrectOwn": {}},
+        # 演习场。形状是 `{arenaInfo, rivals, resetTime, refreshTime, mechaSuperSkillCorrectOwn}`
+        # （`ArenaCenter.ctor` 原样读）—— 对手的 `soldier<i>` 是 table_soldier 的 key 字符串。
+        # 见 gamesrv/arena.py 的模块注释（`refreshTime` 要发两份，否则倒计时变 NaN）。
+        "arena": arena.block(player),
         "rank": {"rankInfoObj": {}, "lastUpdateTimeObj": {}},
         "score": {"scoreObj": {}, "scoreInfoObj": {}, "lastUpdateTime": t},
         "society": {"societyLv": 0, "society": {}},

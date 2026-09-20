@@ -15,6 +15,7 @@ r"""不开游戏也能自测业务协议：自己按客户端格式打包一个�
 from __future__ import annotations
 
 import base64
+import copy
 import json
 import os
 import sys
@@ -1187,6 +1188,10 @@ def item_icon_check(ok: bool) -> bool:
            for row in rows if isinstance(row, dict)
            for field in ("id1", "id2")])
 
+    from gamesrv import arena
+    check("演习场奖励 pvp_rewards/fail_coins",
+          [k for (_t, k, _c) in arena.pvp_rewards() + arena.fail_rewards()])
+
     # 3) 背包里允许躺计数器（100101/100102），但只允许这两个
     from gamesrv import config, store
     bag = items.items_of(store.get_or_create_player(config.DEFAULT_ACCOUNT))
@@ -1201,6 +1206,115 @@ def item_icon_check(ok: bool) -> bool:
         return False
     print(f"  OK  奖励图标：登录块 + 签到/派遣/分区成就/关卡掉落/商店/回礼 里没有"
           f"画不出图标的道具（全表只有 {dead} 两个计数器没有图标，它们只允许躺在背包里）")
+    return ok
+
+
+def arena_check(ok: bool) -> bool:
+    """演习场（`arena.*` 4 条）：登录块形状 / 对手军士 key 有效 / 打一场结算 / 换一批。
+
+    客户端这条链的要点（`src/data/arenacenter.jsc` + `src/ui/arena/*`）：
+
+    * 登录块 `data.arena` = `{arenaInfo, rivals, resetTime, refreshTime, mechaSuperSkillCorrectOwn}`；
+      `ArenaCenter.ctor` 读顶层 `refreshTime`，而 `updateByServer` 读 **`arenaInfo.refreshTime`**
+      —— 两份都得有，少一份 `_refreshTime` 会变成 `undefined + 7200 = NaN`（倒计时乱）。
+    * 每项对手的 `soldier<i>` 是 **`table_soldier` 的 key 字符串**（客户端自己
+      `charManager.decodeSoldier()` 解出来挂到 `rival.soldiers[i]`，1 基）；
+      key 无效的话那个位置就是空的，详情页少一个头像。
+    * **每条回包都要带 `data.arena`**：客户端这条路线的 cb 不带参数，
+      数据全靠 `patch.js` 的 RESP-DISPATCH（`arena -> arenaCenter.updateByServer`）。
+
+    ⚠️ 会真改积分 / 对手状态 / 道具，跑完还原（所以可以反复跑）。
+    """
+    from gamesrv import arena, config, items, store
+
+    player = store.get_or_create_player(config.DEFAULT_ACCOUNT)
+    before = copy.deepcopy(player.get(arena.PLAYER_KEY))
+    before_items = dict(items.items_of(player))
+    bad = []
+
+    try:
+        block = ((call("agent.getlogindata", {}, 180).get("data") or {}).get("arena") or {})
+        for field in ("arenaInfo", "rivals", "resetTime", "refreshTime"):
+            if field not in block:
+                bad.append(f"登录块 data.arena 缺 {field}（ArenaCenter.ctor 要读）")
+        info = block.get("arenaInfo") or {}
+        for field in ("points", "change", "wins", "rating", "refreshTime"):
+            if field not in info:
+                bad.append(f"arenaInfo 缺 {field}（客户端 _update/_updateWinsImage 要读；"
+                           f"updateByServer 只认 arenaInfo.refreshTime）")
+        rivals = block.get("rivals") or []
+        if len(rivals) != arena.rival_count():
+            bad.append(f"对手数 {len(rivals)} != table_arena_constant.rival_count "
+                       f"{arena.rival_count()}")
+        cards = (items.table("table_soldier") or {}).get("card") or {}
+        for r in rivals:
+            for field in ("index", "name", "lv", "rating", "points", "state"):
+                if field not in r:
+                    bad.append(f"对手 {r.get('index')} 缺字段 {field}")
+            texts = [r.get("soldier%d" % i) for i in range(1, 6) if r.get("soldier%d" % i)]
+            if not texts:
+                bad.append(f"对手 {r.get('index')} 一个军士都没有（详情页会空）")
+            for text in texts:
+                parts = str(text).split("#")
+                if len(parts) < 4:
+                    bad.append(f"对手 {r.get('index')} 的军士 {text!r} 段数 < 4 —— "
+                               f"客户端 decodeSoldier 会 warn 并返回 undefined")
+                elif parts[0] not in cards:
+                    bad.append(f"对手 {r.get('index')} 的军士 {parts[0]} 不在 table_soldier 里")
+        if bad:
+            for one in bad:
+                print(f"  BAD {one}")
+            return False
+
+        rr = call("arena.resetrivals", {"useGold": True}, 181)
+        if rr.get("code") != 200 or not ((rr.get("data") or {}).get("arena")):
+            bad.append(f"arena.resetrivals 回包不对：{str(rr)[:90]}")
+
+        idx = block["rivals"][0].get("index")
+        en = call("arena.enterfight", {"index": idx}, 182)
+        if en.get("code") != 200:
+            bad.append(f"arena.enterfight index={idx} code={en.get('code')} {str(en)[:80]}")
+        ex = call("arena.exitfight", {"index": idx, "success": True,
+                                      "battleInfo": {"combatTime": 61000,
+                                                     "ownSoldierDiedCount": 1}}, 183)
+        data = ex.get("data") or {}
+        if ex.get("code") != 200:
+            bad.append(f"arena.exitfight code={ex.get('code')} {str(ex)[:80]}")
+        for field in ("success", "rewards", "winsRewards", "scoreInfo", "battleData",
+                      "winPoints", "arena"):
+            if field not in data:
+                bad.append(f"arena.exitfight 的 data 缺 {field}（ArenaLayer._fightResult 直接读）")
+        after_rivals = (data.get("arena") or {}).get("rivals") or []
+        if not after_rivals:
+            bad.append("arena.exitfight 没带 data.arena.rivals（RESP-DISPATCH 刷不动界面）")
+        npoints = ((data.get("arena") or {}).get("arenaInfo") or {}).get("points")
+        if isinstance(npoints, int) and isinstance(info.get("points"), int):
+            if npoints != info["points"] + int(data.get("winPoints") or 0):
+                bad.append(f"积分对不上：{info['points']} + {data.get('winPoints')} != {npoints}")
+        mine = [r for r in after_rivals if r.get("index") == idx]
+        if mine and not mine[0].get("state"):
+            bad.append(f"打完 index={idx} 后 state 还是 0（客户端不会显示「已挑战」）")
+    finally:
+        player = store.get_or_create_player(config.DEFAULT_ACCOUNT)
+        if before is None:
+            player.pop(arena.PLAYER_KEY, None)
+        else:
+            player[arena.PLAYER_KEY] = before
+        got = items.items_of(player)
+        for k in [k for k in got if k not in before_items]:
+            del got[k]
+        for k, v in before_items.items():
+            got[k] = v
+        store.save_player(player)
+
+    if bad:
+        for one in bad:
+            print(f"  BAD {one}")
+        return False
+    print(f"  OK  演习场：登录块 {len(rivals)} 个对手（`soldier<i>` 都是 "
+          f"\"key#星级#等级#技能等级\" 编码串、arenaInfo 带 refreshTime）、"
+          f"resetrivals/enterfight/exitfight 都通，赢一场 {data.get('winPoints')} 分并落盘"
+          f"（收尾已还原）")
     return ok
 
 
@@ -1311,6 +1425,13 @@ def main():
         ok = module_open_check(ok)
     except Exception as exc:  # noqa: BLE001
         print(f"  BAD 功能开启弹窗自检异常: {exc}")
+        ok = False
+
+    print()
+    try:
+        ok = arena_check(ok)
+    except Exception as exc:  # noqa: BLE001
+        print(f"  BAD 演习场自检异常: {exc}")
         ok = False
 
     print()

@@ -40,6 +40,7 @@ def registered() -> list:
 def load_all():
     """导入所有 handler 模块，触发 @route 注册。"""
     from . import agent  # noqa: F401
+    from . import arena  # noqa: F401
     from . import boss  # noqa: F401
     from . import char  # noqa: F401
     from . import detect  # noqa: F401

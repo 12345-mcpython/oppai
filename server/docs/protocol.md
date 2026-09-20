@@ -728,6 +728,65 @@ SignNormalLayer.receiveRewards(): if (!sign.canSignToday) return;   // 签过了
 都 0 命中）→ 服务端用表里就有的 `gainIcon2`（界面上「可能掉落」那排图标）当奖池，
 按权重挑档位取一件。见 differences.md §D。
 
+### 6.9 演习场（`arena.*`）
+
+主界面「演习场」按钮（模块 `100012`，解锁等级 27）。客户端 `src/data/arenacenter.jsc`
++ `src/ui/arena/*`。**只有 4 条路由**，其余全靠登录块。
+
+**登录块** `data.arena`（`ArenaCenter.ctor(data)` 原样读）：
+
+```js
+{arenaInfo:  {points, change, wins, rating, refreshTime},   // 我的数据
+ rivals:     [{index, name, lv, rating, points, headId, asstKey, state, soldier1..5}, …],
+ resetTime:  秒级时间戳,       // 赛季重置（table_arena_constant：14 天一轮，起算 2016-01-01）
+ refreshTime:秒级时间戳,       // 上一次刷对手的时刻
+ mechaSuperSkillCorrectOwn: {…}}   // table_arena_mecha_super_skill_correct_own 原样
+```
+
+⚠️ **五个坑**：
+
+1. **`refreshTime` 要发两份**：`ctor` 读顶层 `data.refreshTime`，而
+   `updateByServer` 读 **`data.arenaInfo.refreshTime`**
+   （`_refreshTime = data.arenaInfo.refreshTime + table_arena_constant.update_interval_by_player`）。
+   只发一处，另一条路径上就是 `undefined + 7200 = NaN`（刷新倒计时直接乱）。
+2. **每条回包都要带 `data.arena`**：`requestGetArenaInfo(cb)` 的 cb **不带参数**，
+   数据是靠 `patch.js` 的 RESP-DISPATCH（`arena -> arenaCenter.updateByServer`）落回去的。
+   回包里没有 `arena` 块 = 界面不刷新（和 §5.2 那类「服务端发了但客户端不动」同一个根因）。
+3. **`rival.soldier<i>` 是 `table_soldier` 的 key 字符串**，不是对象 ——
+   客户端 `ArenaCenter._init` 拿 `charManager.decodeSoldier(key)` 解出来挂到
+   `rival.soldiers[i]`（**1 基**：`soldier1` → `soldiers[1]`）；同一个角色重复会被丢掉。
+   服务端直接从 `table_friend_support_npc`(101 个 NPC) 抄名字 + 5 个军士 key：
+   NPC 行形如 `{general:"sasm010103#1#30#1", brave:…, armor:…, biological:…, agent:…,
+   player_name:"大阪小松子", player_lv:10}`，取 `#` 前那一段就是军士 key。
+4. **`state` 只当布尔用**：`ArenaRivalItemLayer._setDekaroned(state)` 是
+   `_dekaronButton.visible = !state` / `_successImage.visible = !!state`
+   → 0 = 还没打（显示「挑战」）、非 0 = 已打过（显示成功图）。
+5. **结算回包要平铺字段**：`ArenaLayer._fightResult(err, data)` 直接读
+   `data.success / rewards / winsRewards / scoreInfo / battleData / winPoints`
+   （`rewards` 是标准 `[{type,key,count}]`，客户端按 `REWARD_TYPE` 拆成 `cards`/`items`），
+   **同时**还要带 `data.arena` 给派发用。回非 200 时 `_fightResult` 直接 return ——
+   用户会卡在「战斗打完、什么都不弹」，所以别拿非 200 当「不能打」的挡箭牌。
+
+**四条路由**：
+
+| route | 请求 | 回包 |
+|---|---|---|
+| `arena.getrivallist` | `{}` | `{code:200, data:{arena: 块}}` |
+| `arena.resetrivals` | `{useGold}` | `{code:200, data:{arena: 块}}`；失败 `{code≠200, msg}`（客户端弹 msg） |
+| `arena.enterfight` | `{index}` | `{code:200, data:{arena: 块}}` |
+| `arena.exitfight` | `{index, success, battleInfo:{combatTime, ownSoldierDiedCount}}` | `{code:200, data:{arena, success, rewards, winsRewards, scoreInfo, battleData, winPoints}}` |
+
+**战斗在客户端算**（`BattleScene.combat({id, team, enemyTeams, …})`，`id` 是
+`table_arena_constant.level_rating_<rating>` 里随机取的关卡 key，如 `800001`），
+打完把 `success` + `battleInfo` 报给服务端 —— 和关卡结算 `instance.finishlevel` 一个套路。
+
+**数值**（`table_arena_constant`，44 项，抽在 `data/table_arena_constant.json`）：
+`rival_count`=8 个对手、`update_interval_by_player`=7200 秒自动换一批、
+`refresh_cost`="5" 金条 / `refresh_cooldown`=120 秒（冷却内手刷要花钱）、
+`rating_1..5`=100/1000/2000/3000/4000（积分段位）、`default/min/max_arena_points`、
+`pvp_rewards`="100019#14"（赢了给 14 演习萌币，客户端自己解析这个串显示奖励）、
+`fail_coins`=14（输了也给，**推断**）。积分增减公式原版无从考证，见 differences.md §D。
+
 ---
 
 ## 7. 切主场景
