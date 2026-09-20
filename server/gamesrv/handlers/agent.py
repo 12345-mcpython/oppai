@@ -127,8 +127,9 @@ def _module_stubs(player: dict | None = None) -> dict:
         # 排期/奖励服务端自己定（客户端没有签到表），见 gamesrv/sign.py。
         "sign": sign.block(player),
         "shop": {"shopObj": {}, "buyRecordObj": {}, "activityShopList": []},
-        # 演习场。形状是 `{arenaInfo, rivals, resetTime, refreshTime, mechaSuperSkillCorrectOwn}`
-        # （`ArenaCenter.ctor` 原样读）—— 对手的 `soldier<i>` 是 table_soldier 的 key 字符串。
+        # 演习场。形状是 `{arenaInfo, rivals, resetTime, refreshTime}`（`ArenaCenter.ctor`
+        # 原样读；`mechaSuperSkillCorrectOwn` 客户端全库 0 命中，不用发）。
+        # 对手的 `soldier<i>` 是「军士编码串」`"key#星级#等级#技能等级"`、`asstKey` 要军士卡 key。
         # 见 gamesrv/arena.py 的模块注释（`refreshTime` 要发两份，否则倒计时变 NaN）。
         "arena": arena.block(player),
         "rank": {"rankInfoObj": {}, "lastUpdateTimeObj": {}},
