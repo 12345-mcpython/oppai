@@ -2588,6 +2588,142 @@ def medal_check(ok: bool) -> bool:
     return ok
 
 
+def share_convert_check(ok: bool) -> bool:
+    """分享领奖 / 礼包兑换（`share.receivesharereward` + `convert.convert`）。
+
+    客户端契约（反汇编）：
+
+    * `Share._initData`：登录块 `data.share` 只读 `shareCount`；次数上限
+      `table_constant.share_reward_max_count`（客户端自己挡）；奖励内容在
+      `table_constant.share_reward_key`（形如 `"100001@30"`）。
+      回调里 `data.shareCount` 覆盖本地 + `ccuiManager.popupRewardWithItems(data.rewards)`，
+      而那个函数是 `for (k in items) push({type:ITEM,key:k,count:items[k]})`
+      —— ⚠️ **`rewards` 必须是 map，不是数组**。
+    * `Package._loadTable`：`this._convertKey = table_item[key].convert_key`；
+      `Bag._package` 发 `convert.convert {key: convertKey, count}`，回调把
+      **`res.data` 整个当奖励数组**（`RewardBoxLayer.popReward({reward: res.data})`，
+      逐项读 `.type` 过 `REWARD_TYPE_SWITCH`）—— ⚠️ **`data` 是数组，不是 `{rewards}`**。
+
+    ⚠️ 会真改存档（分享次数、礼包道具和奖励），跑完整体还原。
+    """
+    from gamesrv import config, items, share, store
+
+    account = config.DEFAULT_ACCOUNT
+    player = store.get_or_create_player(account)
+    before_items = dict(items.items_of(player))
+    before_share = json.loads(json.dumps(player.get("share") or {}))
+    bad = []
+
+    def set_items(bag):
+        p = store.get_or_create_player(account)
+        got = items.items_of(p)
+        for k in [k for k in got if k not in bag]:
+            del got[k]
+        for k, v in bag.items():
+            got[k] = v
+        store.save_player(p)
+
+    try:
+        # ---- A. 分享：形状 + 真发奖 + 一天一次 ----
+        login = call("agent.getlogindata", {}, 320)
+        sblk = (login.get("data") or {}).get("share")
+        if not isinstance(sblk, dict) or "shareCount" not in sblk:
+            bad.append(f"登录块 data.share 形状不对：{str(sblk)[:60]}"
+                       f"（客户端 Share._initData 读 shareCount）")
+        reward = share.reward_map()
+        limit = share.max_count()
+        if not reward:
+            bad.append("table_constant.share_reward_key 解析不出奖励")
+        p = store.get_or_create_player(account)
+        p.setdefault("share", {})["count"] = 0
+        store.save_player(p)
+        before = {k: int(items.count_of(store.get_or_create_player(account), k)) for k in reward}
+        r1 = call("share.receivesharereward", {"shareSuccess": True, "platform": "test"}, 321)
+        d1 = r1.get("data") or {}
+        if r1.get("code") != 200:
+            bad.append(f"share.receivesharereward code={r1.get('code')} {str(r1)[:80]}")
+        else:
+            rw = d1.get("rewards")
+            if not isinstance(rw, dict):
+                bad.append(f"share 回包的 rewards 是 {type(rw).__name__}，"
+                           f"必须 map（popupRewardWithItems 是 for-in）")
+            elif {str(k): int(v) for k, v in rw.items()} != \
+                    {str(k): int(v) for k, v in reward.items()}:
+                bad.append(f"share 奖励和 table_constant.share_reward_key 对不上："
+                           f"{rw} vs {reward}")
+            if int(d1.get("shareCount") or 0) != 1:
+                bad.append(f"分享之后 shareCount={d1.get('shareCount')!r}，应该是 1")
+            after = {k: int(items.count_of(store.get_or_create_player(account), k)) for k in reward}
+            if any(after[k] <= before[k] for k in reward):
+                bad.append(f"分享奖励没进背包：{before} -> {after}")
+            else:
+                print(f"       分享：+{reward}，shareCount=1（上限 {limit}）")
+        r2 = call("share.receivesharereward", {"shareSuccess": True, "platform": "test"}, 322)
+        if r2.get("code") == 200 and limit <= 1:
+            bad.append(f"同一天分享奖励能领第二次（上限 {limit}）")
+        p = store.get_or_create_player(account)
+        p.setdefault("share", {})["day"] = "2000-01-01"
+        store.save_player(p)
+        call("agent.getlogindata", {}, 323)
+        s2 = (store.get_or_create_player(account).get("share") or {}).get("count")
+        if int(s2 or 0) != 0:
+            bad.append(f"分享次数换日没清零：{s2}")
+        else:
+            print("       分享次数：换日（05:00）自动清零 ✓")
+
+        # ---- B. 礼包兑换：data 是奖励**数组** + 真扣真发 ----
+        pkg, ckey = "800001", "10300001"
+        bag = dict(before_items)
+        bag[pkg] = int(bag.get(pkg) or 0) + 1
+        set_items(bag)
+        keys = ("100001", "100002", pkg)
+        before2 = {k: int(items.count_of(store.get_or_create_player(account), k)) for k in keys}
+        r3 = call("convert.convert", {"key": ckey, "count": 1}, 324)
+        d3 = r3.get("data")
+        if r3.get("code") != 200:
+            bad.append(f"convert.convert {ckey} code={r3.get('code')} {str(r3)[:80]}")
+        else:
+            if not isinstance(d3, list) or not d3:
+                bad.append(f"convert 回包 data 是 {type(d3).__name__}，"
+                           f"要是奖励数组（RewardBoxLayer 逐项读 .type）")
+            else:
+                for row in d3:
+                    if not isinstance(row, dict) or set(("type", "key", "count")) - set(row):
+                        bad.append(f"奖励行形状不对：{row!r}（要 {{type,key,count}}）")
+                        break
+            after2 = {k: int(items.count_of(store.get_or_create_player(account), k)) for k in keys}
+            if after2[pkg] != before2[pkg] - 1:
+                bad.append(f"礼包没被扣掉：{pkg} {before2[pkg]} -> {after2[pkg]}")
+            elif not any(after2[k] > before2[k] for k in ("100001", "100002")):
+                bad.append(f"兑换奖励没进背包：{before2} -> {after2}")
+            else:
+                print(f"       礼包：{pkg} -> {[(r['type'], r['key'], r['count']) for r in d3]}")
+        set_items(dict(before_items))
+        r4 = call("convert.convert", {"key": ckey, "count": 1}, 325)
+        if r4.get("code") == 200:
+            bad.append("没有礼包道具却兑换成功了")
+        if call("convert.convert", {"key": "99999999", "count": 1}, 326).get("code") == 200:
+            bad.append("兑换一个不存在的礼包 key 竟然 200")
+    finally:
+        p = store.get_or_create_player(account)
+        p["share"] = before_share
+        got = items.items_of(p)
+        for k in [k for k in got if k not in before_items]:
+            del got[k]
+        for k, v in before_items.items():
+            got[k] = v
+        store.save_player(p)
+
+    if bad:
+        for one in bad[:12]:
+            print(f"  BAD {one}")
+        return False
+    print("  OK  分享/礼包：分享奖励取自 table_constant（rewards 是 map）、一天一次、换日清零；"
+          "礼包兑换按 convert_key -> table_convert_reward 扣道具、data 是奖励数组、"
+          "没道具不给兑（收尾已还原）")
+    return ok
+
+
 def run_check(ok: bool, name: str, fn) -> bool:
     """跑一项检查：支持 --only 过滤 + 打印用时（自检太慢，得知道时间花在哪）。"""
     if ONLY and ONLY not in name:
@@ -2673,6 +2809,8 @@ def main():
     ok = run_check(ok, "分区成就自检异常", subarea_achievement_check)
 
     ok = run_check(ok, "交易所自检异常", exchange_check)
+
+    ok = run_check(ok, "分享礼包自检异常", share_convert_check)
 
     ok = run_check(ok, "派遣自检异常", detect_check)
 

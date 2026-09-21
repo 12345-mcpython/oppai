@@ -43,6 +43,7 @@ def load_all():
     from . import arena  # noqa: F401
     from . import boss  # noqa: F401
     from . import char  # noqa: F401
+    from . import convert  # noqa: F401
     from . import detect  # noqa: F401
     from . import equipment  # noqa: F401
     from . import exchange  # noqa: F401
@@ -61,5 +62,6 @@ def load_all():
     from . import rank  # noqa: F401
     from . import score  # noqa: F401
     from . import shop  # noqa: F401
+    from . import share  # noqa: F401
     from . import sign  # noqa: F401
     from . import subareaachievement  # noqa: F401

@@ -12,7 +12,7 @@ import json
 
 from ..gameproto import CODE_OK
 from .. import (arena, config, detect, exchange, favor, friends, gacha, instance, logx,
-                medal, quests, sign, store, subarea)
+                medal, quests, share, sign, store, subarea)
 from . import route
 
 log = logx.get("handler.agent")
@@ -173,7 +173,9 @@ def _module_stubs(player: dict | None = None) -> dict:
         # 另外每条装备的 firstAttrKeys / secondAttrKeys 必须是数组，否则
         # initEquipment() 读 .length 时 TypeError。
         "equipment": store.equipment_block(player),
-        "share": {"shareCount": 0, "isCanShare": 0},
+        # 分享。客户端 `Share._initData` 只读 `shareCount`（次数上限
+        # `share_reward_max_count` 它自己从 table_constant 读）；奖励和换日在 gamesrv/share.py。
+        "share": share.block(player),
         # 分区成就。`{"achievements": {<id>: 行}}` —— 行由客户端在战斗结算时上报
         # （见 gamesrv/subarea.py）。以前这里是 `{"achievements": []}`（空数组），
         # 客户端 `_initData` 直接把它当 map 用，`_achivevements[id] = 行` 写进数组里，
@@ -335,6 +337,9 @@ def get_login_data(session: dict, msg: dict, req_id):
     # 晚于它跑的话 NEW 标记这一趟就漏了；而且 ensure 不落盘，这里不 save 就等于没做。
     if medal.ensure(player):
         store.save_player(player)
+    # 分享次数换日清零（`share.block()` 在 _module_stubs 里也会调，但那条路径不 save）
+    if share.ensure(player):
+        store.save_player(player)
     t = store.time_obj()
     log.info("agent.getlogindata account=%s playerId=%s", account, player["id"])
     data = {
@@ -378,6 +383,8 @@ def create_player(session: dict, msg: dict, req_id):
     if friends.ensure(player):
         store.save_player(player)
     if medal.ensure(player):
+        store.save_player(player)
+    if share.ensure(player):
         store.save_player(player)
 
     t = store.time_obj()

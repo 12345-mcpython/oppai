@@ -401,6 +401,13 @@ vanilla 不传参 → 游戏代码 `function (eventName) { if (/began\d/.test(ev
       （抚摸/送礼/演习/派遣/军士等级/好感度/抽卡/日常条数等 10 类），
       算不了的三类（指定关卡/被推倒/指定军士）进度恒 0 不假装完成。
       见 [protocol.md](protocol.md) 的「勋章」一节 + [differences.md](differences.md) §B/§D。
+- [x] **分享 / 礼包兑换**（`share.receivesharereward` + `convert.convert`）：
+      分享奖励和每天次数**照客户端表发**（`table_constant.share_reward_key = "100001@30"`
+      / `share_reward_max_count = 1`），换日 05:00 清零；
+      礼包按 `table_item.convert_key` → `table_convert_reward`（`consume: "800001#1#i"`）
+      扣道具发奖。两个坑都记在 [protocol.md §14](protocol.md)：
+      分享的 `rewards` 必须是 **map**、礼包回包的 `data` 必须是**奖励数组**。
+      礼包内容原版在服务端、客户端表里没有 → 私服自己定（[differences.md](differences.md) §D）。
 - [x] 文档：协议 / 逆向手法 / 打包逻辑 / 调试台 / 引擎调试 / 本总览 / **与原版的差异** / **从零复刻**
 
 ### 待办（按卡点排序）
@@ -433,11 +440,11 @@ vanilla 不传参 → 游戏代码 `function (eventName) { if (/began\d/.test(ev
    `{item, innSize, index}`），所以卡在「层的 `_recommendList` 是 0」。
    **不影响战斗**（这个弹窗是可选的好友助战）。
 3. **其余未实现的 route** —— `python script/route_gap.py --static` 能列出全部。
-   当前：客户端静态候选 **161** 条，服务端 **108** 条，缺 **61** 条。按单机价值排：
+   当前：客户端静态候选 **161** 条，服务端 **110** 条，缺 **59** 条。按单机价值排：
 
    | 命名空间 | 缺 | 说明 |
    |---|---|---|
-   | `diary.*` / `convert.*` / `share.*` | 2+1+1 | 零散领奖类，工作量最小，适合热身 |
+   | `diary.*` | 2 | 私密剧情购买/解锁（要 `table_story` 那套 + 行形状） |
    | `boss.*` | 5 | 好友 BOSS（`getbosslist` 已实现并回空表） |
    | `society.*` / `societyclg.*` | 33+6 | 军团——单机价值低、量最大 |
 
@@ -447,7 +454,7 @@ vanilla 不传参 → 游戏代码 `function (eventName) { if (/began\d/.test(ev
    ✅ 已经补完的：`equipment.*`(7)、`favor.*`(5)、`favorevent.*`(1)、
    **`char.upgradedaemon`**(1)、**`player.updateasst`**(1)、
    `player.selecttalent`/`upgradetalent`、`sign.*`(1)、`detect.*`(6)、**`arena.*`**(4)、
-   **`friend.*`**(9)、**`medal.*`**(9)。
+   **`friend.*`**(9)、**`medal.*`**(9)、**`share.*`**(1)、**`convert.*`**(1)。
 4. `hashKey` / `hmac64` 还没复刻（登录靠单位元绕过）；自研 DH 的完整算法也没还原。
 
 ---

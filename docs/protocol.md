@@ -19,6 +19,7 @@
 - [11. 军士养成（char.*）](#11-军士养成char)
 - [12. 好友（friend.*）](#12-好友friend)
 - [13. 勋章 / 头像 / 衣柜（medal.*）](#13-勋章--头像--衣柜medal)
+- [14. 分享 / 礼包兑换（share.* / convert.*）](#14-分享--礼包兑换share--convert)
 
 ---
 
@@ -1686,4 +1687,56 @@ cc.director.getRunningScene().push(new MedalLayer(data), true);   // 整个 data
 
 验证：`python script/selftest_game.py --only 勋章`（形状 / 默认值 / NEW 标记 /
 换装落盘 / 佩戴同组替换 / 清标记 / 好友勋章 / 计数器驱动的达成与发本体，收尾还原）。
+
+---
+
+## 14. 分享 / 礼包兑换（`share.*` / `convert.*`）
+
+两条零散领奖路由，形状都小但**各有一个坑**。
+
+### 14.1 `share.receivesharereward`
+
+| 项 | 值 |
+| --- | --- |
+| 请求 | `{shareSuccess: true, platform: "<平台>"}`（客户端硬编码 `shareSuccess: true`） |
+| 成功 `data` | `{shareCount: <新的次数>, rewards: {"<道具key>": <数量>}}` |
+| 登录块 `data.share` | `{shareCount, isCanShare}`（客户端 `Share._initData` **只读 `shareCount`**） |
+
+* ⚠️ **`rewards` 必须是 map**：回调是 `ccuiManager.popupRewardWithItems(data.rewards)`，
+  而它是 `for (k in items) push({type: ITEM, key: k, count: items[k]})` —— 发数组的话
+  `k` 会变成下标 `"0"`，弹出来的奖励会是空的/错的。
+* 次数上限和奖励内容**都在客户端表里**：`table_constant.share_reward_max_count`（= 1，
+  客户端自己拿来挡按钮）、`table_constant.share_reward_key`（= `"100001@30"`，
+  `<itemKey>@<count>`）—— 服务端照表发，不要自己编。
+* `shareCount` 按换日点（05:00）清零。⚠️ 换日检查要在
+  `agent.getlogindata` 里**显式调 + 落盘**（`share.ensure()`），
+  只在 `share.block()` 里改内存的话，重登看到还是旧次数（同 pitfalls 第 16 类）。
+
+### 14.2 `convert.convert`（用礼包）
+
+| 项 | 值 |
+| --- | --- |
+| 请求 | `{key: "<convert_key>", count: <个数>}` |
+| 成功 `data` | **奖励数组** `[{type, key, count}, …]` |
+
+* 客户端：`Package._loadTable` 把 `table_item[key].convert_key` 存成 `_convertKey`，
+  `Bag._package` 发 `convert.convert`；回调把 **`res.data` 整个当奖励数组**
+  塞进 `RewardBoxLayer.popReward({reward: res.data}, 9999)`，那一层是
+  `_.map(params.reward, …)` 逐项读 `.type`（过 `REWARD_TYPE_SWITCH`）
+  —— ⚠️ **`data` 是数组，不是 `{rewards: […]}`**；失败时客户端只 `cc.log("error")`，
+  界面上**没有任何提示**。
+* 消耗和奖励 key 在 `table_convert_reward`（**客户端一行都不读**，是原版服务端数据）：
+
+  ```
+  10300001: {consume: "800001#1#i", reward_key: "10300001"}   // 消耗 800001 x1
+  ```
+
+  `consume` 是 `"<道具key>#<数量>#i"`；`reward_key` 的**内容**客户端表里没有
+  （全库 0 命中）→ 私服自己定，见 differences §D。
+* ⚠️ 抽出来的 `table_item.json` 是**压缩字段**（`ck`/`ic`/`t`…），**没有 `convert_key` 列**
+  —— 三个礼包的 key 是照客户端全表抄的（`handlers/convert.py` 的 `CONVERT_KEYS`），
+  表里补上这一列之后那段可以删。
+
+验证：`python script/selftest_game.py --only 分享`（rewards 是 map、一天一次、换日清零、
+礼包扣道具且 `data` 是数组、没道具不给兑，收尾还原）。
 

@@ -86,7 +86,7 @@
 ## C. 还没做（缺口）
 
 `python script\route_gap.py --static` 能列出全部。当前：客户端静态候选 **161** 条，
-服务端已实现 **108** 条，**缺 61** 条。
+服务端已实现 **110** 条，**缺 59** 条。
 
 | 命名空间 | 缺 | 原版是什么 | 为什么没做 |
 |---|---|---|---|
@@ -94,7 +94,7 @@
 | `exchange.*` | 1 | 黑市交易所（充值/月卡/礼包） | **只差 IAP 那半边**：`checkorder`/`payment`/`judgeexchangestate` 都实现了，但私服没有支付渠道，只能回「不可购买」；金条↔萌钞、行动力/BP/卡槽兑换全通（见 [protocol.md §6.5](protocol.md)） |
 | `boss.*` | 5 | 好友 BOSS | 私服**故意**回空 |
 | `gacha.*` | 内容缺口 | 扭蛋 | **不是接线缺口**：176 张客户端表里没有一张是卡池配置（那是服务端下发的），要做只能自己造 master 数据 |
-| `diary.*` / `sign.*` / `convert.*` / `share.*` | 各 1 | 零散领奖 | 好做，只是还没做（`subareaachievement.receivereward` 已做，见 [protocol.md §6.4](protocol.md)） |
+| `diary.*` | 2 | 私密剧情购买 / 解锁 | 要先把 `table_story`（668 行）那套行形状和「已解锁」的存档结构定下来（`subareaachievement.receivereward` 已做，见 [protocol.md §6.4](protocol.md)） |
 | 其他 | 若干 | —— | —— |
 
 **已知的"能看见但不完整"：**
@@ -171,6 +171,7 @@
 | 好友**NPC 的头像** | 按表内下标轮流用 `table_item` 里 `type=60` 的头像（`"<itemKey>:2"`） | NPC 行里**没有头像字段**；客户端 `getHeadSpr` 对 `HEAD_TYPE.OTHER` 走 `new ItemIcon(key)`，只要图标 png 在 `res/charimage/` 里就能画（23 条里排除 `601005`/`gifttulip`，它的图标不在那个目录）。给空则全部走客户端的默认头像 `table_constant.default_head_id` |
 | 勋章**条件语义**（`condition_kind`） | 10 类按 `table_medal.desc` + `times` 反推（抚摸 / 送礼 / 演习 / 派遣 / 军士达 X 级 / 好感达 X 级 / 抽卡 / 浴衣 / 日常条数 / 战斗失败） | `condition_id` 指向 `table_medal_condition`，那里只有 `condition_ids` = 原版**服务端**的 condition 对象 id（客户端没有对应的表）→ 语义只能从 desc 反推 | 阈值（70 级 / 好感 15）是用正则从 desc 里抠的；`1001` 通关指定关卡要点名关卡（需要 `table_level` 的「关卡名→key」表，还没抽）、`1003` 我方军士被推倒次数要战斗内部统计、`4002` 获得指定军士要「卡 key ↔ 名字」表 —— 这三类**进度恒 0，不假装完成**，见 `medal.progress_of` |
 | 好友**的勋章**（`getfriendmedalinfo`） | 按 numberId 给一份**确定性**的：前 `1 + (numberId % 12)` 条勋章算达成、每组戴一个（最多 3 个） | 真人好友自己的勋章 | NPC 没有真实进度，确定性比随机好排查；换法在 `medal.friend_medal_info` |
+| **礼包内容**（`convert.convert`） | 自己定三档：800001 → 金条 30 + 萌钞 5000；800002 → 金条 80 + 萌钞 15000 + 行动力 30；800003 → 金条 200 + 萌钞 40000 + 行动力 80 + 好人卡 5 | 原版在服务端，客户端表里**没有**：`table_convert_reward` 只给 `consume`/`reward_key`，而 `reward_key`（1030000x）指向的奖励内容全库 0 命中 | `handlers/convert.py` 的 `CONVERT_REWARDS`，改一个 dict 就行。⚠️ 礼包道具本身在私服没有稳定来源（原版靠活动），要试得先给自己发几个 800001~800003 |
 
 **反过来说，这些是"表里写死、和原版一致"的**（不用担心）：
 好感度升级曲线（`table_favor_upgrade`，500/700/…/90000，满级 15）、
