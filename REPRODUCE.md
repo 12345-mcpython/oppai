@@ -193,7 +193,7 @@ python script\patch_js_debugger.py           # 6) 调试器 JS 换成明文（�
 ### Step 2 · （可选）引擎：拿源码 → 打补丁 → 编译
 
 **只有想改引擎 / 排查原生崩溃才需要。** 跳过的话要自己准备一份
-`libcocos2djs.so` 放进 `game\lib\<abi>\`（用原版的也能跑，但少掉 13 个补丁）。
+`libcocos2djs.so` 放进 `game\lib\<abi>\`（用原版的也能跑，但少掉 16 个补丁）。
 
 ```powershell
 # 2.1 先把外部资源按 §2 摆好，确认这几条都是 True
@@ -347,7 +347,7 @@ adb -s 127.0.0.1:21503 logcat -d -v brief | Select-String "OPPAIPATCH|JS ERROR"
 > 最坑的是**解析失败 = 一行都没执行**，别把它当成"跑过了但没效果"。
 >
 > 深入：[`server/docs/build.md`](server/docs/build.md)、
-> [`server/client/patch.js`](server/client/patch.js) 头部（9 条适配各自的原因，其中 6/9 两条是体验改动，可删）。
+> [`server/client/patch.js`](server/client/patch.js) 头部（11 条适配各自的原因，其中第 6/9 条是体验改动，可删）。
 
 ---
 
@@ -366,7 +366,7 @@ adb -s 127.0.0.1:21503 logcat -d -v brief | Select-String "OPPAIPATCH|JS ERROR"
 | 卡点 | 结论 | 怎么办 |
 |---|---|---|
 | **装得上** | 原版 `targetSdkVersion=23`。Android 14 起禁装 `<23`、**Android 15 起禁装 `<24`**，所以以前装真机得带 `--bypass-low-target-sdk-block` | **已修**：`script/build_apk.py` 的 `normalize_android_manifest()` 每次打包把 targetSdk 提到 **33**，并给带 intent-filter 的组件补显式 `android:exported`（31+ 不写会报 `android:exported needs to be explicitly specified`）。现在 `.\build.ps1 -Install` 直接装 |
-| **跑得起来** | 包里只有 `armeabi` + `x86`（引擎的预编译依赖 curl/websockets/png/freetype… 也只有 armeabi / armeabi-v7a / x86，**没有 arm64**） | **别只看属性，直接装一个试** —— `ro.product.cpu.abilist` / `ro.zygote` 说只有 64 位，不代表跑不了：**实测一加 PLZ110（Android 16，`abilist32` 为空、`ro.zygote=zygote64`）能正常跑**，靠的是厂商自带的 32 位兼容层（该机有 `app_process32`、32 位 `linker`/bionic、`init.svc.zygote_tango`）。没有这层兼容层的机器（例如 Pixel 7 以后）才会 `UnsatisfiedLinkError` |
+| **跑得起来** | 原版包只有 `armeabi` + `x86`，而引擎的预编译依赖（curl/websockets/png/freetype…）在 cocos 官方那套里也只有 armeabi / armeabi-v7a / x86 —— **arm64 是后来自己凑依赖编出来的**（见 §4b 末尾和 [`build.md`](server/docs/build.md) §ABI，现在四份 ABI 都能打） | **别只看属性，直接装一个试** —— `ro.product.cpu.abilist` / `ro.zygote` 说只有 64 位，不代表跑不了：一加 PLZ110（Android 16，`abilist32` 为空、`ro.zygote=zygote64`）**带厂商 32 位兼容层**（有 `app_process32`、32 位 `linker`/bionic、`init.svc.zygote_tango`），装 v7a 包能跑；没这层的机器（Pixel 7 以后）才会 `UnsatisfiedLinkError` —— 那种机器就打 arm64 包（`-PackAbis arm64-v8a`） |
 | **连得上** | 地址烘在包里 → 换 IP 就要重打包 | 见下面，**改成运行时改写**，连局域网都不需要 |
 
 ```powershell
