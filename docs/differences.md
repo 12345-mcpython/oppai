@@ -90,12 +90,18 @@
 ## C. 还没做（缺口）
 
 `python script\route_gap.py --static` 能列出全部。当前：客户端静态候选 **161** 条，
-服务端已实现 **117** 条，**缺 52** 条。
+服务端已实现 **117** 条，静态扫报**缺 52** 条（真实缺口 **51** —— `cp.bb` 是假阳性：
+那是 chipmunk 的 bounding box API，在 `assets/script/chipmunk/jsb_chipmunk.jsc` 里）。
 
 | 命名空间 | 缺 | 原版是什么 | 为什么没做 |
 |---|---|---|---|
-| `society.*` / `societyclg.*` | 33 + 6 | 军团（公会） | 单机没有别人，工作量最大 |
+| `society.*` / `societyclg.*` | 33 + 6 | 军团（公会）+ 军团 BOSS（客户端有 `table_society_boss`） | 单机没有别人，工作量最大 |
 | `exchange.*` | 1 | 黑市交易所（充值/月卡/礼包） | **只差 IAP 那半边**：`checkorder`/`payment`/`judgeexchangestate` 都实现了，但私服没有支付渠道，只能回「不可购买」；金条↔萌钞、行动力/BP/卡槽兑换全通（见 [protocol.md §6.5](protocol.md)） |
+| `ticket.*` | 3 | 人气投票（`ui/ticketmain`：`getticketstate` / `getticketcountbycontrolid` / `vote`） | 要编投票排期 + 候选人（运营数据），单机也没人投 |
+| `player.*` | 4 | `skipguide` 跳过引导 / `msgtoworld` 世界频道发言 / `updatemsgpushmark` 推送标记 / `usecdkey` CDK 兑换 | 引导私服本来就全跳过（`guideMark` 全 1）；聊天和 CDK 都是运营向 |
+| `soldieractivity.*` | 2 | 新年活动（`ui/newyearactivity`：`getsoldieractivitystate` / `convert`） | 运营活动，存档结构要先定 |
+| `actquest.updateactivites` / `consumeactivity.openactivity` | 1 + 1 | 活动任务 / 消耗活动 | 同上：排期是运营数据 |
+| `agent.flogout` | 1 | 登出（`Player.logout`） | 私服是长连接单机，断线重连就行 |
 | `gacha.*` | 内容缺口 | 扭蛋 | **不是接线缺口**：176 张客户端表里没有一张是卡池配置（那是服务端下发的），要做只能自己造 master 数据 |
 | 其他 | 若干 | —— | —— |
 
