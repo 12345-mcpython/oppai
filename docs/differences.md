@@ -52,6 +52,7 @@
 | 指挥部等级 | 建号 **30 级** | 1 级起 | `store.MIN_PLAYER_LV` |
 | 新手引导 | `guideMark` 全 1，**直接跳过** | 完整新手引导 | `store.GUIDE_MARK_DONE = 0` |
 | 初始军士 | **18 个**（前锋/中卫/后卫各 6，品质 4） | 靠抽卡和剧情 | `store.SOLDIER_KEYS` |
+| 军士栏位上限 | **300** | 50 起，再往上靠买 `100101 卡槽购买次数` | `store.MAX_SOLDIERS_COUNT`。私服卡池是全的（152 张自军卡），50 抽几次就顶到上限、新抽到的会落在栏位外，所以直接给足（老存档由 `_migrate` 补到 300） |
 | 初始背包 | 钻石 10 万 / 萌钞 1000 万 / 行动力 999 | 很少 | `store.default_items()` |
 | 天赋材料 | 200040~200048 **各 99** | 只能从**已停服**的运营活动拿 | `store.TALENT_MATERIAL_STOCK = 0` + `TALENT_STOCK_VERSION += 1` |
 | 装备升级材料 | 100401 **×500** | 靠分解装备攒 | `store.EQUIPMENT_MATERIAL_STOCK` + 版本号 |

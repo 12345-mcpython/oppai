@@ -842,7 +842,6 @@ SignNormalLayer.receiveRewards(): if (!sign.canSignToday) return;   // 签过了
 键 `"<mechaKey>#<superSkillLv>"`），所以服务端不用发。
 
 ### 6.10 抽卡 / 扭蛋（`gacha.*`）
-
 `assets/src/table/` 里 176 张表**一张 gacha 的都没有** ——
 「有哪些池子、消耗什么、概率多少、能出哪些卡」是**运营配置**，原版由服务端下发，
 随停服一起没了。所以这一块是**内容缺口**，服务端得自己造（见 `gamesrv/gacha.py` 与
@@ -942,6 +941,21 @@ config/gachaconfig.jsc:
   `if (!upRate) { 隐藏概率面板; return; }` 然后 `upRate.split("#")` —— 发 `{}` 会
   **TypeError 让整个图鉴层起不来**。没有 UP 就发 `""`；要显示概率的话格式是
   `"1@30#2@25#3@25#4@20"`（1..4 = 白/绿/紫/金，1..4 对应 `UP_RATE_NAME` 里那四个面板）。
+* ⚠️⚠️ **回包里捎给客户端的 `char` 块，键名是 `soldiersAdd` / `herosAdd` / `mechasAdd`**
+  （2026-09-21 踩：发 `soldiers` 客户端整块忽略，玩家"抽到的角色没进角色列表"）。
+  `CharCenter.updateByServer(data)` 是逐个 if 的：
+
+  ```js
+  if (data.maxSoldiersCount != null) this._maxSoldiersCount = data.maxSoldiersCount;
+  if (data.soldiersAdd) this.addSoldiers(data.soldiersAdd);   // addSoldier: _soldiers[row.id] = row
+  if (data.herosAdd)    this.addHeros(data.herosAdd);
+  if (data.mechasAdd)   this.addMechas(data.mechasAdd);
+  if (data.charManual)  for (k in data.charManual) this._charManual[k] = data.charManual[k];
+  ```
+
+  所以 `*Add` 里放的是**这次新增的行**（军士行必须带 `id`），不是整份名单；
+  `charManual` 是按 key 合并（图鉴当场亮），`maxSoldiersCount` 顺带刷新栏位上限。
+  见 `docs/pitfalls.md` 第 17 条。
 
 **卡池内容**（服务端从客户端表里挑，见 `gacha.card_pool()`）：自军卡看
 `table_soldier_master[charKey].card_type == 1`，一共 **152 张 = 每个角色的 4 档卡**

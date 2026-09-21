@@ -77,7 +77,7 @@ def _module_stubs(player: dict | None = None) -> dict:
             # 行只有 `{charKey, lv, curExp}`，属性/上限客户端自己算。
             # 只有军士角色有守护灵（主角没有 daemon_mode）。见 store.player_daemons。
             "daemons": store.player_daemons(player),
-            "maxSoldiersCount": 50,
+            "maxSoldiersCount": store.MAX_SOLDIERS_COUNT,
             # 角色图鉴（菜单 → 情报室）。**空 map = 情报室里一个角色都没有**：
             # 列表就是 `CharCenter.getSoldierManualKeys()` = 这个 map 的键（按 card_type 过滤）。
             "charManual": store.player_char_manual(player) if player else {},

@@ -141,13 +141,18 @@ def roster_check(ok: bool) -> bool:
 
 
 def replenish_check(ok: bool) -> bool:
-    """军士名单「补齐」必须**保住已有的等级**。
+    """军士名单「补齐」必须**只补不删**：保住等级、也保住抽卡得来的卡。
 
-    背景：`selftest_game.py` 自己的军士链路每跑一次吃掉 2 个军士当材料，
-    把默认账号从 18 个啃到 4 个。而当时的恢复手段是 `ROSTER_VERSION` 一变就
-    `player["soldiers"] = new_soldiers()` —— **整个重发，练过的等级全归零**。
-    改成 `store.replenish_soldiers()`（缺的补、已有的原样留）之后，
-    这条就是它的回归测试：纯内存，不需要服务端。
+    背景（两段历史）：
+      1. `selftest_game.py` 自己的军士链路每跑一次吃掉 2 个军士当材料，把默认账号从
+         18 个啃到 4 个；当时的恢复手段是 `ROSTER_VERSION` 一变就整个重发
+         —— **练过的等级全归零**。所以改成 `store.replenish_soldiers()`（缺的补、
+         已有的原样留）。
+      2. 2026-09-21：那个「补齐」里**还在删**「不在 SOLDIER_KEYS 里的 key」、
+         以及「同一个 key 的第二次出现」—— 而抽卡抽到的军士（152 张池子里任何一张）
+         和重复卡**都不在** SOLDIER_KEYS 里 ⇒ 自检收尾跑一下，把玩家抽到的
+         44 个军士全删了（存档 62 → 18）。现在这两条删除都去掉了，
+         这条用例就是它的回归测试（纯内存，不需要服务端）。
     """
     from gamesrv import store
 
@@ -158,9 +163,9 @@ def replenish_check(ok: bool) -> bool:
         "soldiers": [
             store.new_soldier(14, keys[13], 3, 4, lv=28, star=3),
             store.new_soldier(16, keys[15], 3, 4),
-            # 已经不在名单里的旧 key（早期误收的敌方单位）应该被删掉
+            # 抽卡得到的卡（不在默认名单里）—— 必须留着
             store.new_soldier(99, "sfog", 1, 2),
-            # 同一个 key 出现两次 —— 只留一个
+            # 同一个 key 抽到第二次（重复卡）—— 也留着
             store.new_soldier(98, keys[15], 3, 4),
         ],
         "teams": [{"soldierKeys": [14, 99], "soldierCount": 2}],
@@ -168,49 +173,73 @@ def replenish_check(ok: bool) -> bool:
     added, dropped = store.replenish_soldiers(fake)
     rows = fake["soldiers"]
     got = [r.get("key") for r in rows]
-    if len(rows) != len(keys):
-        print(f"  BAD 补齐后应该是 {len(keys)} 个，实际 {len(rows)} 个")
+    if dropped:
+        print(f"  BAD 补齐删掉了 {dropped} 个军士 —— 只该补，一个都不能删")
         return False
-    if sorted(got) != sorted(keys):
-        print("  BAD 补齐后的 key 集合和 SOLDIER_KEYS 对不上")
+    missing = [k for k in keys if k not in got]
+    if missing:
+        print(f"  BAD 默认名单还缺 {len(missing)} 个没补上：{missing[:3]}")
         return False
-    if len(set(got)) != len(got):
-        print(f"  BAD 补齐后还有重复 key：{got}")
+    if "sfog" not in got:
+        print("  BAD 抽卡得到的 key（sfog，不在 SOLDIER_KEYS 里）被删掉了")
+        return False
+    if got.count(keys[15]) != 2:
+        print(f"  BAD 重复卡被去重了：{keys[15]} 只剩 {got.count(keys[15])} 个")
         return False
     keep = next((r for r in rows if r.get("key") == keys[13]), None)
     if not keep or keep.get("lv") != 28 or keep.get("star") != 3:
         print(f"  BAD 已有的军士等级被重置了：{keep}")
         return False
-    if any(r.get("key") == "sfog" for r in rows):
-        print("  BAD 旧 key 没被删掉")
-        return False
     ids = [r.get("id") for r in rows]
     if len(set(ids)) != len(ids):
         print(f"  BAD 补齐后 id 有重复：{ids}")
         return False
-    if 99 in (fake["teams"][0].get("soldierKeys") or []):
-        print("  BAD 队伍里还留着被删掉的军士 id")
+    if 99 not in (fake["teams"][0].get("soldierKeys") or []):
+        print("  BAD 队伍里的军士被摘掉了（补缺不该动队伍）")
         return False
-    print(f"  OK  军士补齐：补 {added} 个、删 {dropped} 个 -> {len(rows)} 个，"
-          f"已有的 {keys[13]} 仍是 lv{keep.get('lv')}")
+    print(f"  OK  军士补齐：补 {added} 个、删 {dropped} 个 -> {len(rows)} 个"
+          f"（默认 18 个齐 + 抽卡的 sfog 和重复卡都留着，{keys[13]} 仍是 lv{keep.get('lv')}）")
     return ok
 
 
-def restore_roster() -> None:
-    """把军士链路吃掉的军士补回来。
+_SOLDIER_SNAPSHOT = None
 
-    `store.replenish_soldiers()` **只补缺的、不动已有的**（等级/星级/技能都留着），
-    所以这一步是安全的，也是这个脚本能反复跑的前提 ——
-    以前没有它，跑 7 轮就把默认账号从 18 个军士啃到 4 个。
+
+def snapshot_roster() -> None:
+    """跑会动军士名单的用例之前，把**整份名单**拍下来（深拷贝）。
+
+    为什么不是「跑完 replenish 补一下」：`SOLDIER_KEYS` 只有建号默认的 18 个，
+    玩家抽卡得到的卡（152 张池子里任何一张、还包括重复卡）都不在里面 ——
+    2026-09-21 就是靠补 + 删的那套逻辑，把这个号的 44 个抽卡军士在收尾时全删了。
+    现在改成**原样还原**：吃了几个、补了几个、抽卡新加的，跑完都回到快照状态。
     """
+    global _SOLDIER_SNAPSHOT
     from gamesrv import config, store
 
     player = store.get_or_create_player(config.DEFAULT_ACCOUNT)
-    added, dropped = store.replenish_soldiers(player)
-    if added or dropped:
-        store.save_player(player)
-        print(f"  ..  收尾：把测试吃掉的军士补回来 {added} 个"
-              f"（现在 {len(player.get('soldiers') or [])} 个，已有等级没动）")
+    _SOLDIER_SNAPSHOT = json.loads(json.dumps(player.get("soldiers") or []))
+
+
+def restore_roster() -> None:
+    """把军士名单还原成快照（没有快照时退化成「补缺的默认军士」，一个都不删）。"""
+    from gamesrv import config, store
+
+    player = store.get_or_create_player(config.DEFAULT_ACCOUNT)
+    if _SOLDIER_SNAPSHOT is None:
+        added, _dropped = store.replenish_soldiers(player)
+        if added:
+            store.save_player(player)
+            print(f"  ..  收尾：补缺的默认军士 {added} 个"
+                  f"（现在 {len(player.get('soldiers') or [])} 个）")
+        return
+    before = len(player.get("soldiers") or [])
+    player["soldiers"] = json.loads(json.dumps(_SOLDIER_SNAPSHOT))
+    store.save_player(player)
+    if before != len(player["soldiers"]):
+        print(f"  ..  收尾：军士名单还原成快照 {before} -> {len(player['soldiers'])} 个"
+              f"（抽卡得到的/被吃掉的那些都按原样回来了）")
+    else:
+        print(f"  ..  收尾：军士名单和快照一致（{before} 个）")
 
 
 _TEAM_SNAPSHOT = None
@@ -1210,6 +1239,13 @@ def item_icon_check(ok: bool) -> bool:
     login = call("agent.getlogindata", {}, 170)
     block = dict(login.get("data") or {})
     block.pop("item", None)       # 背包：计数器躺在里面是允许的（Bag.getList 跳过货币）
+    # ⚠️ 分区成就是**按 id 索引的 map**，里面的 `id` 值形如 `100101`/`100102`
+    # —— 那是**成就 id，不是道具 key**，但字符串一模一样，递归遍历分不出来。
+    # 2026-09-21 就是这样误报过一次（`player/subareaAchievements/100101/id`）。
+    block.pop("subareaachievement", None)
+    if isinstance(block.get("player"), dict):
+        block["player"] = {k: v for k, v in block["player"].items()
+                           if k != "subareaAchievements"}
     found = set()
 
     def walk(node):
@@ -1558,6 +1594,28 @@ def gacha_check(ok: bool) -> bool:
         if soldiers1 <= soldiers0:
             bad.append(f"抽到的东西没进存档（军士 {soldiers0} -> {soldiers1}）"
                        f"—— 多半是 items._add_soldier 查错表（应是 table_soldier.card）")
+
+        # ⚠️ 回包里的 `char` 块：键名必须是 `soldiersAdd` / `herosAdd` / `mechasAdd`
+        # —— 反汇编 `CharCenter.updateByServer` 只认这三个（+ charManual /
+        # maxSoldiersCount），发 `soldiers` 这种名字客户端**整块忽略**。
+        # 2026-09-21 踩过：抽到的角色没进角色列表（服务端存档里明明加了）。
+        cblk = d1.get("char")
+        if not isinstance(cblk, dict) or not cblk:
+            bad.append(f"抽卡回包里没有 char 块：{str(cblk)[:60]}（客户端角色列表不会更新）")
+        else:
+            for wrong in ("soldiers", "heros", "mechas"):
+                if wrong in cblk:
+                    bad.append(f"char 块里出现了 `{wrong}` —— 客户端不认这个键"
+                               f"（它读 `{wrong}Add`），抽到的角色不会进列表")
+            if str(cards[0]) and not any(k.endswith("Add") for k in cblk):
+                bad.append(f"char 块里一个 *Add 都没有：{sorted(cblk)}")
+            adds = cblk.get("soldiersAdd") or cblk.get("herosAdd") or cblk.get("mechasAdd") or []
+            if adds and not all(isinstance(x, dict) and "id" in x for x in adds):
+                bad.append(f"*Add 的元素要带 id（`addSoldiers` 是 `_soldiers[row.id] = row`）："
+                           f"{str(adds[:1])[:80]}")
+            if cblk.get("maxSoldiersCount") is None:
+                bad.append("char 块少了 maxSoldiersCount（客户端栏位上限靠它刷新）")
+            print(f"       char 块：{ {k: (len(v) if isinstance(v, list) else v) for k, v in cblk.items()} }")
 
         # 免费池每天 1 次：第一次 200、第二次 204
         # （用例前先把今天的免费次数清掉 —— 玩家自己可能已经抽过了，收尾会整体还原）
@@ -2586,6 +2644,11 @@ def main():
     ok = run_check(ok, "军士补齐自检异常", replenish_check)
 
     print()
+    # ⚠️ **整份军士名单先拍快照，最后原样还原** —— 下面这些用例会吃掉军士（升级链路
+    # 拿它们当材料）、也会**新增**军士（抽卡用例真的抽几发）。只靠 replenish 补默认
+    # 那 18 个是不够的：玩家抽卡得来的卡不在 SOLDIER_KEYS 里（2026-09-21 因此把
+    # 这个号的 44 个抽卡军士清空过）。
+    snapshot_roster()
     try:
         snapshot_teams()          # 军士链路会把材料（军士）吃掉、顺带从队伍里摘掉
         ok = soldier_flow(ok)
@@ -2593,13 +2656,13 @@ def main():
         print(f"  BAD 军士链路异常: {exc}")
         ok = False
     try:
-        restore_roster()
-    except Exception as exc:  # noqa: BLE001
-        print(f"  ..  收尾补军士失败（不影响结论）: {exc}")
-    try:
         restore_teams()
     except Exception as exc:  # noqa: BLE001
         print(f"  ..  收尾放回编成失败（不影响结论）: {exc}")
+    try:
+        restore_roster()
+    except Exception as exc:  # noqa: BLE001
+        print(f"  ..  收尾还原军士名单失败（不影响结论）: {exc}")
 
     ok = run_check(ok, "编成保存自检异常", team_save_check)
 
@@ -2632,6 +2695,13 @@ def main():
     ok = run_check(ok, "奖励图标自检异常", item_icon_check)
 
     ok = run_check(ok, "好感度自检异常", favor_check)
+
+    # 最后再还原一次军士名单：抽卡用例会**新增**军士（3 次抽卡 ≈ 12 张），
+    # 别的用例可能吃掉军士 —— 玩家的名单必须和跑之前一模一样。
+    try:
+        restore_roster()
+    except Exception as exc:  # noqa: BLE001
+        print(f"  ..  收尾还原军士名单失败（不影响结论）: {exc}")
 
     print("\n全部通过 ✅" if ok else "\n有路由没回 200 ❌")
     return 0 if ok else 1

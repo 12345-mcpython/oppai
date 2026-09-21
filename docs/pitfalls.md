@@ -1,6 +1,6 @@
 # 坑速查：按症状找原因
 
-> **一句话**：把这个项目里踩过的坑按「症状 → 真正原因 → 在哪个文件」列出来，共 16 条。
+> **一句话**：把这个项目里踩过的坑按「症状 → 真正原因 → 在哪个文件」列出来，共 18 条。
 >
 > **怎么用**：遇到「点了没反应 / 界面不动 / 数据不对 / 服务端明明发了客户端不认」，
 > 先扫下面那张表；命中之后再看对应编号那一节的定位过程。
@@ -26,6 +26,8 @@
 - [14. 「界面点不动、服务端没请求」——**先去客户端日志里找异常**](#14-界面点不动服务端没请求先去客户端日志里找异常)
 - [15. 同名节点：`seekNodeByName` 是**层序**，不是深度优先](#15-同名节点seeknodebyname-是层序不是深度优先)
 - [16. 客户端会 `JSON.parse` 的字段：服务端必须发**字符串**](#16-客户端会-jsonparse-的字段服务端必须发字符串)
+- [17. 「服务端发了、客户端不认」第三式：**键名差一个后缀**](#17-服务端发了客户端不认第三式键名差一个后缀)
+- [18. 迁移/自检的「补齐」只该补，**绝不该删**](#18-迁移自检的补齐只该补绝不该删)
 
 ---
 
@@ -64,6 +66,8 @@
 | 关卡结算面板**「获得物资」永远空着**、`Exp+N` 恒为 0 | 奖励块挂在 `data.level` 上了；客户端读的是 `data.rewards.levelReward`，而 `data.level` 只走 `Level.updateLevel()` | `gamesrv/instance.py` |
 | 某个界面**整页空白 + 左上角返回键有按下反馈但退不出去** | 建界面时 `seekNodeByName` 命中了**更深处的同名节点**（我们的 polyfill 写成了深度优先，原版是层序）→ ctor 中途抛 TypeError → 后面的 `_recommendationListPanel` 没建出来 → 返回键回调里 `this._recommendationListPanel.destroy()` 再抛一次，`run(new MainLayer())` 永远走不到 | `patch.js` 的 polyfill（层序 BFS）—— 见第 15 条 |
 | **点了没反应**（按钮有反馈、界面一个字都不报），logcat 里 `SyntaxError: JSON.parse: unexpected character at line 1 column 2` | 客户端那个字段的 getter 是 `JSON.parse(this._x)`，服务端却发了**对象** → `JSON.parse({})` 先把对象转成 `"[object Object]"` 再解析，第 1 行第 2 列就是那个 `o` | 见第 16 条（`player.medalWear`） |
+| 服务端日志里明明「发货成功」，客户端列表**没变化** | 回包块的**键名**跟客户端 `updateByServer` 读的对不上（差一个 `Add` 后缀之类）—— 它一个键一个键地 `if`，不认识的直接跳过，不报错 | 见第 17 条（`char` 块的 `soldiersAdd`） |
+| 玩家**抽卡/练好的东西过一阵自己没了**（跑过自检、或版本号涨过一次之后） | 「补齐/迁移」逻辑里带了**删除**：删「不在默认名单里的 key」、或按 key 去重 —— 而抽卡得到的卡和重复卡本来就不在默认名单里 | 见第 18 条（`store.replenish_soldiers`） |
 | 真机/新系统**装不上**报 `INSTALL_FAILED_DEPRECATED_SDK_VERSION` | 原版 `targetSdkVersion=23`，Android 14+ 禁装 <23、Android 15+ 禁装 <24 | **已修**：`build_apk.py` 的 `normalize_android_manifest()` 每次打包把 targetSdk 提到 **33**（并给带 intent-filter 的组件补 `android:exported`，31+ 不写同样装不上）。现在 `.\build.ps1 -Install` 直接装，不再需要 `--bypass-low-target-sdk-block`（那条开关只在装**旧**包时用） |
 | 看 `abilist32` 为空就以为**跑不了** 32 位的 `armeabi` | **不一定** —— 有些 ROM 带厂商 32 位兼容层。实测一加 PLZ110（Android 16、`zygote64`、`abilist32` 空）能正常跑 | 直接装一个试；见 [`REPRODUCE.md`](../REPRODUCE.md) Step 4b |
 | 编好的**队伍一直消失**（重登又是空的） | 两个原因叠在一起：①**队伍 id 对不上** —— 客户端认的 id 是「服务端 teams 数组的**下标**」（`Player.initTeams` 里 `new Team(this._teams[i], this._character, i)`，第三个参数就是 `for..in` 的 key），所以 `player.updateteams` 发的是 `"0".."4"`；而 `new_team()` 早期给的是 `id = index + 1`（1 起）→ 服务端 `未知队伍 id=0`、**整单静默跳过**（偶尔还会"撞上"另一支队 → 写错队伍）。② 跑 `selftest_game.py` 的军士升级链路会真吃掉两个军士，`handlers/char.py` 顺手把它们从队伍里摘掉 | `store.new_team()` 的 `id` = `index`（0 起）+ `store.normalize_team_ids()`（加载时对齐老存档）+ `handlers/player.py` 的 `update_teams` 按 index 找；自检脚本 `snapshot_teams()`/`restore_teams()` 收尾放回编成 |
@@ -637,5 +641,89 @@ updateMedalWear(v) { this._medalWear = JSON.stringify(v); }
 * 「点了没反应 + 界面无报错」优先怀疑**回调体抛异常**（见第 14 条）——
   这次报错只出现在 **logcat**，客户端界面一个字都没弹；
 * 服务端**两种形状都收**（dict / 字符串）能省掉一次「老存档把面板打不开」的回归。
+
+---
+
+## 17. 「服务端发了、客户端不认」第三式：**键名差一个后缀**
+
+**症状**（2026-09-21，玩家报「抽卡抽到的角色没进角色列表」）：
+
+* 服务端日志一切正常：`gacha.gacha 池子 1002 x10 → 军士 [22, 23, …]`，
+  存档里名单也从 18 涨到 62；
+* 客户端**角色列表一个都没多**，也没有任何报错；
+* 面板里实机量：`dataManager.character._soldiers` 只有 21 个（服务端 62）。
+
+**真正原因**：`CharCenter.updateByServer(data)` 是**一个键一个键地 if**：
+
+```js
+if (data.maxSoldiersCount != null) this._maxSoldiersCount = data.maxSoldiersCount;
+if (data.soldiersAdd) this.addSoldiers(data.soldiersAdd);
+if (data.herosAdd)    this.addHeros(data.herosAdd);
+if (data.mechasAdd)   this.addMechas(data.mechasAdd);
+if (data.charManual)  for (k in data.charManual) this._charManual[k] = data.charManual[k];
+```
+
+我们回的是 `{"soldiers": [...整份名单...]}` —— **键名是 `soldiers` 而不是
+`soldiersAdd`**，客户端整块跳过，既不加也不报错。`addSoldiers` 本身是
+`for (…) this.addSoldier(one)` = `new Soldier(one); _soldiers[one.id] = one`，
+所以正确形状是**「这次新增的那些行」**（带 `id`），不是整份名单。
+
+**修法**：`gacha.char_block()` 改成 `soldiersAdd`/`herosAdd`/`mechasAdd`
+（只发新增的，行里带 `id`），顺带带上 `charManual`（图鉴当场亮）和
+`maxSoldiersCount`。自检里加了断言：抽卡回包的 `char` 块**不许**出现
+`soldiers`/`heros`/`mechas` 这三个名字。
+
+**教训**：
+
+* 这套客户端的 `updateByServer` **全是「认键名」的**，多一个少一个字母都是
+  **静默 no-op**（不抛错、不警告）。写回包前把那个类的 `updateByServer`
+  反汇编看一眼，别照着字段名猜；
+* 「服务端日志说发了」和「客户端收到了」之间隔着键名、形状、派发三道关
+  （第 6/12/16 条是前两道，这条是键名）；
+* 判据很好拿：**实机量客户端内部状态**（`dataManager.character._soldiers` 的条数），
+  一眼就能分出「没发出去」和「发了没认」。
+
+---
+
+## 18. 迁移/自检的「补齐」只该补，**绝不该删**
+
+**症状**（2026-09-21，我自己造成的，玩家抽卡抽到的东西被清空）：
+
+* 玩家抽了 5 次卡，存档军士 18 → 62；
+* 我跑了一次 `script/selftest_game.py` 收尾，存档变回 **18** ——
+  44 个刚抽到的军士全没了。
+
+**真正原因**：`store.replenish_soldiers()` 名义上叫「补齐」，实际还做两件删除：
+
+```python
+if key not in key_set or key in seen:      # 不在默认名单里的 key / 重复 key
+    dropped_ids.add(row["id"]); continue   # → 删
+```
+
+* `SOLDIER_KEYS` 只有建号默认的 **18** 张，而卡池有 **152** 张自军卡
+  —— 抽到的任何一张都不在名单里 ⇒ 全删；
+* 抽到**重复卡**是正常结果，去重等于删玩家的东西。
+
+它当初是为 `ROSTER_VERSION` 迁移写的（「名单本身改了，旧 key 留着没用」），
+那个判断只对**建号默认名单**成立，对玩家自己攒的卡完全错。
+
+**修法**：
+
+* `replenish_soldiers` 现在**只补缺的**（默认名单里的 key 一个都没有才算缺），
+  返回的 `dropped` 恒为 0，一个都不删、不去重；
+* `selftest_game.py` 不再靠「补」来收尾：**跑之前把整份 `soldiers` 深拷贝拍快照，
+  跑完原样写回**（`snapshot_roster()` / `restore_roster()`），
+  抽卡用例新加的、升级链路吃掉的，全部回到跑之前的样子；
+* 回归测试 `replenish_check` 反向验证：假名单里塞一个「不在默认名单里的 key」
+  和一张重复卡，跑完必须**都还在**。
+
+**教训**：
+
+* 名字叫「补齐 / 迁移 / 修正」的函数里**一旦出现删除**，就要问一句
+  「这些被删的行，有没有可能是玩家自己挣来的？」—— 这类 bug 的表现是
+  **过一阵东西自己没了**（玩家很难复现、很容易被当成"服务器又回档了"）；
+* 自检脚本**必须自己负责还原**：它跑的是真存档，不能指望「反正补齐逻辑会兜」；
+* 玩家的东西（军士/道具/卡）只要没法原样恢复，就得先想清楚再动手 ——
+  这次那 44 张卡的 key 没进日志，只能按同样张数重抽补上（见 commit 说明）。
 
 ---

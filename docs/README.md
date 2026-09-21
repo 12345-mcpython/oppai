@@ -6,7 +6,7 @@
 | 文档 | 一句话 |
 |---|---|
 | [`overview.md`](overview.md) | **全景**：一句话、端到端链路、系统分层、关键逆向成果、现状与待办 |
-| [`pitfalls.md`](pitfalls.md) | **坑速查**：症状 → 真正原因 → 在哪个文件（16 条 + 一张症状总表） |
+| [`pitfalls.md`](pitfalls.md) | **坑速查**：症状 → 真正原因 → 在哪个文件（18 条 + 一张症状总表） |
 | [`differences.md`](differences.md) | **与原版的差异总账**：A 不得不改 / B 私服取舍 / C 还没做 / D **数值是猜的** |
 | [`protocol.md`](protocol.md) | 协议逐项细节 + 反汇编证据（CDN / 网关 / oauth / WS 握手 / 业务包 / 各玩法模块） |
 | [`build.md`](build.md) | 打包逻辑、ABI、完整重建命令、产物与解包目录的取舍 |

@@ -696,6 +696,14 @@ MODULE_OPEN_POPUP_SKIP = True
 # 「培养 / 升级军士」= 6 级，所以默认给 30 一步到位（顺带过了 25 级那批）。
 MIN_PLAYER_LV = 30
 
+# 军士栏位上限（`Player.maxSoldiersCount` / `char.maxSoldiersCount` 用的是同一个数）。
+#
+# 原版是 50（再往上靠 `100101 卡槽购买次数` 买），但**私服的卡池是全的**
+# （自军卡 152 张 + 英雄/机甲），抽几次就顶到 50 —— 客户端 `CharCenter.isSoldiersFull()`
+# 会把超出的部分算成 `getSoldiersOutOfRange()`（界面显示"超出 N 个"），
+# 而且刚抽到的军士会落在栏位外。私服没有付费卡槽这条路，所以直接给足。
+MAX_SOLDIERS_COUNT = 300
+
 # 初始士兵名单的版本号。**改动 SOLDIER_KEYS 时要 +1**，老存档会被补齐
 # （见 replenish_soldiers：缺的补回来、已有的原样留着，不会重置等级）。
 #
@@ -880,56 +888,45 @@ def _soldier_team_cleanup(player: dict, removed_ids: set) -> None:
 
 
 def replenish_soldiers(player: dict) -> tuple:
-    """按 `SOLDIER_KEYS` **补齐**军士名单：保留已有的，只补缺的。返回 (补了几个, 删了几个)。
+    """按 `SOLDIER_KEYS` **补齐**军士名单：**只补缺的，一个都不删**。返回 (补了几个, 删了几个=0)。
 
-    ⚠️⚠️ **旧的 `ROSTER_VERSION` 迁移是「整个重发」**（`player["soldiers"] = new_soldiers()`），
-    那是为了「名单本身改了，老 key 留着没用」。代价很重：**所有军士等级归零**。
-    踩过一次：`script/selftest_game.py` 的军士链路每跑一次吃掉 2 个军士当材料，
-    跑了 7 轮之后名单只剩 4 个；而恢复手段只有「重发」，等于顺手把玩家练过的那 4 个
-    也一起清了。
+    ⚠️⚠️ **这里绝不能删、也不能按 key 去重**（2026-09-21 踩，代价是玩家真金白银抽的卡）：
 
-    改成合并之后：**版本号一涨，缺的补回来、已有的原样留着（等级/星级/技能都在）**，
-    只有「已经不在 `SOLDIER_KEYS` 里的旧 key」才会被删掉。
+    * 删掉「不在 `SOLDIER_KEYS` 里的 key」= 把**抽卡抽到的军士全清空** ——
+      卡池有 152 张自军卡，只有 18 张在 `SOLDIER_KEYS` 里；
+    * 按 key 去重 = 把**重复抽到的同一张卡**清掉，而抽卡出重复是正常结果。
+
+    原来的写法（`key not in key_set or key in seen` → 删）是为了「名单本身改了，
+    旧 key 留着没用」，但那个判断只对**建号默认名单**成立，对玩家自己攒的卡完全错。
+    当天就出事了：`script/selftest_game.py` 收尾调它一下，把玩家抽到的 44 个军士
+    全删了（存档 62 → 18）。
+
+    「缺」的定义也改了：默认名单里的 key **玩家一个都没有**才算缺（重复拥有不算缺，
+    否则越补越多）。`soldiers` 数组里的顺序按 id 排，和服务端别处一致。
 
     注意这**不是**每次登录都跑 —— 那样被当材料吃掉的军士会立刻长回来（等于无限材料）。
     只在 `_migrate` 里 rosterVersion 变了的时候跑一次，和天赋/装备材料补货同一个道理。
     """
-    keys = [k for k, _p, _q in SOLDIER_KEYS]
-    key_set = set(keys)
     old = player.get("soldiers")
-    old = old if isinstance(old, list) else []
-
-    kept, dropped_ids, seen = [], set(), set()
-    for row in old:
-        if not isinstance(row, dict):
-            continue
-        key = str(row.get("key") or "")
-        if key not in key_set or key in seen:
-            # 已经不在名单里的旧 key（比如早期误收的敌方单位）→ 删
-            # 同一个 key 出现两次 → 只留第一个（免得越补越多）
-            if row.get("id") is not None:
-                dropped_ids.add(row.get("id"))
-            continue
-        seen.add(key)
-        kept.append(row)
+    kept = [row for row in (old if isinstance(old, list) else []) if isinstance(row, dict)]
+    have = {str(row.get("key") or "") for row in kept}
 
     used_ids = {int(r.get("id") or 0) for r in kept}
     next_id = 1
     added = 0
     for key, positioning, quality in SOLDIER_KEYS:
-        if key in seen:
+        if key in have:
             continue
         while next_id in used_ids:
             next_id += 1
         kept.append(new_soldier(next_id, key, positioning, quality))
         used_ids.add(next_id)
-        seen.add(key)
+        have.add(key)
         added += 1
 
     kept.sort(key=lambda r: int(r.get("id") or 0))
     player["soldiers"] = kept
-    _soldier_team_cleanup(player, dropped_ids)
-    return added, len(dropped_ids)
+    return added, 0
 
 
 def find_soldier(player: dict, soldier_id) -> dict | None:
@@ -1137,7 +1134,7 @@ def new_player(account: str) -> dict:
         "numberId": 0,
         "lv": MIN_PLAYER_LV,
         "curExp": 0,
-        "maxSoldiersCount": 50,
+        "maxSoldiersCount": MAX_SOLDIERS_COUNT,
         "actionPoint": 100,
         "maxActionPoint": 100,
         "actionPointTime": time_str(now),
@@ -1268,6 +1265,11 @@ def _migrate(player: dict) -> bool:
         player["lv"] = MIN_PLAYER_LV
         changed = True
         log.info("玩家 %s 指挥部等级补到 %d", player.get("account"), MIN_PLAYER_LV)
+    # 军士栏位上限也补一次（老存档是原版的 50，抽几次就溢出；见 MAX_SOLDIERS_COUNT）
+    if int(player.get("maxSoldiersCount") or 0) < MAX_SOLDIERS_COUNT:
+        player["maxSoldiersCount"] = MAX_SOLDIERS_COUNT
+        changed = True
+        log.info("玩家 %s 军士栏位上限补到 %d", player.get("account"), MAX_SOLDIERS_COUNT)
     # 天赋材料补货。老存档的 `items` 已经存在，上面「按 key 补字段」那圈救不到，
     # 所以单独做一步。
     #

@@ -442,16 +442,40 @@ def grant(player: dict, cards: list) -> dict:
 
 
 def char_block(player: dict, granted: dict) -> dict:
-    """回包里捎给 `CharCenter.updateByServer` 的块（抽到英雄/机甲/军士才带）。"""
+    """回包捎给 `CharCenter.updateByServer` 的块（抽到东西才带）。
+
+    ⚠️⚠️ **键名是 `soldiersAdd` / `herosAdd` / `mechasAdd`，不是
+    `soldiers` / `heros` / `mechas`** —— 反汇编 `CharCenter.updateByServer`：
+
+        if (data.maxSoldiersCount != null) this._maxSoldiersCount = data.maxSoldiersCount;
+        if (data.soldiersAdd) this.addSoldiers(data.soldiersAdd);
+        if (data.herosAdd)    this.addHeros(data.herosAdd);
+        if (data.mechasAdd)   this.addMechas(data.mechasAdd);
+        if (data.charManual)  for (k in data.charManual) this._charManual[k] = data.charManual[k];
+                              this._checkNewSoldierHead();
+
+    2026-09-21 踩的坑：这里原来发的是 `soldiers`（= 整份名单），客户端**整块忽略**
+    —— 表现就是「抽卡抽到的角色没进角色列表」（服务端存档里明明已经加进去了）。
+    `addSoldiers` 是逐个 `new Soldier(row)` 塞进 `_soldiers[row.id]`，
+    所以这里只发**这次新加的**，别发整份（`items.settle` 会回新 id）。
+    """
     out = {}
     if granted.get("soldiers"):
-        out["soldiers"] = store.ensure_soldiers(player)
+        ids = {int(x) for x in granted["soldiers"]}
+        out["soldiersAdd"] = [one for one in store.ensure_soldiers(player)
+                              if int(one.get("id") or 0) in ids]
     if granted.get("heros"):
-        out["heros"] = [h for h in store.player_heros(player)
-                        if h.get("key") in granted["heros"]]
+        want = {str(k) for k in granted["heros"]}
+        out["herosAdd"] = [one for one in store.player_heros(player)
+                           if str(one.get("key")) in want]
     if granted.get("mechas"):
-        out["mechas"] = [m for m in store.player_mechas(player)
-                         if m.get("key") in granted["mechas"]]
+        want = {str(k) for k in granted["mechas"]}
+        out["mechasAdd"] = [one for one in store.player_mechas(player)
+                            if str(one.get("key")) in want]
+    if out:
+        # 图鉴（菜单 → 情报室）也跟着亮：`updateByServer` 认 charManual（按 key 合并）
+        out["charManual"] = store.player_char_manual(player)
+        out["maxSoldiersCount"] = int(player.get("maxSoldiersCount") or 0)
     return out
 
 
