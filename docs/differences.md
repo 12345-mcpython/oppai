@@ -86,7 +86,7 @@
 ## C. 还没做（缺口）
 
 `python script\route_gap.py --static` 能列出全部。当前：客户端静态候选 **161** 条，
-服务端已实现 **110** 条，**缺 59** 条。
+服务端已实现 **112** 条，**缺 57** 条。
 
 | 命名空间 | 缺 | 原版是什么 | 为什么没做 |
 |---|---|---|---|
@@ -94,8 +94,11 @@
 | `exchange.*` | 1 | 黑市交易所（充值/月卡/礼包） | **只差 IAP 那半边**：`checkorder`/`payment`/`judgeexchangestate` 都实现了，但私服没有支付渠道，只能回「不可购买」；金条↔萌钞、行动力/BP/卡槽兑换全通（见 [protocol.md §6.5](protocol.md)） |
 | `boss.*` | 5 | 好友 BOSS | 私服**故意**回空 |
 | `gacha.*` | 内容缺口 | 扭蛋 | **不是接线缺口**：176 张客户端表里没有一张是卡池配置（那是服务端下发的），要做只能自己造 master 数据 |
-| `diary.*` | 2 | 私密剧情购买 / 解锁 | 要先把 `table_story`（668 行）那套行形状和「已解锁」的存档结构定下来（`subareaachievement.receivereward` 已做，见 [protocol.md §6.4](protocol.md)） |
 | 其他 | 若干 | —— | —— |
+
+> ✅ `diary.*`（2 条）**2026-09-21 已实现**（见 [protocol.md §16](protocol.md)）：
+> `table_story_review` 那 38 行只有 `image`，行形状靠反汇编 `Diary._initData` 定的
+> （`unlockLevels` / `lockLevels` 两个 map），已解锁 = 通关过的关卡 + 买过的。
 
 **已知的"能看见但不完整"：**
 
@@ -171,6 +174,8 @@
 | 勋章**条件语义**（`condition_kind`） | 10 类按 `table_medal.desc` + `times` 反推（抚摸 / 送礼 / 演习 / 派遣 / 军士达 X 级 / 好感达 X 级 / 抽卡 / 浴衣 / 日常条数 / 战斗失败） | `condition_id` 指向 `table_medal_condition`，那里只有 `condition_ids` = 原版**服务端**的 condition 对象 id（客户端没有对应的表）→ 语义只能从 desc 反推 | 阈值（70 级 / 好感 15）是用正则从 desc 里抠的；`1001` 通关指定关卡要点名关卡（需要 `table_level` 的「关卡名→key」表，还没抽）、`1003` 我方军士被推倒次数要战斗内部统计、`4002` 获得指定军士要「卡 key ↔ 名字」表 —— 这三类**进度恒 0，不假装完成**，见 `medal.progress_of` |
 | 好友**的勋章**（`getfriendmedalinfo`） | 按 numberId 给一份**确定性**的：前 `1 + (numberId % 12)` 条勋章算达成、每组戴一个（最多 3 个） | 真人好友自己的勋章 | NPC 没有真实进度，确定性比随机好排查；换法在 `medal.friend_medal_info` |
 | **礼包内容**（`convert.convert`） | 自己定三档：800001 → 金条 30 + 萌钞 5000；800002 → 金条 80 + 萌钞 15000 + 行动力 30；800003 → 金条 200 + 萌钞 40000 + 行动力 80 + 好人卡 5 | 原版在服务端，客户端表里**没有**：`table_convert_reward` 只给 `consume`/`reward_key`，而 `reward_key`（1030000x）指向的奖励内容全库 0 命中 | `handlers/convert.py` 的 `CONVERT_REWARDS`，改一个 dict 就行。⚠️ 礼包道具本身在私服没有稳定来源（原版靠活动），要试得先给自己发几个 800001~800003 |
+| **私密剧情价格**（`diary.buyunlockstory`） | **`30 + 5 × 章节序号`** 金条（`table_story_review` 顺序），单章可覆盖 | `table_story_review`（38 行）客户端抽出来**只有 `image`**，`price` 是原版**服务端**塞进那张表的 → 数值无处可查。同一件事还导致**客户端 UI 里那个确认弹窗文案是「…花费 undefined 金条解锁该剧情？」**（`diarylevelitem` 读 `table_story_review[cid].price`） | 单旋钮 `diary.STORY_PRICE` / `diary.STORY_PRICE_DEFAULT`。想连弹窗文案一起修：登录块里已经顺带发了一份 `data.diary.prices`（客户端不读，专供补丁），在 `patch.js` 里把它填回 `table_story_review[*].price` 并重打包 APK |
+| 私密剧情**可买章节 / 已解锁判定** | 38 章**全部可买**；「通关过的关卡」算已解锁（读 `instance` 存档 `levels[key].starMark/playCount`），其余进 `lockLevels` 可买 | 原版按活动时间逐步开（客户端表里 `activity_chapter_unlock_diary_days = 7` 就是那个天数），且"已解锁"多半也来自服务端下发 | 可买：`diary.buy_info()`（原版那套时间表无从考证）；判定：`diary._cleared_levels` / `bought_of` |
 
 **反过来说，这些是"表里写死、和原版一致"的**（不用担心）：
 好感度升级曲线（`table_favor_upgrade`，500/700/…/90000，满级 15）、

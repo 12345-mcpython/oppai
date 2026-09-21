@@ -2784,6 +2784,137 @@ def friendsupport_check(ok: bool) -> bool:
     return ok
 
 
+def diary_check(ok: bool) -> bool:
+    """私密剧情（`diary.*` 2 条）：登录块行形状 / 可买信息 / 花金条解锁 / 错误码。
+
+    客户端契约（`assets/src/data/diary.jsc` 反汇编）：
+
+    * 登录块 `data.diary` = `{storyDiarys: {cid: 行}, diarysBuyInfo: {cid: 1}}`；
+      行里只有两个字段被读：`unlockLevels[lid]`（已解锁）、`lockLevels[lid]`（可买）；
+    * `isStoryCanShow` 里是 `_diarysBuyInfo[cid] == 1` —— **松散相等**，必须给数字 1
+      （给对象/字符串 "1" 会有意外）；
+    * `diary.getdiarybuyinfo` -> `{diarysBuyInfo, updateDiarys}`（客户端按 key 合并）；
+    * `diary.buyunlockstory {chapterId, levelId}` -> `data` = 该章的新行
+      （客户端 `_storyDiarys[data.chapterId] = data`）；失败码 201..204 会 toast 文案。
+
+    ⚠️ 会真花金条，跑完还原（道具 + 剧情存档）。
+    """
+    from gamesrv import config, diary, items, store
+
+    account = config.DEFAULT_ACCOUNT
+    player = store.get_or_create_player(account)
+    before_diary = json.loads(json.dumps(player.get("diary") or {}))
+    before_items = dict(items.items_of(player))
+    bad = []
+
+    try:
+        login = call("agent.getlogindata", {}, 340)
+        dblk = (login.get("data") or {}).get("diary") or {}
+        story = dblk.get("storyDiarys")
+        buy = dblk.get("diarysBuyInfo")
+        if not isinstance(story, dict) or not story:
+            bad.append(f"data.diary.storyDiarys 是 {type(story).__name__}，要是 map（章节->行）")
+            story = {}
+        if not isinstance(buy, dict) or not buy:
+            bad.append(f"data.diary.diarysBuyInfo 是 {type(buy).__name__}，要是 map")
+            buy = {}
+        for cid, row in list(story.items())[:3]:
+            if not isinstance(row, dict):
+                bad.append(f"{cid}: 行不是对象")
+                break
+            if not isinstance(row.get("unlockLevels"), dict) or \
+                    not isinstance(row.get("lockLevels"), dict):
+                bad.append(f"{cid}: 行里 unlockLevels/lockLevels 必须是 map"
+                           f"（客户端 isUnlock 直接取下标）")
+                break
+        for cid, flag in list(buy.items())[:3]:
+            if not isinstance(flag, int) or flag != 1:
+                bad.append(f"diarysBuyInfo[{cid}] = {flag!r}，客户端判 `== 1`（给整数 1）")
+                break
+        print(f"       登录块：{len(story)} 章剧情、可买 {len(buy)} 章")
+
+        r = call("diary.getdiarybuyinfo", {}, 341)
+        d = r.get("data") or {}
+        if r.get("code") != 200 or not isinstance(d.get("diarysBuyInfo"), dict) \
+                or not isinstance(d.get("updateDiarys"), dict):
+            bad.append(f"diary.getdiarybuyinfo 回包形状不对：code={r.get('code')} "
+                       f"keys={sorted(d)[:5]}（要 {{diarysBuyInfo, updateDiarys}}）")
+
+        # 找一条「可买」的：从任意一章的 lockLevels 里拿
+        cid = lid = None
+        p = store.get_or_create_player(account)
+        for k in sorted(story):
+            row = diary.story_row(p, k)
+            if row["lockLevels"]:
+                cid = k
+                lid = sorted(row["lockLevels"])[0]
+                break
+        if cid is None:
+            bad.append("所有章节都没有可买的剧情（lockLevels 全空）—— 买不了就没法验")
+        else:
+            price = diary.price_of(cid)
+            gem_before = items.count_of(store.get_or_create_player(account), diary.GEM)
+            r = call("diary.buyunlockstory", {"chapterId": cid, "levelId": lid}, 342)
+            row = r.get("data") or {}
+            if r.get("code") != 200:
+                bad.append(f"解锁 {cid}/{lid} code={r.get('code')} {str(r)[:80]}")
+            else:
+                if str(row.get("chapterId")) != str(cid):
+                    bad.append(f"回包行里 chapterId={row.get('chapterId')!r}，客户端拿它当 key")
+                if not (row.get("unlockLevels") or {}).get(lid):
+                    bad.append(f"解锁之后 {lid} 还在 lockLevels 里（unlockLevels={list((row.get('unlockLevels') or {}))[:4]}）")
+                gem_after = items.count_of(store.get_or_create_player(account), diary.GEM)
+                if gem_after != gem_before - price:
+                    bad.append(f"金条没按价格扣：{gem_before} -> {gem_after}（价格 {price}）")
+                else:
+                    print(f"       解锁 {cid}/{lid}：-{price} 金条（{gem_before} -> {gem_after}），"
+                          f"该章已解锁 {len(row.get('unlockLevels') or {})} 条")
+                again = call("diary.buyunlockstory", {"chapterId": cid, "levelId": lid}, 343)
+                if again.get("code") != 202:
+                    bad.append(f"重复解锁 code={again.get('code')}，应该是 202（该章节已解锁）")
+                bad_ch = call("diary.buyunlockstory",
+                              {"chapterId": "999999", "levelId": lid}, 344)
+                if bad_ch.get("code") != 204:
+                    bad.append(f"不存在的章节 code={bad_ch.get('code')}，应该是 204（章节错误）")
+                bad_lv = call("diary.buyunlockstory",
+                              {"chapterId": cid, "levelId": "1"}, 345)
+                if bad_lv.get("code") != 203:
+                    bad.append(f"不属于该章的关卡 code={bad_lv.get('code')}，应该是 203（标签错误）")
+                # 金条不够 -> 201
+                p2 = store.get_or_create_player(account)
+                gem_now = int(items.items_of(p2).get(diary.GEM) or 0)
+                items.items_of(p2)[diary.GEM] = 0
+                store.save_player(p2)
+                row2 = diary.story_row(store.get_or_create_player(account), cid)
+                poor_lid = next((x for x in sorted(row2["lockLevels"]) if x != lid), None)
+                if poor_lid:
+                    poor = call("diary.buyunlockstory",
+                                {"chapterId": cid, "levelId": poor_lid}, 346)
+                    if poor.get("code") != 201:
+                        bad.append(f"金条不够时 code={poor.get('code')}，应该是 201（物品不足）")
+                p3 = store.get_or_create_player(account)
+                items.items_of(p3)[diary.GEM] = gem_now
+                store.save_player(p3)
+    finally:
+        p = store.get_or_create_player(account)
+        p["diary"] = before_diary
+        got = items.items_of(p)
+        for k in [k for k in got if k not in before_items]:
+            del got[k]
+        for k, v in before_items.items():
+            got[k] = v
+        store.save_player(p)
+
+    if bad:
+        for one in bad[:10]:
+            print(f"  BAD {one}")
+        return False
+    print("  OK  私密剧情：登录块 {storyDiarys, diarysBuyInfo}（值是整数 1）、行里 "
+          "unlockLevels/lockLevels 是 map、getdiarybuyinfo 形状对、解锁按章节价扣金条、"
+          "重复 202 / 错章 204 / 错关 203 / 金条不足 201（收尾已还原）")
+    return ok
+
+
 def run_check(ok: bool, name: str, fn) -> bool:
     """跑一项检查：支持 --only 过滤 + 打印用时（自检太慢，得知道时间花在哪）。"""
     if ONLY and ONLY not in name:
@@ -2871,6 +3002,8 @@ def main():
     ok = run_check(ok, "交易所自检异常", exchange_check)
 
     ok = run_check(ok, "分享礼包自检异常", share_convert_check)
+
+    ok = run_check(ok, "私密剧情自检异常", diary_check)
 
     ok = run_check(ok, "派遣自检异常", detect_check)
 

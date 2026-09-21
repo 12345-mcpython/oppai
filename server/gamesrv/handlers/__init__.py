@@ -45,6 +45,7 @@ def load_all():
     from . import char  # noqa: F401
     from . import convert  # noqa: F401
     from . import detect  # noqa: F401
+    from . import diary  # noqa: F401
     from . import equipment  # noqa: F401
     from . import exchange  # noqa: F401
     from . import favor  # noqa: F401

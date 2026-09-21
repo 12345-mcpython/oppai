@@ -11,8 +11,8 @@ from __future__ import annotations
 import json
 
 from ..gameproto import CODE_OK
-from .. import (arena, config, detect, exchange, favor, friends, gacha, instance, logx,
-                medal, quests, share, sign, store, subarea)
+from .. import (arena, config, detect, diary, exchange, favor, friends, gacha, instance,
+                logx, medal, quests, share, sign, store, subarea)
 from . import route
 
 log = logx.get("handler.agent")
@@ -182,7 +182,11 @@ def _module_stubs(player: dict | None = None) -> dict:
         # 分组/领奖都对不上。
         "subareaachievement": subarea.block(player),
         "consumeactivity": {"activityInfo": {}},
-        "diary": {"storyDiarys": [], "levels": [], "newLevels": []},
+        # 私密剧情（回看 / 花金条解锁）。形状 `{storyDiarys: {cid: {unlockLevels, lockLevels}},
+        # diarysBuyInfo: {cid: 1}}` —— `Diary._initData` 只读前两个，
+        # 而 `isStoryCanShow` 里 `_diarysBuyInfo[cid] == 1` 是**松散相等**（给 1，别给对象）。
+        # 见 gamesrv/diary.py。
+        "diary": diary.block(player),
         "friendsupport": {"soldiers": [], "userecord": {}},
         "novicequest": {"noviceQuest": {"chars": [], "lines": []}, "lines": [], "chars": []},
     }

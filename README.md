@@ -20,7 +20,7 @@ Kuro Game《战场双马尾》v2.2.0 已停服。这个项目用**纯 Python（�
 
 | 路径 | 内容 |
 |---|---|
-| `server/` | Python 服务端（纯标准库，无依赖），72 条业务路由 + 浏览器调试台 + 引擎调试桥 |
+| `server/` | Python 服务端（纯标准库，无依赖），112 条业务路由 + 浏览器调试台 + 引擎调试桥 |
 | `script/` | 实用脚本：jsc 反编译 / 反汇编 / 按函数切原子表、抽客户端表、apktool 打包、APK 体积体检、smali 可达性分析、路由缺口分析… |
 | `engine/build/` | 引擎补丁脚本（30 个，每个都幂等可重跑）+ `oppai-engine/{Classes,jni}`：我们自己写的 `jsb_oppai_*` 绑定和 `Android.mk` |
 | `build.ps1` | 一键构建 |
@@ -225,7 +225,7 @@ python script\serve.py           # 守护进程，run.py 挂了自动拉起（�
 | **[`REPRODUCE.md`](REPRODUCE.md)** | ★ **从零复刻**：环境、外部资源、逐步操作 + 验证点、排查顺序 |
 | [`docs/README.md`](docs/README.md) | 文档目录速览（一屏，含「不在 docs/ 的几份」和写文档的两条约定） |
 | [`docs/overview.md`](docs/overview.md) | ★ **先看这份**：全景、系统分层、关键逆向成果、现状与待办 |
-| [`docs/pitfalls.md`](docs/pitfalls.md) | ★ **坑速查**：症状 → 真正原因 → 在哪个文件（14 条，排查必翻） |
+| [`docs/pitfalls.md`](docs/pitfalls.md) | ★ **坑速查**：症状 → 真正原因 → 在哪个文件（19 条，排查必翻） |
 | [`docs/differences.md`](docs/differences.md) | ★ **与原版的差异总账**：A 不得不改 / B 私服取舍 / C 还没做 / D **数值是猜的** |
 | [`docs/protocol.md`](docs/protocol.md) | 协议逐项细节 + 反汇编证据 |
 | [`docs/reverse-engineering.md`](docs/reverse-engineering.md) | jsc 反汇编器原理、运行时探测手法 |

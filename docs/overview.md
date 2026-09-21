@@ -52,6 +52,7 @@
 | **日常 / 成就任务** | ✅ | 三类任务（主线/日常/成就）共用 `quest.*`；日常一天放当前等级那一档、换日 05:00、奖励真发 |
 | **好友** | ⚠️ | 9 条 `friend.*` 全实现（搜索/申请/同意/拒绝/删除/送收物资/两个列表）；好友是 **NPC**（没有别的玩家），见 §7 |
 | **勋章 / 头像 / 衣柜** | ⚠️ | 9 条 `medal.*` 全实现（换头像/衣服/背景、佩戴、清 NEW、好友勋章）；衣柜与头像是**背包道具**（type 40/50/60/70），勋章进度按 `condition_kind` 反推，25 条活动勋章直接算完成，见 §7 |
+| **私密剧情（回看/解锁）** | ⚠️ | 2 条 `diary.*` 全实现；登录块 `storyDiarys` 里 **通关过的算已解锁**、没通关的进 `lockLevels` 可花金条买；38 章全开、价格 `30+5×序号`（原版价在服务端，见 differences §D） |
 | 开场/引导视频 | ✅ | 视频层清理 + 幂等守卫 |
 | 扭蛋 / 抽卡 | ⚠️ | 缺运营配置（`gachaMasterList`），靠兜底不让它崩 |
 | **培养（天赋）** | ✅ | 三条课题（101 军士 / 102 机甲 / 103 克制），`player.selecttalent` / `player.upgradetalent` 落盘、升级真扣材料。⚠️ 入口是编成→培养里的「**萌源增幅**」，要**通关 3-6** 才解锁（`table_function_open[100014].unlock_level_key = "100316"`）；103 还要指挥部 40 级 |
@@ -408,6 +409,15 @@ vanilla 不传参 → 游戏代码 `function (eventName) { if (/began\d/.test(ev
       扣道具发奖。两个坑都记在 [protocol.md §14](protocol.md)：
       分享的 `rewards` 必须是 **map**、礼包回包的 `data` 必须是**奖励数组**。
       礼包内容原版在服务端、客户端表里没有 → 私服自己定（[differences.md](differences.md) §D）。
+ - [x] **私密剧情**（2 条 `diary.*`）：登录块 `data.diary` = `{storyDiarys, diarysBuyInfo}`
+       —— 行里只有 `unlockLevels`（已解锁）/ `lockLevels`（可买）两个 map 会被读，
+       `diarysBuyInfo[cid] == 1` 是**松散相等**（必须给整数 1）。
+       **通关过的关卡算已解锁**（读 `instance` 存档），其余可花金条买
+       （`30 + 5 × 章节序号`，买过的存 `player["diary"]["bought"]`）；
+       失败码 201..204 对应 `table_dictionary[3402..3405]`（物品不足/已解锁/标签错误/章节错误）。
+       ⚠️ `table_story_review[*].price` **客户端表里没有**（原版服务端塞的）→
+       确认弹窗会显示 `undefined`，登录块顺带发了 `prices` 供 `patch.js` 修（要重打包）。
+       见 [protocol.md §16](protocol.md)。
 - [x] 文档：协议 / 逆向手法 / 打包逻辑 / 调试台 / 引擎调试 / 本总览 / **与原版的差异** / **从零复刻**
 
 ### 待办（按卡点排序）
@@ -441,11 +451,10 @@ vanilla 不传参 → 游戏代码 `function (eventName) { if (/began\d/.test(ev
    现在回 `{recommendList: [...]}`（实机量过：客户端拿到 20 条，第一条 `ai001`）。
    见 [protocol.md §15](protocol.md) + `handlers/friendsupport.py` 的模块注释。
 3. **其余未实现的 route** —— `python script/route_gap.py --static` 能列出全部。
-   当前：客户端静态候选 **161** 条，服务端 **110** 条，缺 **59** 条。按单机价值排：
+   当前：客户端静态候选 **161** 条，服务端 **112** 条，缺 **57** 条。按单机价值排：
 
    | 命名空间 | 缺 | 说明 |
    |---|---|---|
-   | `diary.*` | 2 | 私密剧情购买/解锁（要 `table_story` 那套 + 行形状） |
    | `boss.*` | 5 | 好友 BOSS（`getbosslist` 已实现并回空表） |
    | `society.*` / `societyclg.*` | 33+6 | 军团——单机价值低、量最大 |
 
@@ -455,7 +464,8 @@ vanilla 不传参 → 游戏代码 `function (eventName) { if (/began\d/.test(ev
    ✅ 已经补完的：`equipment.*`(7)、`favor.*`(5)、`favorevent.*`(1)、
    **`char.upgradedaemon`**(1)、**`player.updateasst`**(1)、
    `player.selecttalent`/`upgradetalent`、`sign.*`(1)、`detect.*`(6)、**`arena.*`**(4)、
-   **`friend.*`**(9)、**`medal.*`**(9)、**`share.*`**(1)、**`convert.*`**(1)。
+   **`friend.*`**(9)、**`medal.*`**(9)、**`share.*`**(1)、**`convert.*`**(1)、
+   **`diary.*`**(2)。
 4. `hashKey` / `hmac64` 还没复刻（登录靠单位元绕过）；自研 DH 的完整算法也没还原。
 
 ---

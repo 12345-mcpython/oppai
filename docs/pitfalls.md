@@ -1,6 +1,6 @@
 # 坑速查：按症状找原因
 
-> **一句话**：把这个项目里踩过的坑按「症状 → 真正原因 → 在哪个文件」列出来，共 18 条。
+> **一句话**：把这个项目里踩过的坑按「症状 → 真正原因 → 在哪个文件」列出来，共 19 条。
 >
 > **怎么用**：遇到「点了没反应 / 界面不动 / 数据不对 / 服务端明明发了客户端不认」，
 > 先扫下面那张表；命中之后再看对应编号那一节的定位过程。
@@ -68,6 +68,7 @@
 | **点了没反应**（按钮有反馈、界面一个字都不报），logcat 里 `SyntaxError: JSON.parse: unexpected character at line 1 column 2` | 客户端那个字段的 getter 是 `JSON.parse(this._x)`，服务端却发了**对象** → `JSON.parse({})` 先把对象转成 `"[object Object]"` 再解析，第 1 行第 2 列就是那个 `o` | 见第 16 条（`player.medalWear`） |
 | 服务端日志里明明「发货成功」，客户端列表**没变化** | 回包块的**键名**跟客户端 `updateByServer` 读的对不上（差一个 `Add` 后缀之类）—— 它一个键一个键地 `if`，不认识的直接跳过，不报错 | 见第 17 条（`char` 块的 `soldiersAdd`） |
 | 玩家**抽卡/练好的东西过一阵自己没了**（跑过自检、或版本号涨过一次之后） | 「补齐/迁移」逻辑里带了**删除**：删「不在默认名单里的 key」、或按 key 去重 —— 而抽卡得到的卡和重复卡本来就不在默认名单里 | 见第 18 条（`store.replenish_soldiers`） |
+| UI **文案/数值里冒出 `undefined`**（例：「是否花费 **undefined** 金条解锁该剧情？」），或某个数是 0/空但界面上明明该有 | 客户端**静态表里根本没有这个字段** —— 原版是**服务端**在登录时补进表的（`table_story_review[cid].price`、派遣的掉落组表、签到排期、卡池配置都是这一类） | 见第 19 条（`diary` 的 `price`；[differences.md](differences.md) §D） |
 | 真机/新系统**装不上**报 `INSTALL_FAILED_DEPRECATED_SDK_VERSION` | 原版 `targetSdkVersion=23`，Android 14+ 禁装 <23、Android 15+ 禁装 <24 | **已修**：`build_apk.py` 的 `normalize_android_manifest()` 每次打包把 targetSdk 提到 **33**（并给带 intent-filter 的组件补 `android:exported`，31+ 不写同样装不上）。现在 `.\build.ps1 -Install` 直接装，不再需要 `--bypass-low-target-sdk-block`（那条开关只在装**旧**包时用） |
 | 看 `abilist32` 为空就以为**跑不了** 32 位的 `armeabi` | **不一定** —— 有些 ROM 带厂商 32 位兼容层。实测一加 PLZ110（Android 16、`zygote64`、`abilist32` 空）能正常跑 | 直接装一个试；见 [`REPRODUCE.md`](../REPRODUCE.md) Step 4b |
 | 编好的**队伍一直消失**（重登又是空的） | 两个原因叠在一起：①**队伍 id 对不上** —— 客户端认的 id 是「服务端 teams 数组的**下标**」（`Player.initTeams` 里 `new Team(this._teams[i], this._character, i)`，第三个参数就是 `for..in` 的 key），所以 `player.updateteams` 发的是 `"0".."4"`；而 `new_team()` 早期给的是 `id = index + 1`（1 起）→ 服务端 `未知队伍 id=0`、**整单静默跳过**（偶尔还会"撞上"另一支队 → 写错队伍）。② 跑 `selftest_game.py` 的军士升级链路会真吃掉两个军士，`handlers/char.py` 顺手把它们从队伍里摘掉 | `store.new_team()` 的 `id` = `index`（0 起）+ `store.normalize_team_ids()`（加载时对齐老存档）+ `handlers/player.py` 的 `update_teams` 按 index 找；自检脚本 `snapshot_teams()`/`restore_teams()` 收尾放回编成 |
@@ -725,5 +726,49 @@ if key not in key_set or key in seen:      # 不在默认名单里的 key / 重�
 * 自检脚本**必须自己负责还原**：它跑的是真存档，不能指望「反正补齐逻辑会兜」；
 * 玩家的东西（军士/道具/卡）只要没法原样恢复，就得先想清楚再动手 ——
   这次那 44 张卡的 key 没进日志，只能按同样张数重抽补上（见 commit 说明）。
+
+---
+
+## 19. 客户端表里**没有的字段** = 原版在**服务端**下发的
+
+**症状**（2026-09-21，做私密剧情 `diary.*` 时）：
+
+* 客户端点「解锁剧情」弹出的确认框文案是
+  「是否花费 **undefined** 金条解锁该剧情？」；
+* 而客户端明明有这个字符串：`table_dictionary[3401]` 就是
+  `"是否花费%d金条解锁该剧情？"` —— `%d` 那一位填进去的是 `undefined`。
+
+**真正原因**：那句话的数值来自客户端**静态表**里的一个字段，
+而那个字段在客户端表里**根本不存在**：
+
+```js
+// src/ui/illustrated/diarylevelitem.jsc
+BuyPopBox.pop(table_dictionary[3401].replace('%d',
+              table_story_review[chapterId].price), cb, ITEM_KEY.GEM);
+```
+
+本服从客户端抽出来的 `table_story_review`（38 行）**每行只有 `image`**（立绘文件名），
+`price` 是原版**服务端**在登录时塞进那张表里的 —— 停服后这个数就永久丢了。
+
+**同类清单**（"表里空着 / 没有这列" 的字段，几乎都是原版服务端下发的）：
+
+| 表 | 缺的字段 | 谁在用 |
+| --- | --- | --- |
+| `table_story_review` | `price` | 剧情解锁确认框（本服自己定价，见 differences §D） |
+| `table_detect_chapter` | `gainItemGroup<i>` 指向的**道具组表** | 派遣掉落（整张表客户端没有） |
+| （没有签到表） | 排期 + 奖励 | 签到（客户端 `jsc_find table_sign*` 0 命中） |
+| （没有卡池表） | 池子/概率/保底 | 扭蛋（176 张表里一张都不是） |
+
+**修法 / 教训**：
+
+* 遇到 UI 上 `undefined` / 空列表 / 0，**先假设「这个数是服务端下发的」**，
+  去 `jsc_disasm` 找出"读它的那一行"，再决定是**服务端补发**还是**客户端补丁**；
+* 服务端补发的东西**要放在客户端真读的那一层**（这里 `price` 得进 `table_story_review`，
+  发在登录块顶层客户端不看）—— 本服选了折中：登录块顺带发 `data.diary.prices`
+  （客户端不读，专供 `patch.js` 把它填回客户端表），**不改客户端也不影响功能**，
+  只是弹窗文案仍显示 `undefined`；
+* 顺带记一条**松散相等**的坑：同一份数据里 `_diarysBuyInfo[cid] == 1` 是 `==`
+  不是 `===` —— 服务端给 `1`（数字）最稳，给 `"1"` 能过、给对象就会踩
+  「明明发了却不生效」。**判据是反汇编里那个 `eq` 还是 `seq`。**
 
 ---

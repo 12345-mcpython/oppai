@@ -21,6 +21,7 @@
 - [13. 勋章 / 头像 / 衣柜（medal.*）](#13-勋章--头像--衣柜medal)
 - [14. 分享 / 礼包兑换（share.* / convert.*）](#14-分享--礼包兑换share--convert)
 - [15. 助战（friendsupport.*）](#15-助战friendsupport)
+- [16. 私密剧情（diary.*）](#16-私密剧情diary)
 
 ---
 
@@ -1778,4 +1779,75 @@ function (data) { this._initUI(data.recommendList); }        // ← 层读的是
 
 验证：`python script/selftest_game.py --only 助战`；实机量过客户端拿到
 `count=20 first=ai001/ai001`（在运行中的客户端里直接调 `getRecommendList` 的回调）。
+
+---
+
+## 16. 私密剧情（`diary.*`）
+
+| route | 请求 | 成功 `data` |
+| --- | --- | --- |
+| `diary.getdiarybuyinfo` | `{}` | `{diarysBuyInfo: {cid: 1}, updateDiarys: {cid: 行}}` |
+| `diary.buyunlockstory` | `{chapterId, levelId}` | **该章的新行**（客户端拿 `data.chapterId` 当 key） |
+
+### 16.1 登录块 `data.diary`
+
+```js
+// src/data/diary.js
+Diary.ctor(data) {
+    this._storyDiarys   = data.storyDiarys;      // { chapterId: 行 }
+    this._diarysBuyInfo = data.diarysBuyInfo;    // { chapterId: 1 }
+}
+isUnlock(cid, lid)       { return !!this._storyDiarys[cid].unlockLevels[lid]; }
+isStoryCanShow(cid, lid) { return this.isUnlock(cid, lid)
+                                || (!!this._storyDiarys[cid].lockLevels[lid]
+                                    && this._diarysBuyInfo[cid] == 1); }
+```
+
+行里**只有两个字段会被读**，且都当下标用，所以必须是 **map**（给数组/`null` 会在
+`unlockLevels[lid]` 那一步炸）：
+
+| 字段 | 含义 |
+| --- | --- |
+| `unlockLevels` | 已解锁：`{levelId: 1}` |
+| `lockLevels` | 可**购买**的：`{levelId: 1}` |
+
+⚠️ `_diarysBuyInfo[cid] == 1` 是**松散相等**，所以服务端必须给**整数 `1`**
+（`true`/`"1"` 在这里能过，但 `{"a":1}` 之类会假；统一给 1 最稳）。
+
+### 16.2 购买链路
+
+```js
+// src/ui/illustrated/diarylevelitem.jsc
+_clickLayer() { // 未解锁
+    BuyPopBox.pop(table_dictionary[3401].replace('%d',
+                  table_story_review[chapterId].price), cb, ITEM_KEY.GEM);
+}
+cb() { dataManager.diary.unlockStory({chapterId, levelId}, function (err, res) {
+    if (err) { toast(table_dictionary[<按 err 码>]); return; }
+    this._storyDiarys[res.data.chapterId] = res.data;
+}); }
+```
+
+* 失败码是 `tableswitch low=201 high=204` → 我们按字典顺序对应
+  `201 物品不足（3402）/ 202 该章节已解锁（3403）/ 203 标签错误（3404）/
+  204 章节错误（3405）`。⚠️ 这个对应是**推的** —— 跳转表没展开（见 differences §D）。
+* ⚠️ **`table_story_review[*].price` 客户端表里没有**（本服从客户端抽出来的 38 行
+  只有 `image`）。原版价格是**服务端**塞进那张表的，所以：
+  * 确认弹窗的文案默认会是「…花费 **undefined** 金条解锁该剧情？」；
+  * 登录块的 `data.diary.prices`（`{cid: 价}`，客户端不读）就是给 `patch.js` 用的
+    —— 想修文案就在补丁里把价格填回 `table_story_review[*].price`（要重打包 APK）。
+
+### 16.3 私服的取舍
+
+* 可买信息：`table_story_review` 的 **38 章全部可买**（原版按活动天数逐步开，
+  客户端表里那个 `activity_chapter_unlock_diary_days = 7` 就是干这个的）。
+* 解锁状态：**通关过的关卡算已解锁**（玩家自己看过的剧情；通关记录来自
+  `gamesrv/instance.py` 的存档 `levels[key].starMark/playCount`），
+  加上**买过的**（存档 `player["diary"]["bought"] = {chapterId: [levelId, …]}`）。
+* 价格：`30 + 5 × 章节序号` 金条（`STORY_PRICE` 可覆盖单章）—— 私服自己定的，见
+  differences §D。
+
+验证：`python script/selftest_game.py --only 私密剧情`（登录块形状、值是整数 1、
+`getdiarybuyinfo` 形状、解锁按章节价扣金条、重复 202 / 错章 204 / 错关 203 /
+金条不足 201，收尾还原存档与道具）。
 
