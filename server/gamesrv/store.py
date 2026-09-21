@@ -1145,6 +1145,11 @@ def new_player(account: str) -> dict:
         "headId": 1,
         "medalClothesId": 0,
         "medalBgId": 0,
+        # 佩戴的勋章：`{勋章id: 佩戴位下标}`（客户端 `Player.medalWear`，
+        # `Medal.wearMedal` 先读它判断"这一位是不是已经戴着这个"）。
+        # 三个 id 字段的**合法值**由 `medal.ensure()` 在登录时补成
+        # `"<头像itemKey>:<类型>"` / 默认衣服 / 默认背景（原始值 1/0/0 是瞎填的）。
+        "medalWear": {},
         "curTeamIdx": 0,
         "moduleState": new_module_state(),
         # 背包。登录包的 `item` 块直接用它，买东西/领奖励也改它。

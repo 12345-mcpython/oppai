@@ -18,6 +18,7 @@
 - [10. 关卡 / 副本（instance.*）](#10-关卡--副本instance)
 - [11. 军士养成（char.*）](#11-军士养成char)
 - [12. 好友（friend.*）](#12-好友friend)
+- [13. 勋章 / 头像 / 衣柜（medal.*）](#13-勋章--头像--衣柜medal)
 
 ---
 
@@ -1557,4 +1558,110 @@ NPC 好友占 900001 起），存在存档里 —— 每次现算的话一重登
 （条目 csb 里也有），ctor 直接抛 `sendRedDotCase is null` ——
 症状是「面板整页空白 + 左上角返回键有反馈但退不出去」。
 详见 `docs/pitfalls.md` 第 15 条。
+
+---
+
+## 13. 勋章 / 头像 / 衣柜（medal.*）
+
+服务端实现：`server/gamesrv/medal.py` + `handlers/medal.py`。
+下面每条都来自 `assets/src/data/medal.jsc` 的反汇编 + `ui/medal/*.jsc` 的读法。
+
+### 13.1 九条路由
+
+| route | 请求 | 成功 `data` |
+| --- | --- | --- |
+| `medal.changehead` | `{headId, headType}` | 新的 headId **字符串** `"<itemKey>:<type>"` |
+| `medal.changeclothes` | `{clothesId}` | 新的 clothesId（**值**，不是对象） |
+| `medal.changebg` | `{bgId}` | 新的 bgId（值） |
+| `medal.wearmedal` | `{medalId, wearIdx}` | **整张** medalWear（`{勋章id: 位}`） |
+| `medal.setclothesorbgold` | `{id}` | 任意真值 |
+| `medal.setheadold` | `{headId, headType}` | 任意真值 |
+| `medal.setmedalold` | `{medalId}` | 任意真值 |
+| `medal.clearallheadnew` | `{}` | 任意真值 |
+| `medal.getfriendmedalinfo` | `{friendId}` | 整个勋章信息对象（见 13.5） |
+
+⚠️ 三条 `change*` 的回包是**值**（回调直接 `player.updateMedalClothesId(res.data)`），
+`wearmedal` 回的是**整张** `medalWear`（`player.updateMedalWear(res.data)`）——
+回错形状不会报错，只会静默不生效。
+
+### 13.2 `data.medal`（登录块）
+
+```json
+{"medals": {"10010": {"id": "10010", "progress": 0, "progressInfo": {}, "completeTime": 0}, ...},
+ "newMedalIds": []}
+```
+
+* `Medal._initData` 把 `medals` 原样存进 `_medals`，完成与否看
+  **`completeTime` 真值**（`isMedalCompleteByGroup`），`progress` 只是显示进度；
+* ⚠️ **`medals` 必须覆盖 `table_medal` 每一条**（59 条）——
+  `isMedalCompleteByGroup` 是 `_medals[id].completeTime`，缺一条就是
+  `undefined.completeTime` TypeError（和任务窗口那个坑同源）；
+* 行的形状来自 `createTempNewMedal`：`{id, progress, progressInfo: {}, completeTime?}`。
+
+### 13.3 三个「穿着」的字段都在 `player` 上
+
+* `player.headId` = `"<itemKey>:<HEAD_TYPE>"`（`HEAD_TYPE = {SOLDIER:"1", OTHER:"2"}`）。
+  `Medal.getHeadSpr` 自己 `split(":")`：`SOLDIER` 走 `new HeadIcon(key)`、
+  `OTHER` 走 `new ItemIcon(key)`。⚠️ 老存档里那个 `headId: 1` 是瞎填的，
+  `getHeadSpr` 会 `.split` 一个数字 → 直接抛；`medal.ensure()` 会按
+  `table_constant.default_head_id`(`601001`) 修正成 `"601001:2"`。
+* `player.medalClothesId` / `medalBgId` = type 40 / 50 的道具 key，
+  默认值分别是 `table_char_clothes[table_constant.lead_char_key].item_key`
+  （`401001`）和 `table_constant.default_medal_bg`（`501001`）。
+* `player.medalWear` = `{勋章id: 佩戴位下标}`。客户端 `isWearMedal` 是
+  「**同一 group 只能戴一个**」的语义，所以服务端戴上新的会先把同组的摘掉。
+
+### 13.4 衣柜 / 头像 / 勋章本体都是**背包道具**
+
+`ITEM_TYPE`：CLOTHES 40 / BG_IMG 50 / HEAD 60 / MEDAL 70（`config/bagconfig.jsc`）。
+勋章 ↔ 道具的对应是 `table_medal[key].icon_id`（700000 起，`table_item` 里 `t == 70`）。
+`hasNewClothes` / `hasNewBg` / `hasNewByItemType` / `isNewMedal` 全部走
+`bag.getItemsByType(type)` 再看 `item.isNew`。
+
+**NEW 标记怎么给**：`Item.ctor(key, itemOrCount)` 和 `Item.updateByObj(item)` 里都有
+`typeof arg === "object"` 分支，`updateByObj` 最后一句是 `this._isNew = item.isNew`
+—— 所以登录块的 `item` 块把该道具写成 **`{"count": n, "isNew": true}`** 就点亮了
+（`medal.item_block()` 干这个）。普通道具保持「key -> 数字」不变。
+4 条 `set*old` / `clearallheadnew` 就是客户端点过之后回来让服务端把标记去掉的。
+
+### 13.5 `medal.getfriendmedalinfo`
+
+`ui/friend/deletefriendpanel._getFriendMedalInfoSuccCb(data)`：
+
+```js
+data.lv = friend.lv; data.name = friend.name; data.numberId = friend.numberId;
+cc.director.getRunningScene().push(new MedalLayer(data), true);   // 整个 data 当勋章信息画
+```
+
+所以回包 = **好友的** `{name, lv, numberId, headId, completeCount, medals, medalWear}`。
+好友是 NPC（`friends.py`），勋章按 numberId 给一份确定性的（前 K 条达成 + 每组戴一个）。
+
+### 13.6 进度：按 `condition_kind` 反推（这是猜的部分，见 differences §D）
+
+`condition_id` 指向的 `table_medal_condition` 里只有 `condition_ids` —— 那是原版
+**服务端**的 condition 对象 id（客户端表里没有对应的表），所以语义只能从
+`table_medal.desc`（人话）+ `times`（目标值）反推：
+
+| kind | 语义（desc） | 数据来源 |
+| --- | --- | --- |
+| 1002 | 战斗失败 N 次 | `questStats.losses` |
+| 2001 | 演习 N 次 | `questStats.arenaFights` |
+| 3001 | 派遣 N 次 | `questStats.detects` |
+| 4001 | N 个军士达到 X 级 | 军士名单（X 从 desc 抠） |
+| 5001 | N 个角色好感度到 X 级 | `favors`（X 从 desc 抠） |
+| 5002 | 送 N 个礼物 | `questStats.gifts` |
+| 5003 | 抚摸 N 次 | `questStats.touches` |
+| 6001 | 金条/碎片抽卡 N 次 | `player["gacha"]` 的 `totalTimes`（按池子） |
+| 7002 | 获得 desc 点名的浴衣 | 背包 type 40 且名字命中的 |
+| 8001 | 完成 N 次日常任务 | `questStats.dailyQuests`（本模块新加的累计计数） |
+
+**算不了的三类**（进度恒 0，不假装完成）：`1001` 通关指定关卡（desc 点名关卡名，
+要 `table_level` 的「关卡名 → key」表，还没抽）、`1003` 我方军士被推倒次数
+（战斗内部统计）、`4002` 获得指定军士（没有「军士卡 key → 名字」的表）。
+
+`condition_kind` 为空的 **25 条是运营活动名次 / 预约人数**类勋章，活动早没了
+—— 私服直接算完成（否则永远拿不到），见 differences §B。
+
+验证：`python script/selftest_game.py --only 勋章`（形状 / 默认值 / NEW 标记 /
+换装落盘 / 佩戴同组替换 / 清标记 / 好友勋章 / 计数器驱动的达成与发本体，收尾还原）。
 

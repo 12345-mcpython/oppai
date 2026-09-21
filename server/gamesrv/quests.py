@@ -364,6 +364,7 @@ def _stats(player: dict) -> dict:
     st.setdefault("soldierSells", 0)         # 军士退伍（分解）个数    ct 13201
     st.setdefault("itemGained", {})          # itemKey -> 累计获得     ct 11201
     st.setdefault("friendSends", 0)          # 给好友送物资次数        ct 18201（friends.send_materials）
+    st.setdefault("dailyQuests", 0)          # 累计完成（领奖）的日常条数  勋章 8001「完成365次日常任务」
     return st
 
 
@@ -787,6 +788,10 @@ def submit(player: dict, msg: dict) -> dict:
 
     done.append(key)
     _touch(player)
+    if qtype == TYPE_DAILY:
+        # 勋章 8001「完成365次日常任务」用的**累计**计数：`daily.done` 每天会清空，
+        # 只靠它算不出跨天累计。放在领奖这一刻加（= 玩家真的完成了一条日常）。
+        _bump(player, "dailyQuests", 1)
     rewards = rewards_of(key)
     if rewards:
         from . import items  # 局部 import：items 也 import quests（累计获得那条）

@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from ..gameproto import CODE_OK
 from .. import (arena, config, detect, exchange, favor, friends, gacha, instance, logx,
-                quests, sign, store, subarea)
+                medal, quests, sign, store, subarea)
 from . import route
 
 log = logx.get("handler.agent")
@@ -59,7 +59,11 @@ def _module_stubs(player: dict | None = None) -> dict:
         #   100001 钻石 / 100002 萌钞 / 100003 行动力（"甜甜圈"）
         # 背包。以前是写死的 {GEM:100000, MONEY:10000000, AP:999}，
         # 现在读存档 —— 不然买了东西一发一扣，重登又变回去了。
-        "item": store.player_items(player),
+        #
+        # ⚠️ 走 `medal.item_block()`：带 NEW 标记的道具要写成
+        # `{"count": n, "isNew": true}`（客户端 `Item.ctor`/`updateByObj` 认对象形状），
+        # 否则勋章/头像/衣柜里的「NEW」永远亮不起来。
+        "item": medal.item_block(player),
         "char": {
             # 英雄 / 机甲存在存档里（抽卡会往里加，见 store.add_hero/add_mecha）
             "heros": store.player_heros(player) if player else [store.new_hero()],
@@ -153,7 +157,13 @@ def _module_stubs(player: dict | None = None) -> dict:
         # detect: {章节key: {beginTimeSec, waitTime, subCD, speedCount}}}` —— 都是**秒**，
         # 客户端 `Detect.ctor` 读 `detect.speedInfo` + `detect.detect`（见 gamesrv/detect.py）。
         "detect": detect.block(player),
-        "medal": {"medals": [], "clothes": [], "bgs": [], "heads": []},
+        # 勋章 / 头像 / 衣柜。形状由 `Medal._initData` 定死：
+        # `{medals: {勋章id: {id, progress, progressInfo, completeTime}}, newMedalIds: [...]}`
+        # ⚠️ `medals` 必须**覆盖 `table_medal` 每一条** —— `isMedalCompleteByGroup`
+        # 是 `_medals[id].completeTime`，缺一条就是 `undefined.completeTime` TypeError。
+        # ⚠️ 衣柜/头像/勋章本体都是**背包道具**（type 40/50/60/70），不在这里发。
+        # 见 gamesrv/medal.py。
+        "medal": medal.block(player),
         # 装备。形状见 store.equipment_block() —— 是 maxEquipmentCount / equipments /
         # equipmentGroups 三个键。以前这里是 `{equipments: [], suits: {}}`，两个问题：
         #   1. 少了 maxEquipmentCount 和 equipmentGroups（客户端 ctor 要读）
@@ -305,6 +315,12 @@ def get_login_data(session: dict, msg: dict, req_id):
     # 所以这里要先 save —— 不然每次登录都重新「初始化好友」（id/申请时间每次都变）。
     if friends.ensure(player):
         store.save_player(player)
+    # 勋章 / 头像 / 衣柜：发头像与勋章本体（带 NEW 标记）、补 headId/衣服/背景默认值、
+    # 记勋章的首次达成时间。**必须在 `_module_stubs()` 之前** ——
+    # `_module_stubs` 里 item 块排在 medal 块前面（先 item 后 medal），
+    # 晚于它跑的话 NEW 标记这一趟就漏了；而且 ensure 不落盘，这里不 save 就等于没做。
+    if medal.ensure(player):
+        store.save_player(player)
     t = store.time_obj()
     log.info("agent.getlogindata account=%s playerId=%s", account, player["id"])
     data = {
@@ -346,6 +362,8 @@ def create_player(session: dict, msg: dict, req_id):
     if new_events:
         store.save_player(player)
     if friends.ensure(player):
+        store.save_player(player)
+    if medal.ensure(player):
         store.save_player(player)
 
     t = store.time_obj()

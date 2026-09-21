@@ -2265,6 +2265,257 @@ def friend_check(ok: bool) -> bool:
     return ok
 
 
+def medal_check(ok: bool) -> bool:
+    """勋章 / 头像 / 衣柜（medal.*）：形状 / 默认值 / 换装 / 佩戴 / 清 NEW / 好友勋章 / 进度。
+
+    客户端契约（`src/data/medal.jsc` 逐函数反汇编，错一条界面对不上）：
+
+    * 登录块 `data.medal` = `{medals, newMedalIds}`；`medals` **必须覆盖
+      `table_medal` 每一条** —— `isMedalCompleteByGroup` 是 `_medals[id].completeTime`，
+      缺一条就是 `undefined.completeTime` TypeError。行形状 `{id, progress,
+      progressInfo, completeTime}`（`createTempNewMedal` 给的）。
+    * `player.headId` 是 `"<itemKey>:<HEAD_TYPE>"`（`getHeadSpr` 自己 split(":")）；
+      `medalClothesId` / `medalBgId` 是 type 40/50 的道具 key。
+    * `player.medalWear` = `{勋章id: 佩戴位}`，客户端 `isWearMedal` 是「同组只戴一个」。
+    * 衣柜/头像/勋章本体都是**背包道具**（type 40/50/60/70），NEW 标记靠
+      `item` 块里的对象形状 `{"count": n, "isNew": true}`（`Item.ctor`/`updateByObj`）。
+    * 三条 change* 的 `data` 是**值**不是对象；`wearmedal` 回**整张** medalWear。
+
+    ⚠️ 会真改存档（换装/佩戴/清 NEW/发道具），最后整块还原。
+    """
+    from gamesrv import config, items, medal, quests, store
+
+    account = config.DEFAULT_ACCOUNT
+    player = store.get_or_create_player(account)
+    before = {
+        "medal": json.loads(json.dumps(player.get("medal") or {})),
+        "medalWear": json.loads(json.dumps(player.get("medalWear") or {})),
+        "headId": player.get("headId"),
+        "medalClothesId": player.get("medalClothesId"),
+        "medalBgId": player.get("medalBgId"),
+        "items": dict(items.items_of(player)),
+        "questStats": json.loads(json.dumps(player.get("questStats") or {})),
+    }
+    bad = []
+    try:
+        login = call("agent.getlogindata", {}, 300)
+        data = login.get("data") or {}
+        pdata = data.get("player") or {}
+        blk = data.get("medal") or {}
+
+        # ---- A. data.medal 形状 ----
+        medals = blk.get("medals")
+        if not isinstance(medals, dict):
+            bad.append(f"data.medal.medals 是 {type(medals).__name__}，要是 map")
+            medals = {}
+        table = medal.medal_table()
+        missing = [k for k in table if str(k) not in medals]
+        if missing:
+            bad.append(f"medals 少了 {len(missing)} 条（第一条 {missing[0]}）—— "
+                       f"客户端 isMedalCompleteByGroup 会 undefined.completeTime")
+        for key in list(medals)[:59]:
+            row = medals[key] or {}
+            if str(row.get("id")) != str(key):
+                bad.append(f"{key}: id={row.get('id')!r}（客户端按 id 索引）")
+                break
+            if not isinstance(row.get("progressInfo"), dict):
+                bad.append(f"{key}: progressInfo 不是对象")
+                break
+            if "completeTime" not in row or "progress" not in row:
+                bad.append(f"{key}: 缺 completeTime/progress")
+                break
+        done_n = sum(1 for r in medals.values() if int(r.get("completeTime") or 0) > 0)
+        print(f"       登录块：勋章 {len(medals)} 条、已完成 {done_n} 条、"
+              f"newMedalIds={blk.get('newMedalIds')}")
+
+        # ---- B. 头像 / 衣服 / 背景三个 id 的合法性 ----
+        head_id = str(pdata.get("headId") or "")
+        base, _, kind = head_id.partition(":")
+        trow = items.table("table_item").get(base) or {}
+        if not base or str(trow.get("t")) != "60":
+            bad.append(f"player.headId={head_id!r} 不是 `<头像道具>:<类型>`"
+                       f"（客户端 getHeadSpr 会 split(':') 并查 table_item）")
+        if kind not in ("1", "2"):
+            bad.append(f"player.headId 的 headType={kind!r}，只能是 '1'/'2'")
+        for field, itype in (("medalClothesId", "40"), ("medalBgId", "50")):
+            val = str(pdata.get(field) or "")
+            row = items.table("table_item").get(val) or {}
+            if str(row.get("t")) != itype:
+                bad.append(f"player.{field}={val!r} 不是 type={itype} 的道具")
+        wear = pdata.get("medalWear")
+        if not isinstance(wear, dict):
+            bad.append(f"player.medalWear 是 {type(wear).__name__}，要是 map（勋章id->佩戴位）")
+            wear = {}
+        for mid, idx in wear.items():
+            if str(mid) not in table:
+                bad.append(f"medalWear 里有不存在的勋章 {mid}")
+            elif not isinstance(idx, int):
+                bad.append(f"medalWear[{mid}]={idx!r} 不是整数位号")
+        print(f"       默认值：headId={head_id} 衣服={pdata.get('medalClothesId')} "
+              f"背景={pdata.get('medalBgId')}，佩戴 {len(wear)} 个")
+
+        # ---- C. NEW 标记走 item 块的对象形状 ----
+        bag_blk = data.get("item") or {}
+        marks = [k for k, v in bag_blk.items() if isinstance(v, dict)]
+        if not marks:
+            bad.append("item 块里一个 NEW 标记都没有（勋章/头像刚发下去时应该有对象形状的条目）")
+        else:
+            for k in marks[:3]:
+                if "isNew" not in bag_blk[k] or "count" not in bag_blk[k]:
+                    bad.append(f"item['{k}']={bag_blk[k]!r} 不是 {{count, isNew}}")
+                    break
+            sample = bag_blk[marks[0]]
+            print(f"       item 块：{len(marks)} 件带 NEW（例 {marks[0]} -> {sample}）")
+
+        # ---- D. 换头像 / 换衣服 / 换背景：回包是值，且要落盘 ----
+        heads = [k for k, r in items.table("table_item").items()
+                 if isinstance(r, dict) and str(r.get("t")) == "60"]
+        clothes = [k for k, r in items.table("table_item").items()
+                   if isinstance(r, dict) and str(r.get("t")) == "40"]
+        bgs = [k for k, r in items.table("table_item").items()
+               if isinstance(r, dict) and str(r.get("t")) == "50"]
+        pick_head = next((k for k in heads if k != base), heads[0] if heads else None)
+        pick_clothes = next((k for k in clothes if k != str(pdata.get("medalClothesId"))),
+                            clothes[0] if clothes else None)
+        pick_bg = next((k for k in bgs if k != str(pdata.get("medalBgId"))),
+                       bgs[0] if bgs else None)
+        r = call("medal.changehead", {"headId": pick_head, "headType": "2"}, 301)
+        if r.get("code") != 200 or r.get("data") != f"{pick_head}:2":
+            bad.append(f"changehead -> {r.get('code')} data={r.get('data')!r}"
+                       f"（要回 `{pick_head}:2` 这个值）")
+        r = call("medal.changeclothes", {"clothesId": pick_clothes}, 302)
+        if r.get("code") != 200 or str(r.get("data")) != str(pick_clothes):
+            bad.append(f"changeclothes -> {r.get('code')} data={r.get('data')!r}")
+        r = call("medal.changebg", {"bgId": pick_bg}, 303)
+        if r.get("code") != 200 or str(r.get("data")) != str(pick_bg):
+            bad.append(f"changebg -> {r.get('code')} data={r.get('data')!r}")
+        after = (call("agent.getlogindata", {}, 304).get("data") or {}).get("player") or {}
+        if str(after.get("headId")) != f"{pick_head}:2":
+            bad.append(f"换完头像重登是 {after.get('headId')!r}（没落盘？）")
+        elif str(after.get("medalClothesId")) != str(pick_clothes) or \
+                str(after.get("medalBgId")) != str(pick_bg):
+            bad.append(f"换完衣服/背景重登是 {after.get('medalClothesId')!r}/"
+                       f"{after.get('medalBgId')!r}（没落盘？）")
+        else:
+            print(f"       换装：头像={after.get('headId')} 衣服={after.get('medalClothesId')} "
+                  f"背景={after.get('medalBgId')}（重登还在）")
+
+        # ---- E. 佩戴勋章：回整张 map、同组只留一个、非法勋章要拒 ----
+        done = [k for k in table if medal.is_complete(store.get_or_create_player(account), k)]
+        if not done:
+            bad.append("一条已完成的勋章都没有（活动类那 25 条应该算完成）")
+        else:
+            first = done[0]
+            r = call("medal.wearmedal", {"medalId": first, "wearIdx": 1}, 305)
+            wdata = r.get("data")
+            if r.get("code") != 200 or not isinstance(wdata, dict):
+                bad.append(f"wearmedal -> {r.get('code')} data={wdata!r}（要回整张 medalWear）")
+            elif str(wdata.get(first)) != "1":
+                bad.append(f"wearmedal 回包里 {first} 的位号是 {wdata.get(first)!r}，要 1")
+            # 同组第二个（如果同组有多条）
+            same = [k for k in table
+                    if str((table[k] or {}).get("group")) ==
+                    str((table[first] or {}).get("group")) and k != first]
+            if same:
+                r2 = call("medal.wearmedal", {"medalId": same[0], "wearIdx": 2}, 306)
+                w2 = (r2.get("data") or {})
+                if r2.get("code") == 200 and str(first) in w2 and str(same[0]) in w2:
+                    bad.append(f"同组两个勋章同时戴着了：{w2}")
+                elif r2.get("code") != 200:
+                    print(f"       （同组 {same[0]} 还没拿到，跳过「同组替换」验证）")
+            bad_wear = call("medal.wearmedal", {"medalId": "99999", "wearIdx": 0}, 307)
+            if bad_wear.get("code") == 200:
+                bad.append("佩戴一个不存在的勋章竟然 200")
+            wnow = (call("agent.getlogindata", {}, 308).get("data") or {}).get("player", {}).get("medalWear") or {}
+            if isinstance(wnow, dict) and first in wnow:
+                print(f"       佩戴：{first} -> 位 {wnow[first]}（medalWear={wnow}）")
+
+        # ---- F. 清 NEW 标记：服务端那份也该少 ----
+        head_mark = next((k for k in marks if str((items.table("table_item").get(k) or {}).get("t")) == "60"), None)
+        r = call("medal.clearallheadnew", {}, 309)
+        if r.get("code") != 200:
+            bad.append(f"clearallheadnew -> {r.get('code')}")
+        else:
+            marks2 = [k for k, v in ((call("agent.getlogindata", {}, 310).get("data") or {}).get("item") or {}).items()
+                      if isinstance(v, dict)]
+            still = [k for k in marks2 if str((items.table("table_item").get(k) or {}).get("t")) == "60"]
+            if still:
+                bad.append(f"清完头像 NEW 之后还有 {len(still)} 件带标记（第一条 {still[0]}）")
+            else:
+                print(f"       清 NEW：头像类标记 {len([k for k in marks if str((items.table('table_item').get(k) or {}).get('t'))=='60'])} "
+                      f"-> 0，剩余标记 {len(marks2)} 件（衣服/背景/勋章）")
+        if head_mark:
+            r = call("medal.setheadold", {"headId": head_mark, "headType": "2"}, 311)
+            if r.get("code") != 200:
+                bad.append(f"setheadold -> {r.get('code')}")
+        r = call("medal.setmedalold", {"medalId": done[0] if done else "10010"}, 312)
+        if r.get("code") != 200:
+            bad.append(f"setmedalold -> {r.get('code')}")
+        r = call("medal.setclothesorbgold", {"id": pick_clothes}, 313)
+        if r.get("code") != 200:
+            bad.append(f"setclothesorbgold -> {r.get('code')}")
+
+        # ---- G. 好友勋章信息 ----
+        r = call("medal.getfriendmedalinfo", {"friendId": 900003}, 314)
+        finfo = r.get("data") or {}
+        if r.get("code") != 200:
+            bad.append(f"getfriendmedalinfo -> {r.get('code')}")
+        else:
+            for field in ("name", "lv", "numberId", "completeCount", "medals", "medalWear"):
+                if field not in finfo:
+                    bad.append(f"好友勋章信息缺 {field}（客户端 data.<field> 直接用）")
+            if not isinstance(finfo.get("medals"), dict) or len(finfo.get("medals") or {}) != len(table):
+                bad.append(f"好友 medals 有 {len(finfo.get('medals') or {})} 条，应该也是 {len(table)} 条")
+            print(f"       好友勋章：{finfo.get('name')} 完成 {finfo.get('completeCount')} 条、"
+                  f"佩戴 {len(finfo.get('medalWear') or {})} 个")
+        bad_friend = call("medal.getfriendmedalinfo", {"friendId": 1}, 315)
+        if bad_friend.get("code") == 200:
+            bad.append("查一个不是好友的 numberId 竟然 200")
+
+        # ---- H. 进度接线：把 5003（累计抚摸）的计数器灌满 -> 该勋章该完成 ----
+        target = next((k for k, r0 in table.items()
+                       if str(r0.get("condition_kind")) == "5003"), None)
+        if target:
+            need = medal.target_of(target)
+            p = store.get_or_create_player(account)
+            p.setdefault("questStats", {})["touches"] = need
+            store.save_player(p)
+            call("agent.getlogindata", {}, 316)
+            p2 = store.get_or_create_player(account)
+            entry = (p2.get("medal") or {}).get("complete") or {}
+            if not entry.get(str(target)):
+                bad.append(f"{target}（{table[target].get('desc')}）计数器灌满后没记 completeTime")
+            elif not int((p2.get("items") or {}).get(str(table[target].get("icon_id")) or 0) or 0):
+                bad.append(f"{target} 完成之后没发勋章本体 {table[target].get('icon_id')}")
+            else:
+                print(f"       进度：{target}「{table[target].get('name')}」"
+                      f"（{table[target].get('desc')}）达成 -> 发了勋章道具 "
+                      f"{table[target].get('icon_id')}")
+    finally:
+        p = store.get_or_create_player(account)
+        p["medal"] = before["medal"]
+        p["medalWear"] = before["medalWear"]
+        p["headId"] = before["headId"]
+        p["medalClothesId"] = before["medalClothesId"]
+        p["medalBgId"] = before["medalBgId"]
+        p["questStats"] = before["questStats"]
+        got = items.items_of(p)
+        for k in [k for k in got if k not in before["items"]]:
+            del got[k]
+        for k, v in before["items"].items():
+            got[k] = v
+        store.save_player(p)
+
+    if bad:
+        for one in bad[:12]:
+            print(f"  BAD {one}")
+        return False
+    print("  OK  勋章/衣柜：medals 覆盖全表且行形状对、headId 是 `道具:类型`、medalWear 是 map、"
+          "NEW 标记走 item 对象形状且能清、换装/背景/头像回值并落盘、佩戴回整张 map、"
+          "好友勋章信息齐、计数器驱动的勋章会达成并发本体（收尾已还原）")
+    return ok
+
+
 def run_check(ok: bool, name: str, fn) -> bool:
     """跑一项检查：支持 --only 过滤 + 打印用时（自检太慢，得知道时间花在哪）。"""
     if ONLY and ONLY not in name:
@@ -2353,6 +2604,8 @@ def main():
     ok = run_check(ok, "任务自检异常", quest_check)
 
     ok = run_check(ok, "好友自检异常", friend_check)
+
+    ok = run_check(ok, "勋章自检异常", medal_check)
 
     ok = run_check(ok, "功能开启弹窗自检异常", module_open_check)
 
