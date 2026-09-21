@@ -68,7 +68,7 @@
 | 公告 | 服务端 `var/notice.html` | 官方公告 | —— |
 | **抽卡 / 扭蛋** | **自己造了 5 个池子**（免费 / 碎片单抽十连 / 钻石单抽十连），消耗 100 金条单抽、900 十连、9 好人卡十连；十连保底至少一张 S+；SR 档里 15% 是英雄/机甲大奖；初始送 99 好人卡 | 原版是**运营配置**（池子/概率/保底/排期全在服务端，随停服丢了；客户端 176 张表里一张 gacha 表都没有）。池子 **id 和枚举照客户端** `gachaconfig`（`GACHA_NAMES` 就是原版那 5 个 key），概率/保底/消耗是自己定的 | 单旋钮：`gacha.POOLS`（消耗/次数/每日限制）、`gacha.RARITY_WEIGHT`、`gacha.PRIZE_WEIGHT`、`gacha.TEN_GUARANTEE`、`store.FRAGMENT_STOCK` |
 | **英雄 / 机甲** | 建号送 **1 英雄 + 1 机甲**（hadf + madflj），另外 1 个英雄（haysdn）和 5 台机甲只能**抽卡**获得 | 原版靠抽卡/活动 → 私服不送的话抽卡没大奖可出 | 抽到就进 `player["heros"]`/`player["mechas"]`，随登录块 `char.heros`/`char.mechas` 下发；`store.player_heros/player_mechas` |
-| **充值 / 月卡 / 礼包（IAP）** | **不可购买**（客户端的 `judgeexchangestate` 会先回 state≠0，直接弹提示；`exchange.payment` 也故意非 200） | 真实支付渠道 | 要有支付渠道才能开；道具兑换本身没关（见 [protocol.md §6.5](protocol.md)） |
+| **充值 / 月卡 / 礼包（IAP）** | **直接成功**：客户端补丁把 `op.pay` 换成立刻回调，服务端按 `table_resource_exchange` 发货（含首单双倍），累计 30 元发首充奖励（金条 200 + 萌钞 50000 + 好人卡 10），月卡 = 30 天 + 每天 75 金条；**限购与活动档期都不卡** | 真实支付渠道 + 按 `exchange_num`/`interval_day` 限购、按 `begin_time`/`ended_time` 上下架 | 补丁在 `patch.js` 的 PAY-SUCCESS（整块删掉即还原成"点购买没反应"）。首充奖励内容**客户端全库没有**，只能自定（`exchange.FIRST_CHARGE_REWARD`）；月卡每日 75 只写在 `table_exchange_item[100001].desc` 里。⚠️ 不卡档期的另一个原因：90 个礼包的档期是 2016 年的，照表卡就全过期了 |
 | **演习场对手** | 从 `table_friend_support_npc`（101 个 NPC）里按等级挑 8 个，名字/等级/5 个军士全抄 NPC 行 | 真人的 PvP 匹配（原版是别的玩家的阵容） | 单机没有别的玩家，只能拿 NPC 顶。想换口味改 `arena.make_rivals()` |
 | **演习场重复打同一个对手** | 照给积分和萌币（`state` 只影响「已战胜」标记） | 未知；理论上赢了就不能再打（客户端 `state == 1` 时点挑战只弹 1603「已经战胜过他了呢~」），但结算面板上有「再来一次」，客户端会拿同一个 `index` 再进战斗 —— 这里回非 200 会让用户卡在战斗结束什么都不弹 | 想限制就在 `arena.exit_fight()` 里按 `state` 拒绝（注意上面那个副作用） |
 | **日常 / 成就任务** | **按客户端表实现**：日常一天放当前等级那一档（7~11 条）、换日点 05:00、奖励按 `table_quest_reward` 真发 | 原版同样按表跑，但**部分条件的数据服务端拿不到**：12208 击杀鸭子数 / 12209 我方军士跪倒数 / 13102 技能熟练度 → 进度恒 0 | 那三个要战斗结算里的击杀/阵亡统计（客户端 `battleInfo` 里可能有） |
@@ -96,7 +96,6 @@
 | 命名空间 | 缺 | 原版是什么 | 为什么没做 |
 |---|---|---|---|
 | `society.*` / `societyclg.*` | 33 + 6 | 军团（公会）+ 军团 BOSS（客户端有 `table_society_boss`） | 单机没有别人，工作量最大 |
-| `exchange.*` | 1 | 黑市交易所（充值/月卡/礼包） | **只差 IAP 那半边**：`checkorder`/`payment`/`judgeexchangestate` 都实现了，但私服没有支付渠道，只能回「不可购买」；金条↔萌钞、行动力/BP/卡槽兑换全通（见 [protocol.md §6.5](protocol.md)） |
 | `ticket.*` | 3 | 人气投票（`ui/ticketmain`：`getticketstate` / `getticketcountbycontrolid` / `vote`） | 要编投票排期 + 候选人（运营数据），单机也没人投 |
 | `player.*` | 4 | `skipguide` 跳过引导 / `msgtoworld` 世界频道发言 / `updatemsgpushmark` 推送标记 / `usecdkey` CDK 兑换 | 引导私服本来就全跳过（`guideMark` 全 1）；聊天和 CDK 都是运营向 |
 | `soldieractivity.*` | 2 | 新年活动（`ui/newyearactivity`：`getsoldieractivitystate` / `convert`） | 运营活动，存档结构要先定 |
@@ -110,6 +109,8 @@
 > （`unlockLevels` / `lockLevels` 两个 map），已解锁 = 通关过的关卡 + 买过的。
 > ✅ `boss.*`（原缺 5 条）**2026-09-21 已实现**（见 [protocol.md §17](protocol.md)）：
 > BOSS 的名字/品质/消耗/战斗关卡全在客户端 `table_world_boss` 里，服务端只给状态。
+> ✅ 充值（`exchange.payment` 那半边）**2026-09-21 打通**（见 [protocol.md §18](protocol.md)）：
+> 客户端补丁把 `op.pay` 换成立刻回调，服务端按表发货 + 首充 + 月卡。
 
 **已知的"能看见但不完整"：**
 

@@ -339,6 +339,9 @@ def get_login_data(session: dict, msg: dict, req_id):
     # 分享次数换日清零（`share.block()` 在 _module_stubs 里也会调，但那条路径不 save）
     if share.ensure(player):
         store.save_player(player)
+    # 月卡的每日金条（客户端没有领取路由，只能登录时结算；见 exchange.ensure）
+    if exchange.ensure(player):
+        store.save_player(player)
     t = store.time_obj()
     log.info("agent.getlogindata account=%s playerId=%s", account, player["id"])
     data = {

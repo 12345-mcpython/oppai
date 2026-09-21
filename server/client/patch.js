@@ -89,6 +89,13 @@
 //      证据：logcat `TypeError: sendRedDotCase is null @ friendlistpanel.js:56`
 //      + `this._friendListPanel is undefined @ friendlayer.js:114`。
 //
+//  13. 充值直接成功（PAY-SUCCESS）
+//      私服没有支付渠道：`op.pay` 走到 quicksdk/yesdk/iab 之后永远没有回调，
+//      点购买只会停在「充值中」。这里把 `op.pay` 换成立刻用现造的 payInfo
+//      回调成功 —— 服务端 `exchange.payment` 收到就按 `table_resource_exchange`
+//      发货（充值包/礼包/月卡，含首充与月卡每日金条）。
+//      ⚠️ 这条是**私服行为**，不是修 bug：原版必须真付钱。要去掉就删这一段。
+//
 // 探针/诊断部分在 probe.js —— release 可以不打包那个文件。
 // 两个文件互相独立，这个文件不依赖 probe.js 的任何东西。
 // ===========================================================================
@@ -1571,6 +1578,92 @@
                 if (patch()) {
                     clearInterval(window.__oppaiIllustReturnTimer);
                     window.__oppaiIllustReturnTimer = null;
+                }
+            }, 500);
+        }
+    })();
+
+    // -----------------------------------------------------------------------
+    // 13) 充值直接成功（私服没有支付渠道）
+    //
+    // 原版点「购买」之后是这样一条链（反汇编 `src/data/exchangecenter.jsc`
+    // + `src/data/payment/*.jsc`）：
+    //
+    //   ExchangeCenter.payment(key)                      // 商品 key
+    //     -> exchange.judgeexchangestate {key}           // state 0 才继续
+    //     -> productKey = table_exchange_item[key].param_1     // "pay030" / "bundle02001"
+    //     -> (月卡先 exchange.checkmonthcard)            // remainDay > 3 就中止
+    //     -> clientOrderId = op.getClientOrderId()       // uuid.v4()
+    //     -> _payment.payment(...)  ->  op.pay(...)      ★ 这里往下就是渠道 SDK
+    //     -> payInfo 回来 -> Payment.exchangePay(payInfo) -> exchange.payment {payInfo}
+    //
+    // 我们这个包把渠道 SDK（QuickSDK / 百度 / …）整个删了，`op.pay` 走到
+    // `quicksdk.pay` / `yesdk.pay` / `iab.pay` 之后就再也没有回调 ——
+    // 界面停在「充值中」、服务端一条请求都收不到。
+    //
+    // 做法：把 `op.pay` 换掉，**立刻**用现造的 `payInfo` 回调成功。
+    //   * 只认 `table_payment[productKey]`（不在表里就 toast 1714「购买内容不存在」，
+    //     和原版一致）；
+    //   * `payInfo` 里带 `clientOrderId` / `productKey` / `productId` / `price` /
+    //     `receipt` / `txid` —— 服务端只按 `productKey` 认商品（116 个商品的
+    //     `param_1` 唯一），`receipt`/`txid` 是给"像真的支付凭证"留的位；
+    //   * 用 `setTimeout(..., 0)` 异步回调，别在同一个栈里递归下去。
+    //
+    // 这样客户端自己那套逻辑全都照跑：toast「充值已受理」(1701)、
+    // `_addOrder` 记账、`exchange.payment` 发货、`_deleteOrder` 清单、`_isPaying`
+    // 复位、成功 toast（`table_dictionary[1702]`）。
+    //
+    // 还原原版：整块删掉（点购买就走真渠道，私服里等于没反应）。
+    // -----------------------------------------------------------------------
+    (function installPaySuccess() {
+        function patch() {
+            var W = window;
+            if (!W.op || typeof W.op.pay !== "function") {
+                return false;
+            }
+            if (W.op.pay.__oppaiPaySuccess) {
+                return true;
+            }
+            W.op.pay = function (productKey, clientOrderId, target, cb) {
+                var tbl = W.table_payment || {};
+                var row = tbl[productKey];
+                if (!row) {
+                    if (W.ccuiManager && W.table_dictionary) {
+                        W.ccuiManager.toast(W.table_dictionary[1714]);
+                    }
+                    emit("PAY-SUCCESS " + productKey + " 不在 table_payment 里，已中止");
+                    return;
+                }
+                var payInfo = {
+                    clientOrderId: clientOrderId,
+                    productKey: productKey,
+                    productId: row.id,
+                    productName: row.name,
+                    price: row.price,
+                    receipt: "oppai",
+                    txid: clientOrderId
+                };
+                emit("PAY-SUCCESS " + productKey + "（" + row.name + " " + row.price + "元）"
+                     + " 直接成功 —— 私服没有支付渠道");
+                setTimeout(function () {
+                    if (typeof cb === "function") {
+                        cb(null, payInfo);
+                    }
+                }, 0);
+            };
+            W.op.pay.__oppaiPaySuccess = true;
+            emit("PAY-SUCCESS 补丁已安装（点购买直接成功并发货）");
+            return true;
+        }
+
+        if (patch()) {
+            return;
+        }
+        if (!window.__oppaiPayTimer) {
+            window.__oppaiPayTimer = setInterval(function () {
+                if (patch()) {
+                    clearInterval(window.__oppaiPayTimer);
+                    window.__oppaiPayTimer = null;
                 }
             }, 500);
         }

@@ -1192,7 +1192,18 @@ def new_player(account: str) -> dict:
         "gachaTimes": 0,
         "worldChatTime": time_str(now),
         "worldChatCount": 0,
-        "monthCardDueTimeSec": time_str(now),
+        # ⚠️ 月卡到期时间是**秒级时间戳（数字）**，不是日期字符串：
+        # 客户端 `ExchangeCenter.getMonthCardDays()` 是
+        # `parseInt((monthCardDueTimeSec * 1000 - 今天05:00的毫秒) / 86400000)`，
+        # `Player.ctor` 也是 `_monthCardDueTimeSec = data.monthCardDueTimeSec || 0` 直接用。
+        # 老存档里这里是 `time_str(now)`（字符串）→ 减出来是 NaN，月卡天数显示不出来；
+        # `_migrate` 会把这种值归一成 0。
+        "monthCardDueTimeSec": 0,
+        # 累计充值金额（元）。客户端 `Player.ctor` 读的是**顶层 `payment`**，
+        # 而且当**数字**用（`FirstPaymentLayer` 拿它跟首充门槛比大小）。
+        "payment": 0,
+        # 首充奖励标记（0/1）。客户端只是存下来（`_sendFirstChargeReward`）。
+        "sendFirstChargeReward": 0,
         "msgPushMark": 0,
         # 分区成就。**空 map**：行由客户端在战斗结算时上报
         # （`instance.finishlevel` 的 `subareaInfo.newAchievements` / `modifyAchievements`），
@@ -1242,6 +1253,18 @@ def _migrate(player: dict) -> bool:
         if key not in player:
             player[key] = value
             changed = True
+    # 月卡到期时间：老存档里存的是**日期字符串**（`time_str()`），客户端那边
+    # `monthCardDueTimeSec * 1000` 会算成 NaN。这里归一成 0（= 没有月卡），
+    # 之后充值成功时按秒级时间戳写回去。见 new_player 的注释。
+    due = player.get("monthCardDueTimeSec")
+    if due is not None and not isinstance(due, (int, float)):
+        try:
+            player["monthCardDueTimeSec"] = int(due)
+        except (TypeError, ValueError):
+            player["monthCardDueTimeSec"] = 0
+        changed = True
+        log.info("玩家 %s 月卡到期时间从 %r 归一成 %s（秒级时间戳）",
+                 player.get("account"), due, player["monthCardDueTimeSec"])
     # 数字 ID（好友系统要用）。老存档和 new_player 给的都是 0，这里分配一个
     # **稳定**的号并留在存档里 —— 每次现算的话好友记录 key 会跟着变，
     # 玩家一重登好友列表就全对不上了。

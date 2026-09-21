@@ -745,7 +745,9 @@ def exchange_check(ok: bool) -> bool:
     跑完把金条/萌钞/兑换行都还原，所以可以反复跑。
 
     要验的四件事：
-      ① `exchange.exchange` 回 200，`data` 是**新的那一段行**（带 `exchangeKey`）
+      ① `exchange.exchange` 回 200，**新行在 `data.result`** 里（带 `exchangeKey`，
+         而且 `exchangeKey` 是**商品 key** —— 客户端 `update()` 拿它查
+         `table_exchange_item[exchangeKey].type`，给档位 key 会直接 TypeError）
       ② 金条真的扣了、萌钞真的发了（数量和表里 `table_resource_exchange` 对得上）
       ③ 第 2 次的档位会往上走（`todayExchangeTimes` 累加；固定档的那条会一直用 default）
       ④ 重登后那一段行还在（落盘）
@@ -787,14 +789,22 @@ def exchange_check(ok: bool) -> bool:
         res = call("exchange.exchange", {"key": key}, 140)
         if res.get("code") != 200:
             bad.append(f"exchange.exchange code={res.get('code')} {res}")
-        row = res.get("data") or {}
-        # 回包要带 exchangeKey（客户端 `update(data)` 按它认这是哪一段行）。
-        # 注意它**不一定**等于 item key：固定档的商品 `exchange_key_default` 就是自己，
-        # 带阶梯的（如 400001）第 N 次会指向另一档。
+        # ⚠️ 新行在 **`data.result`** 里（`ExchangeCenter.exchange/<` 读的是 `data.result`）。
+        # 以前我们回的是裸行，客户端那边 `this.update(data.result)` 拿到 undefined，
+        # 次数/档位要重登才刷新。
+        payload = res.get("data") or {}
+        if "result" not in payload:
+            bad.append(f"回包 data 里没有 result（客户端读 data.result）：{str(payload)[:80]}")
+        row = payload.get("result") or {}
+        # `exchangeKey` 必须是**商品 key**：客户端 `update(data)` 拿它当
+        # `_exchangeData` 的下标（`getExchangeData(key)` 按商品 key 查），而且立刻
+        # `table_exchange_item[data.exchangeKey].type` —— 档位 key 在那张表里不存在。
         if not row.get("exchangeKey"):
             bad.append(f"回包行缺 exchangeKey：{row}")
-        elif row["exchangeKey"] != p1["ladder"]:
-            bad.append(f"exchangeKey={row['exchangeKey']!r} 期望档位 {p1['ladder']!r}")
+        elif str(row["exchangeKey"]) != str(key):
+            bad.append(f"exchangeKey={row['exchangeKey']!r} 期望商品 key {key!r}"
+                       f"（档位是 {p1['ladder']!r}，但它不在 table_exchange_item 里，"
+                       f"客户端 update() 会 TypeError）")
         if int(row.get("todayExchangeTimes") or 0) != 1:
             bad.append(f"todayExchangeTimes={row.get('todayExchangeTimes')!r} 期望 1")
 
@@ -814,8 +824,11 @@ def exchange_check(ok: bool) -> bool:
         res2 = call("exchange.exchange", {"key": key}, 142)
         if res2.get("code") != 200:
             bad.append(f"第二次兑换 code={res2.get('code')} {res2}")
-        elif int((res2.get("data") or {}).get("todayExchangeTimes") or 0) != 2:
-            bad.append(f"第二次 todayExchangeTimes={(res2.get('data') or {}).get('todayExchangeTimes')!r} 期望 2")
+        elif int(((res2.get("data") or {}).get("result") or {})
+                 .get("todayExchangeTimes") or 0) != 2:
+            bad.append(f"第二次 todayExchangeTimes="
+                       f"{((res2.get('data') or {}).get('result') or {}).get('todayExchangeTimes')!r} "
+                       f"期望 2")
 
         # 落盘：重登后还在
         block = ((call("agent.getlogindata", {}, 143).get("data") or {})
@@ -859,6 +872,309 @@ def exchange_check(ok: bool) -> bool:
     print(f"  OK  交易所：{key} 花 {p1['spend']} 得 {p1['receive']}，次数累加 + 落盘 + "
           f"金条不足被拒（收尾已还原）")
     return ok
+
+
+def payment_check(ok: bool) -> bool:
+    """充值（IAP）：下单前状态 / 发货 / 首充 / 月卡 / 订单幂等 / checkorder 形状。
+
+    客户端链路（`src/data/exchangecenter.jsc` + `src/data/payment/*.jsc` 反汇编）：
+
+    * `exchange.judgeexchangestate {key}` -> `{state, item}`，**`state == 0` 才会继续**
+      （1 已售完 / 2 时间未到 / 3 等级不够，客户端按码弹 `table_dictionary`）；
+    * 客户端补丁把 `op.pay` 换成立刻回调 -> `exchange.payment {payInfo}`，
+      `payInfo = {clientOrderId, productKey, productId, price, …}`；
+    * 回包 `data` = `{result: 新行, player: {payment: 累计充值（**数字**）, sendFirstChargeReward},
+      dueTimeSec: 月卡到期秒}`；
+    * `exchange.checkorder` 的 `data` 是**平铺**的
+      `{payment, sendFirstChargeReward, dueTimeSec, exchangeData, orderList}`
+      —— 以前我们多发了一层 `player`，客户端一个字都读不到。
+
+    ⚠️ 会真发资源（充值包 ×2 / 月卡 / 礼包 / 首充），跑完**整套还原**
+    （背包 + 充值相关的所有存档字段）。
+    """
+    from gamesrv import config, exchange as ex, items, store
+
+    import time as _time
+
+    now_sec = int(_time.time())
+    account = config.DEFAULT_ACCOUNT
+    player = store.get_or_create_player(account)
+    save_keys = ("payment", "sendFirstChargeReward", ex.FIRST_CHARGE_SENT,
+                 ex.MONTH_CARD_REWARD_DAY, "monthCardDueTimeSec", "exchangeData",
+                 ex.PLAYER_PAID_ORDERS)
+    before_save = {k: (json.loads(json.dumps(player[k])) if k in player else None)
+                   for k in save_keys}
+    before_items = dict(items.items_of(player))
+    bad = []
+
+    def fresh() -> dict:
+        return store.get_or_create_player(account)
+
+    def bag_of(key: str) -> int:
+        return items.count_of(fresh(), key)
+
+    def expected_reward(key: str, total_times: int) -> dict:
+        """**照原始表算**（不用 ex.plan，免得自己证自己）。"""
+        item = ex.item_table().get(key) or {}
+        ladder = item.get("exchange_key_default") or ""
+        res = ex.resource_table().get(str(ladder)) or {}
+        pct = 100
+        if total_times == 1 and item.get("first_exchange_percentage"):
+            pct = int(item["first_exchange_percentage"])
+        out = {}
+        for i in range(1, 7):
+            rk = res.get("receive_key_%d" % i)
+            if not rk:
+                continue
+            cnt = int(res.get("receive_count_%d" % i) or 0)
+            if cnt > 0:
+                out[str(rk)] = out.get(str(rk), 0) + cnt * pct // 100
+        if res.get("presented_key") and int(res.get("presented_count") or 0) > 0:
+            pk = str(res["presented_key"])
+            out[pk] = out.get(pk, 0) + int(res["presented_count"]) * pct // 100
+        return out
+
+    try:
+        # ---- 干净起点 ----
+        p = fresh()
+        for k in save_keys:
+            p.pop(k, None)
+        p["payment"] = 0
+        p["sendFirstChargeReward"] = 0
+        p["monthCardDueTimeSec"] = 0
+        p["exchangeData"] = {}
+        store.save_player(p)
+
+        login = call("agent.getlogindata", {}, 370)
+        pblk = (login.get("data") or {}).get("player") or {}
+        if not isinstance(pblk.get("payment"), (int, float)) or isinstance(pblk.get("payment"), bool):
+            bad.append(f"登录块 data.player.payment 是 {pblk.get('payment')!r}，"
+                       f"要是**数字**（累充金额；客户端 Player.ctor 直接当数字用）")
+        if "sendFirstChargeReward" not in pblk:
+            bad.append("登录块 data.player 里没有 sendFirstChargeReward")
+
+        # ---- 挑三个 IAP 商品：充值包 / 月卡 / 礼包 ----
+        packs = [k for k, it in ex.item_table().items() if str(it.get("type")) == "20"]
+        bundles = [k for k, it in ex.item_table().items() if str(it.get("type")) == "80"
+                   and ex.resource_table().get(str(it.get("exchange_key_default")))]
+        if not packs or not bundles:
+            bad.append("表里没有充值包/礼包，抽表没跑全？")
+            return False
+        def price_of(key) -> int:
+            product = str((ex.item_table().get(key) or {}).get("param_1") or "")
+            return int((ex.payment_table().get(product) or {}).get("price") or 0)
+
+        # ⚠️ 挑**最便宜**的充值包：贵的那几档一次就把累充顶过首充门槛（30 元），
+        # 首充奖励会混进商品产出里，下面「按表算期望值」就对不上了。
+        pack_key = min(packs, key=price_of) if packs else ""
+        bundle_key = sorted(bundles)[0]                                # 110001 = 每月飞速福利箱
+        pack = ex.item_table()[pack_key]
+        pack_product = str(pack.get("param_1"))
+        pack_price = int((ex.payment_table().get(pack_product) or {}).get("price") or 0)
+        if not pack_price:
+            bad.append(f"table_payment 里查不到 {pack_product} 的价格 —— "
+                       f"抽表没跑（`python script\\decompile_table.py tablepayment`）")
+
+        for key in (pack_key, "100001", bundle_key):
+            res = call("exchange.judgeexchangestate", {"key": key}, 371)
+            data = res.get("data") or {}
+            if res.get("code") != 200 or int(data.get("state", -1)) != 0:
+                bad.append(f"judgeexchangestate({key}) 应该是 state=0："
+                           f"code={res.get('code')} data={data}")
+
+        # state=3（等级不够）：拿一条 open_lv 高的商品直接调业务体（玩家 30 级，表里未必有更高的）
+        lv_items = [k for k, it in ex.item_table().items() if int(it.get("open_lv") or 0) > 1]
+        if lv_items:
+            probe_key = sorted(lv_items)[0]
+            st3 = ex.judge_state({"lv": 1}, probe_key).get("data") or {}
+            if int(st3.get("state", -1)) != 3 or st3.get("item") != probe_key:
+                bad.append(f"等级不够应该回 state=3 + item={probe_key}：{st3}")
+
+        # ---- 充值包：发货 + 首充双倍 + 幂等 ----
+        gold0 = bag_of("100001")
+        want1 = expected_reward(pack_key, 1)
+        res = call("exchange.payment", {"payInfo": {
+            "clientOrderId": "selftest-pack-#1", "productKey": pack_product,
+            "productId": (ex.payment_table().get(pack_product) or {}).get("id"),
+            "price": pack_price}}, 372)
+        data = res.get("data") or {}
+        if res.get("code") != 200:
+            bad.append(f"exchange.payment code={res.get('code')} {str(res)[:90]}")
+        else:
+            row = data.get("result") or {}
+            if str(row.get("exchangeKey")) != str(pack_key):
+                bad.append(f"payment 的 result.exchangeKey={row.get('exchangeKey')!r}，"
+                           f"期望商品 key {pack_key!r}（客户端 update() 要拿它查表）")
+            if int((data.get("player") or {}).get("payment") or 0) != pack_price:
+                bad.append(f"累充金额应该是 {pack_price}，拿到 "
+                           f"{(data.get('player') or {}).get('payment')!r}")
+            for ik, cnt in want1.items():
+                got = bag_of(ik)
+                if got != int(before_items.get(ik) or 0) + cnt:
+                    bad.append(f"充值包产出 {ik} 不对：{before_items.get(ik)} -> {got}"
+                               f"（期望 +{cnt}）")
+            print(f"       充值包 {pack_key}（{pack_price} 元）：期望 {want1}")
+
+        # 同一个 clientOrderId 再来一次：不能再发
+        gold_mid = bag_of("100001")
+        res = call("exchange.payment", {"payInfo": {
+            "clientOrderId": "selftest-pack-#1", "productKey": pack_product,
+            "price": pack_price}}, 373)
+        data = res.get("data") or {}
+        if res.get("code") != 200 or not data.get("repeat"):
+            bad.append(f"重复订单应该回 200 + repeat=true：{res.get('code')} {str(data)[:60]}")
+        if bag_of("100001") != gold_mid:
+            bad.append("重复订单又发了一次货（幂等没生效）")
+
+        # 第二单（新订单号）：**不该再有首充双倍**（totalExchangeTimes 已经 1）
+        want2 = expected_reward(pack_key, 2)
+        res = call("exchange.payment", {"payInfo": {
+            "clientOrderId": "selftest-pack-#2", "productKey": pack_product,
+            "price": pack_price}}, 374)
+        if res.get("code") != 200:
+            bad.append(f"第二单 code={res.get('code')}")
+        else:
+            for ik, cnt in want2.items():
+                got = bag_of(ik)
+                want_total = int(before_items.get(ik) or 0) + want1.get(ik, 0) + cnt
+                if got != want_total:
+                    bad.append(f"第二单产出 {ik} 不对：{got} 期望 {want_total}"
+                               f"（第二次不该再乘 first_exchange_percentage）")
+            if int((res.get("data") or {}).get("player", {}).get("payment") or 0) \
+                    != pack_price * 2:
+                bad.append("第二单之后累充金额没累加")
+            print(f"       第二单（无首充双倍）：期望 {want2}")
+
+        # ---- 首充奖励：把累充压到门槛前一位再充一次 ----
+        p = fresh()
+        need = ex.first_charge_need()
+        if need:
+            p["payment"] = max(0, need - 1)
+            p.pop(ex.FIRST_CHARGE_SENT, None)
+            p["sendFirstChargeReward"] = 0
+            store.save_player(p)
+            before_fc = {ik: bag_of(ik) for ik in ex.FIRST_CHARGE_REWARD}
+            res = call("exchange.payment", {"payInfo": {
+                "clientOrderId": "selftest-first-charge", "productKey": pack_product,
+                "price": pack_price}}, 375)
+            if res.get("code") != 200:
+                bad.append(f"首充那一单 code={res.get('code')}")
+            else:
+                if int((res.get("data") or {}).get("player", {})
+                       .get("sendFirstChargeReward") or 0) != 1:
+                    bad.append("首充奖励发下去之后 sendFirstChargeReward 应该是 1")
+                for ik, cnt in ex.FIRST_CHARGE_REWARD.items():
+                    if bag_of(ik) < before_fc[ik] + cnt:
+                        bad.append(f"首充奖励 {ik} 没发（{before_fc[ik]} -> {bag_of(ik)}）")
+                # 再充一单：充值包只给金条，所以「萌钞/好人卡」有没有再涨
+                # 就能看出首充奖励是不是重复发了
+                fc_only = [k for k in ex.FIRST_CHARGE_REWARD if k != "100001"]
+                before_again = {ik: bag_of(ik) for ik in fc_only}
+                call("exchange.payment", {"payInfo": {
+                    "clientOrderId": "selftest-first-charge-2", "productKey": pack_product,
+                    "price": pack_price}}, 376)
+                for ik in fc_only:
+                    if bag_of(ik) != before_again[ik]:
+                        bad.append(f"首充奖励发了两次（{ik}："
+                                   f"{before_again[ik]} -> {bag_of(ik)}）")
+                print(f"       首充（累计 ≥ {need} 元）：{ex.FIRST_CHARGE_REWARD}")
+
+        # ---- 月卡 ----
+        res = call("exchange.payment", {"payInfo": {
+            "clientOrderId": "selftest-month-card", "productKey": "pay025",
+            "price": int((ex.payment_table().get("pay025") or {}).get("price") or 25)}}, 377)
+        data = res.get("data") or {}
+        due = int(data.get("dueTimeSec") or 0)
+        want_days = ex.month_card_days_add()
+        if res.get("code") != 200 or due < now_sec + (want_days - 1) * 86400:
+            bad.append(f"月卡到期时间不对：code={res.get('code')} dueTimeSec={due}"
+                       f"（期望 ≈ 现在 + {want_days} 天）")
+        else:
+            mc = call("exchange.checkmonthcard", {}, 378)
+            if int((mc.get("data") or {}).get("remainDay") or 0) != want_days:
+                bad.append(f"checkmonthcard.remainDay={(mc.get('data') or {}).get('remainDay')!r}"
+                           f"，期望 {want_days}")
+            print(f"       月卡：到期 +{want_days} 天（remainDay={want_days}）")
+
+        # 月卡每日金条：登录时结算，同一天只给一次
+        p = fresh()
+        p.pop(ex.MONTH_CARD_REWARD_DAY, None)
+        store.save_player(p)
+        gold_before = bag_of("100001")
+        call("agent.getlogindata", {}, 379)
+        gold_after = bag_of("100001")
+        if gold_after != gold_before + ex.MONTH_CARD_DAILY_GOLD:
+            bad.append(f"月卡每日金条没发：{gold_before} -> {gold_after}"
+                       f"（期望 +{ex.MONTH_CARD_DAILY_GOLD}）")
+        call("agent.getlogindata", {}, 380)
+        if bag_of("100001") != gold_after:
+            bad.append("同一天又发了一次月卡每日金条")
+
+        # ---- 礼包 ----
+        want_b = expected_reward(bundle_key, 1)
+        before_b = {ik: bag_of(ik) for ik in want_b}
+        res = call("exchange.payment", {"payInfo": {
+            "clientOrderId": "selftest-bundle", "productKey": "bundle01001",
+            "price": int((ex.payment_table().get("bundle01001") or {}).get("price") or 0)}}, 381)
+        if res.get("code") != 200:
+            bad.append(f"礼包 code={res.get('code')} {str(res)[:80]}")
+        else:
+            for ik, cnt in want_b.items():
+                if bag_of(ik) != before_b[ik] + cnt:
+                    bad.append(f"礼包产出 {ik} 不对：{before_b[ik]} -> {bag_of(ik)}（期望 +{cnt}）")
+            print(f"       礼包 {bundle_key}：期望 {want_b}")
+
+        # ---- checkorder 是平铺的 ----
+        res = call("exchange.checkorder", {}, 382)
+        data = res.get("data") or {}
+        if res.get("code") != 200 or not isinstance(data.get("payment"), (int, float)):
+            bad.append(f"checkorder 的 data.payment 要是数字：{str(data)[:80]}")
+        for field in ("sendFirstChargeReward", "dueTimeSec", "exchangeData", "orderList"):
+            if field not in data:
+                bad.append(f"checkorder 的 data 缺 {field}（客户端读的是平铺的这几个键）")
+        if "player" in data:
+            bad.append("checkorder 的 data 不该再包一层 player（那层客户端不读）")
+        if not isinstance(data.get("exchangeData"), dict) or pack_key not in \
+                (data.get("exchangeData") or {}):
+            bad.append(f"checkorder.exchangeData 里应该有刚买过的 {pack_key}："
+                       f"{list(data.get('exchangeData') or {})[:5]}")
+
+        # ---- 不认识的 productKey 要拒绝 ----
+        res = call("exchange.payment", {"payInfo": {
+            "clientOrderId": "selftest-bad", "productKey": "payXXX"}}, 383)
+        if res.get("code") == 200:
+            bad.append("不认识的 productKey 竟然回 200（客户端会以为充值成功）")
+    except Exception as exc:  # noqa: BLE001
+        bad.append(f"充值自检抛异常: {exc}")
+    finally:
+        _payment_restore(save_keys, before_save, before_items)
+
+    if bad:
+        for one in bad[:10]:
+            print(f"  BAD {one}")
+        return False
+    print("  OK  充值：judgeexchangestate 回 state=0、充值包/礼包按表发货、"
+          "首充双倍只在第一单、订单号幂等、月卡 30 天 + 每日 75 金条只发一次、"
+          "checkorder 是平铺的五个键、不认识的商品被拒（收尾已还原）")
+    return ok
+
+
+def _payment_restore(save_keys, before_save: dict, before_items: dict) -> None:
+    """充值自检的收尾：还原背包 + 充值相关的存档字段。"""
+    from gamesrv import config, items, store
+
+    player = store.get_or_create_player(config.DEFAULT_ACCOUNT)
+    got = items.items_of(player)
+    for k in [k for k in got if k not in before_items]:
+        del got[k]
+    for k, v in before_items.items():
+        got[k] = v
+    for k in save_keys:
+        if before_save.get(k) is None:
+            player.pop(k, None)
+        else:
+            player[k] = before_save[k]
+    store.save_player(player)
 
 
 def module_open_check(ok: bool) -> bool:
@@ -3256,6 +3572,8 @@ def main():
     ok = run_check(ok, "分区成就自检异常", subarea_achievement_check)
 
     ok = run_check(ok, "交易所自检异常", exchange_check)
+
+    ok = run_check(ok, "充值自检异常", payment_check)
 
     ok = run_check(ok, "分享礼包自检异常", share_convert_check)
 

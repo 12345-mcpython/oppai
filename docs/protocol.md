@@ -23,6 +23,7 @@
 - [15. 助战（friendsupport.*）](#15-助战friendsupport)
 - [16. 私密剧情（diary.*）](#16-私密剧情diary)
 - [17. 好友 BOSS（boss.*）](#17-好友-bossboss)
+- [18. 充值（IAP）](#18-充值iap)
 
 ---
 
@@ -540,12 +541,17 @@ formatBattleInfo(battleResult, battleId, team):
 
 ```js
 _exchangeData["300001"] = {
-    exchangeKey: "300001",          // 当前档位（见下）
+    exchangeKey: "300001",          // **商品 key**（不是档位 key，见下面的坑）
     todayExchangeTimes: 2,          // 今天换了几次 —— 决定下一次用哪一档
     totalExchangeTimes: 5,
     lastExchangeTimeSec: 1789885973 // 客户端拿它跟 table_constant.common_reset_time 比，自己清天
 }
 ```
+
+⚠️ **`exchangeKey` 必须是商品自己的 key**：客户端 `ExchangeCenter.update(data)` 拿它当
+`_exchangeData` 的下标（`getExchangeData(key)` 按商品 key 查），并且紧接着
+`table_exchange_item[data.exchangeKey].type` —— 档位 key（`210009` / `400012` 这种）
+在那张表里**不存在**，会直接 TypeError。档位只用来查 `table_resource_exchange`。
 
 **档位规则**（`ExchangeCenter.getExchangeInfoKey`，服务端必须照抄）：
 
@@ -571,19 +577,23 @@ presented_key / presented_count          额外赠送
    700001 同理补 BP）。补满上限取玩家自己的 `maxActionPoint`（行动力）或
    `table_item[<key>].limit_count`（BP = 6）—— 直接按 -1 发道具会变成"倒扣"。
 2. 客户端显示的数值是 `floor(数值 * percentage / 100)`，`percentage` 默认 100，
-   **只有第一次兑换且表里有 `first_exchange_percentage`** 时才变
-   （`getInfoByKey` 里那段）。服务端要按同一条规则折算，否则界面显示的和实际给的对不上。
+   **只有累计第一次兑换且表里有 `first_exchange_percentage`** 时才变
+   （`getInfoByKey` 里判的是 `totalExchangeTimes + 1 === 1`，**不是**今天的次数 ——
+   按今天的次数判的话每天清零后又能再领一次双倍）。
+3. **新行在 `data.result` 里**（`ExchangeCenter.exchange/<` 读的是 `data.result`），
+   回裸行客户端那边 `update()` 根本不会执行。
 
 **路由**：
 
 | route | 请求 | 回包 |
 |---|---|---|
 | `exchange.getexchangebycategory` | `{category}`（只有礼包页发 `"80"`） | `data` = 该分类的商品 key 列表 |
-| `exchange.exchange` | `{key}`（**只带 key，档位服务端算**） | `data` = 新的那一段行（带 `exchangeKey`），客户端 `update(data)` 合并 |
+| `exchange.exchange` | `{key}`（**只带 key，档位服务端算**） | `data` = **`{result: 新行}`**（客户端 `update(data.result)` 合并） |
+| `exchange.payment` | `{payInfo}`（充值，见 §18） | `data` = `{result, player, dueTimeSec}` |
 | `exchange.exchangecrystal` | `{count}`（扭蛋钻石直购） | 私服扭蛋未开放 → 非 200 |
 | `exchange.checkmonthcard` | `{}` | `data = {remainDay}`（注意不是 `days`） |
 | `exchange.judgeexchangestate` | `{key}`（IAP 下单前） | `data = {state, item}`，`state≠0` 客户端按 1/2/3 弹 `table_dictionary` |
-| `exchange.payment` / `exchange.checkorder` | IAP 回执 | 私服**故意非 200**（`201` 的文案就是「充值成功」，回 200 会被当成充值成功） |
+| `exchange.checkorder` | `{}`（渠道模块登录/每 5 分钟拉一次） | **平铺**：`{payment, sendFirstChargeReward, dueTimeSec, exchangeData, orderList}` |
 
 **失败码**（客户端 `EXCHANGE_ERR_CODE_DICT`，实测取的值）：
 
@@ -2018,4 +2028,101 @@ isNeedShare(id)   = ownerId == me && record && record.firstFightFalg && !record.
 验证：`python script/selftest_game.py --only 好友BOSS`（列表行形状、`levelKey` 落在活动章节里、
 首战免费 / 再战扣 BP、伤害与击杀奖励、击杀经验、挑战记录是数组、分享开关、
 202/204/209/216，收尾还原 BOSS 存档/背包/经验）。
+
+---
+
+## 18. 充值（IAP）
+
+原版这里接的是渠道 SDK（QuickSDK / 百度 / OneStore / IAB / Apple），**私服把 SDK 删了**，
+所以整条链在 `op.pay` 那一步就断了（点购买之后界面停在「充值中」、服务端一条请求都收不到）。
+现在的做法：**客户端补丁把 `op.pay` 换成立刻回调成功**，服务端照表发货 ——
+「点购买 = 直接成功并给资源」。
+
+### 18.1 完整链路（`exchangecenter.jsc` + `payment/*.jsc` 反汇编）
+
+```
+ExchangeCenter.payment(key)                        // 商品 key（黑市/礼包页点购买）
+  -> exchange.judgeexchangestate {key}             // state 0 才继续（见 §18.3）
+  -> productKey = table_exchange_item[key].param_1 // "pay030" / "bundle02001"
+  -> 月卡先 exchange.checkmonthcard                // remainDay > buy_month_card_days_limit(3) 就中止
+  -> clientOrderId = op.getClientOrderId()         // = uuid.v4()
+  -> _payment.payment(productKey, clientOrderId, playerId, next)
+       _payment 由平台决定（iOS→IapPayment / YE+QUICK→QuickPayment / … / 兜底 IabPayment）
+       -> op.pay(productKey, clientOrderId, target, next)   ★ 客户端补丁在这里直接回调
+       -> Payment.exchangePay(payInfo)             // exchange.payment {payInfo}
+  -> 回包 {result, player:{payment, sendFirstChargeReward}, dueTimeSec}
+```
+
+### 18.2 商品表：`param_1` + `exchange_key_default`
+
+IAP 商品在 `table_exchange_item` 里就两件事：
+
+| 字段 | 含义 |
+| --- | --- |
+| `type` | `10` 月卡 / `20` 充值包 / `80` 礼包（`30~70` 是花金条的游戏内兑换） |
+| `param_1` | `table_payment` 的 key（`pay006`…`pay648`、`bundleXXXXX`）—— 116 个商品**各不相同** |
+| `exchange_key_default` | 指向 `table_resource_exchange` 的产出行（**没有 `spend_key`** = 花的是真钱） |
+| `exchange_num` / `interval_day` / `begin_time` / `ended_time` | 原版的限购与活动档期，**私服不卡**（见 §18.5） |
+
+`table_payment[key] = {id, name, desc, price}`（`id` 是渠道商品号 `com.kurogame.oppai.pay30`，
+`price` 是人民币元）—— 名字/价格都在客户端表里，服务端只用来记账。
+
+### 18.3 三个回包形状（都踩过）
+
+| route | `data` 形状 | 坑 |
+| --- | --- | --- |
+| `exchange.payment` | `{result: 新行, player: {payment, sendFirstChargeReward}, dueTimeSec}` | 新行在 **`result`** 里；`player.payment` 是**数字** |
+| `exchange.checkorder` | **平铺**：`{payment, sendFirstChargeReward, dueTimeSec, exchangeData, orderList}` | 以前多发了一层 `player` → 客户端一个字读不到；`payment` 不是对象 |
+| `exchange.exchange` | `{result: 新行}` | 同上：新行在 `result` 里 |
+
+```js
+// src/data/payment/payment.js  ——  充值的回包
+if (res.result)  this._updateExchangeData(res.result);          // → ExchangeCenter.update(row)
+player.payment = rPlayer.payment;                                // ← 数字（累充金额）
+player.sendFirstChargeReward = rPlayer.sendFirstChargeReward;
+if (res.dueTimeSec) dataManager.player.monthCardDueTimeSec = res.dueTimeSec;
+
+// src/data/payment/onepayment.js  ——  checkorder 的回包（**平铺**）
+var res = data.data;
+if (res.payment)                  player.payment = res.payment;
+if (res.sendFirstChargeReward)    player.sendFirstChargeReward = res.sendFirstChargeReward;
+if (res.dueTimeSec !== undefined) player.monthCardDueTimeSec = res.dueTimeSec;
+if (res.exchangeData) for (key in res.exchangeData) this._updateExchangeData(res.exchangeData[key]);
+if (res.orderList) this._dealServerOrderList(res.orderList);
+```
+
+⭐ `player.payment` 是**累充金额（数字）**：`Player.ctor` 是 `_payment = data.payment || 0`，
+`FirstPaymentLayer` 拿它跟首充门槛比大小（`nowPayPanel.visible = payment < 30`）。
+`player.monthCardDueTimeSec` 是**秒级时间戳**（`getMonthCardDays()` 里 `× 1000` 再减今天 05:00）。
+
+### 18.4 下单前的状态（`exchange.judgeexchangestate`）
+
+客户端 `state !== 0` 就 `tableswitch(1..3)` 弹文案：
+
+| state | `table_dictionary` | 文案 | 本服什么时候回 |
+| --- | --- | --- | --- |
+| 0 | —— | （继续下单） | 默认 |
+| 1 | 3123 | 已售完 | 商品 key 在表里查不到 |
+| 2 | 3124 | 时间未到 | **不返回**（活动档期不卡，见 §18.5） |
+| 3 | 3122 | `#@1@#级开放`（带 `item.open_lv`） | 玩家指挥部等级 < `open_lv` |
+
+### 18.5 私服的取舍
+
+| 项 | 本服 | 原版 | 旋钮 |
+| --- | --- | --- | --- |
+| 支付 | **点购买直接成功**（`patch.js` 的 PAY-SUCCESS 换掉 `op.pay`），不校验凭证 | 渠道 SDK 真实支付 | 删掉 patch.js 那一段即还原 |
+| 发货 | 按 `table_resource_exchange` 的行发（和游戏内兑换**同一套**表；`first_exchange_percentage` 首单双倍也照表） | 同 | —— |
+| 限购 / 活动档期 | **不卡**（`exchange_num`/`interval_day`/`begin_time`/`ended_time` 全不看） | 按表限购、按档期上下架 | `exchange.judge_state()`。⚠️ 不卡的另一个原因：90 个礼包的档期是 **2016 年**的，照表卡就全过期了 |
+| 订单幂等 | `clientOrderId` 记在 `player["paidOrders"]`，同一单只发一次（客户端切后台/重试会重发） | 服务端自己记订单 | `exchange.PAID_ORDERS_MAX`（留最近 200 单） |
+| 首充奖励 | 累计充值 ≥ `table_constant.charge_reward_need_payment`（30 元）发一次：金条 200 + 萌钞 50000 + 好人卡 10 | **客户端全库没有这张表**（`charge_reward` 只在 `table_constant` 里有门槛那一项，`ExchangeCenter.receiveReward` 还是死代码）→ 内容纯属私服自定 | `exchange.FIRST_CHARGE_REWARD`；发完把 `sendFirstChargeReward` 置 1 |
+| 月卡 | 25 元 = 250 金条（表里那行）+ **30 天**（`month_card_days`），到期时间往后加；**每天 75 金条**在登录时结算（客户端没有领取路由，这条只写在 `table_exchange_item[100001].desc` 里：「30天内每天可领取75金条」） | 同 | `exchange.MONTH_CARD_DAILY_GOLD`；隔了好几天只补一份（不追溯） |
+
+⚠️ 「首充双倍」判的是**累计**次数：客户端 `getInfoByKey` 里是
+`totalTimes = data.totalExchangeTimes + 1`，只有 `totalTimes === 1` 才乘
+`first_exchange_percentage`。服务端以前拿 `todayExchangeTimes + 1` 判 ——
+每日清零之后又变回 1，等于**天天都能再领一次双倍**（已修，`exchange.plan()`）。
+
+验证：`python script/selftest_game.py --only 充值`（`judgeexchangestate` 回 0、
+充值包/礼包按表发货、首充双倍只在第一单、订单号幂等、月卡 30 天 + 每日 75 金条只发一次、
+`checkorder` 是平铺的五个键、不认识的商品被拒，收尾还原背包与充值字段）。
 

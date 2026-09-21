@@ -54,6 +54,7 @@
 | **勋章 / 头像 / 衣柜** | ⚠️ | 9 条 `medal.*` 全实现（换头像/衣服/背景、佩戴、清 NEW、好友勋章）；衣柜与头像是**背包道具**（type 40/50/60/70），勋章进度按 `condition_kind` 反推，25 条活动勋章直接算完成，见 §7 |
 | **私密剧情（回看/解锁）** | ⚠️ | 2 条 `diary.*` 全实现；登录块 `storyDiarys` 里 **通关过的算已解锁**、没通关的进 `lockLevels` 可花金条买；38 章全开、价格 `30+5×序号`（原版价在服务端，见 differences §D） |
 | **好友 BOSS** | ⚠️ | 6 条 `boss.*` 全实现；服务端**直接刷** 3 只（1 只挂自己名下：首战免费 + 能分享，2 只挂 NPC 萌友名下要花 BP），名字/品质/消耗/战斗关卡全用客户端 `table_world_boss`；打一场真扣血真给奖，打死有击杀奖励。入口在「活动/分区」章节面板里（顺带把 type=="4" 的 46 个活动章节也发下去了 —— 以前那个页签是空的） |
+| **充值（IAP）** | ✅ | `exchange.payment` 直接成功并发货：充值包 / 礼包 / 月卡都按客户端 `table_resource_exchange` 发（含首单双倍），另有首充奖励与月卡每日 75 金条。客户端补丁（`patch.js` PAY-SUCCESS）把 `op.pay` 换成立刻回调 —— 点购买不再卡在「充值中」。见 [protocol.md §18](protocol.md) |
 | 开场/引导视频 | ✅ | 视频层清理 + 幂等守卫 |
 | 扭蛋 / 抽卡 | ⚠️ | 缺运营配置（`gachaMasterList`），靠兜底不让它崩 |
 | **培养（天赋）** | ✅ | 三条课题（101 军士 / 102 机甲 / 103 克制），`player.selecttalent` / `player.upgradetalent` 落盘、升级真扣材料。⚠️ 入口是编成→培养里的「**萌源增幅**」，要**通关 3-6** 才解锁（`table_function_open[100014].unlock_level_key = "100316"`）；103 还要指挥部 40 级 |
@@ -429,6 +430,16 @@ vanilla 不传参 → 游戏代码 `function (eventName) { if (/began\d/.test(ev
        ⚠️ 顺带修了一件事：`instance.getactivityinstance` 原来只发 `type=="5"` 的 4 个分区
        章节，「活动」页签（`type=="4"`，46 个章节）**永远是空的** —— 好友 BOSS 的入口
        就在那个页签的章节面板里。见 [protocol.md §17](protocol.md)。
+ - [x] **充值（IAP）**：原版接渠道 SDK，私服把 SDK 删了 → 点购买停在「充值中」。
+       现在 `patch.js` 的 **PAY-SUCCESS** 把 `op.pay` 换成立刻回调成功，
+       服务端 `exchange.payment` 按 `table_resource_exchange` 发货
+       （116 个 IAP 商品的 `param_1` 唯一，直接用 `payInfo.productKey` 认商品）：
+       充值包/礼包照表发（含 `first_exchange_percentage` 首单双倍）、月卡 30 天 +
+       每日 75 金条、累计 30 元发首充奖励、`clientOrderId` 幂等（同一单不重复发）。
+       顺手修了两个**回包形状**（都踩过）：新行在 `exchange.payment` 的
+       **`data.result`** 里、`exchange.checkorder` 的 `data` 是**平铺**的
+       `{payment(数字), sendFirstChargeReward, dueTimeSec, exchangeData, orderList}`
+       —— 以前多发了一层 `player`，客户端一个字读不到。见 [protocol.md §18](protocol.md)。
 - [x] 文档：协议 / 逆向手法 / 打包逻辑 / 调试台 / 引擎调试 / 本总览 / **与原版的差异** / **从零复刻**
 
 ### 待办（按卡点排序）

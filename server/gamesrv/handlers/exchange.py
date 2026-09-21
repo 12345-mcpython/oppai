@@ -1,19 +1,29 @@
-"""exchange.* —— 黑市交易所 / 充值页（见 `gamesrv/exchange.py` 的模块注释）。
+"""exchange.* —— 黑市交易所 / 充值（见 `gamesrv/exchange.py` 的模块注释）。
 
-客户端那 5 条路由：
+客户端那 7 条路由：
 
     exchange.getexchangebycategory  {category}        → data = 该分类的商品 key 列表
-    exchange.exchange               {key}             → data = **新的那一段行**（带 exchangeKey）
+    exchange.exchange               {key}             → data = **`{result: 新行}`**
     exchange.exchangecrystal        {count}           → 钻石直购扭蛋（扭蛋未实现 → 非 200）
     exchange.checkmonthcard         {}                → data = {remainDay}
-    exchange.judgeexchangestate     {key}             → data = {state, item}（state≠0 客户端弹提示）
+    exchange.judgeexchangestate     {key}             → data = {state, item}
+    exchange.checkorder             {}                → data = 平铺的支付状态（见 handlers/payment.py）
+    exchange.payment                {payInfo}         → 充值成功 + 发货
 
-`exchange.checkorder` / `exchange.payment` 在 `handlers/payment.py` 里（早就实现了）。
+⚠️ 回包形状都按反汇编钉过，最容易搞错的两处：
+
+* `exchange.exchange` 的**新行在 `data.result`** 里（`ExchangeCenter.exchange/<`
+  读的是 `data.result`，不是 `data` 本身）；
+* `exchange.payment` 的 `data` 是 `{result, player:{payment, sendFirstChargeReward},
+  dueTimeSec}`（`Payment.exchangePay/<`），其中 `player.payment` 是**数字**。
+
+⚠️ 每条**改背包**的回包都带 `items` 变更块（`patch.js` 的 RESP-DISPATCH
+`data.items -> bag.updateItems`），不然买完东西顶部货币条要重登才动。
 """
 
 from __future__ import annotations
 
-from .. import config, exchange as ex, logx, store
+from .. import config, exchange as ex, items, logx, store
 from ..gameproto import CODE_OK
 from . import route
 
@@ -23,6 +33,29 @@ log = logx.get("handler.exchange")
 def _player(session: dict) -> dict:
     account = (session.get("info") or {}).get("account") or config.DEFAULT_ACCOUNT
     return store.get_or_create_player(account)
+
+
+def _bag_snapshot(player: dict) -> dict:
+    return {str(k): int(v or 0) for k, v in items.items_of(player).items()}
+
+
+def _items_block(player: dict, before: dict) -> dict:
+    """只回这次真变了的、而且改动前就有的 key（`Bag.updateItems` 的约束）。"""
+    out = {}
+    for key, count in items.items_of(player).items():
+        k = str(key)
+        if k in before and int(count or 0) != before[k]:
+            out[k] = int(count or 0)
+    return out
+
+
+def _reply(player: dict, result: dict, before: dict) -> dict:
+    if int(result.get("code") or 0) == CODE_OK:
+        data = result.get("data")
+        if isinstance(data, dict):
+            data["items"] = _items_block(player, before)
+        store.save_player(player)
+    return result
 
 
 @route("exchange.getexchangebycategory")
@@ -35,11 +68,8 @@ def get_exchange_by_category(session: dict, msg: dict, req_id):
 @route("exchange.exchange")
 def do_exchange(session: dict, msg: dict, req_id):
     player = _player(session)
-    result = ex.exchange(player, (msg or {}).get("key"))
-    if result.get("code") == CODE_OK:
-        # `_player()` 是 load 出来的副本，扣的道具/涨的次数必须写回
-        store.save_player(player)
-    return result
+    before = _bag_snapshot(player)
+    return _reply(player, ex.exchange(player, (msg or {}).get("key")), before)
 
 
 @route("exchange.exchangecrystal")
@@ -58,17 +88,20 @@ def check_month_card(session: dict, msg: dict, req_id):
 
 @route("exchange.judgeexchangestate")
 def judge_exchange_state(session: dict, msg: dict, req_id):
+    """充值下单前的状态：`state == 0` 客户端才会往下走。"""
     player = _player(session)
     return ex.judge_state(player, (msg or {}).get("key"))
 
 
 @route("exchange.payment")
 def exchange_payment(session: dict, msg: dict, req_id):
-    """`Payment.exchangePay` —— IAP 下单回执。
+    """`Payment.exchangePay` —— 充值回执，**私服里就是「点购买直接成功」**。
 
-    私服没有支付渠道（`judgeexchangestate` 那一步就回 state≠0 把流程挡在客户端了），
-    所以这里只可能是伪造请求。**故意回非 200**，别让它看着像"充值成功"
-    （`EXCHANGE_ERR_CODE_DICT["201"]` 就是「充值成功」，回 200 客户端会当成功）。
+    客户端补丁（`patch.js` 的 PAY-SUCCESS）把 `op.pay` 换成立刻回调，
+    于是 `payInfo` 由客户端现造（`{clientOrderId, productKey, productId, price, …}`），
+    服务端按 `productKey` 找到那个 IAP 商品、照 `table_resource_exchange` 发货。
+    业务体在 `gamesrv/exchange.py` 的 `payment()`（含首充、月卡、订单幂等）。
     """
-    log.info("exchange.payment msg=%s —— 私服没有支付渠道，拒绝", msg)
-    return {"code": ex.CODE_UNKNOWN_TYPE, "msg": "充值未开放", "data": {}}
+    player = _player(session)
+    before = _bag_snapshot(player)
+    return _reply(player, ex.payment(player, msg or {}), before)
