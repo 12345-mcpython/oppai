@@ -120,7 +120,7 @@ python enable_js_debugger.py      # 往 AppDelegate.cpp 插 enableDebugger()，�
 .\build.ps1 -Abi armeabi          # 重编 libcocos2djs.so
 cd E:\code\zcsmw
 python script\build_apk.py && adb install -r -d E:\code\zcsmw\out\zcsmw-mod-signed.apk
-adb forward tcp:5086 tcp:5086     # MuMu 是 NAT 的，要把端口转出来
+adb forward tcp:5086 tcp:5086     # MEmu 是 NAT 的，要把端口转出来
 ```
 
 插进去的是这段（在 `sc->runScript("script/jsb_boot.js")` **之后**：

@@ -126,7 +126,7 @@ cd E:\code\zcsmw
 
 ### 为什么包里同时放 armeabi 和 x86
 
-MuMu 是 x86 模拟器，`ro.product.cpu.abilist32 = x86,armeabi-v7a,armeabi`。
+MEmu（逍遥模拟器）是 x86 模拟器，`ro.product.cpu.abilist32 = x86,armeabi-v7a,armeabi`。
 包里有 `lib/x86/` 时 Android 会**优先选 x86 原生跑**；只有 armeabi 的话就得交给
 houdini（ARM→x86 二进制翻译层）接管，实测会在新手引导那段代码上被 houdini
 自己 trap 掉 —— tombstone 里唯一一帧永远是 `/system/lib/libhoudini.so`，

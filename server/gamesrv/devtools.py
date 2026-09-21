@@ -81,7 +81,7 @@ def _local_only(req) -> bool:
     """只允许从本机 / 局域网回环访问。
 
     这个接口能改存档、能在客户端跑 JS，暴露到公网等于把机器交出去。
-    MuMu 是 NAT 的，宿主机看到的是 127.0.0.1；跨机调试才需要私网地址，
+    MEmu 是 NAT 的，宿主机看到的是 127.0.0.1；跨机调试才需要私网地址，
     所以放行 10./172.16-31./192.168. 三段。
     """
     host = (req.client or "").rsplit(":", 1)[0].strip("[]")
@@ -259,7 +259,7 @@ class _LogcatTailer:
             if self._stop.is_set():
                 break
             # adb 断了（模拟器重启 / adb server 掉了）—— 退避重连，
-            # 顺手把 serial 重新连一次，MuMu 重启后 21503 经常要重新 connect。
+            # 顺手把 serial 重新连一次，MEmu 重启后 21503 经常要重新 connect。
             self.error = self.error or "logcat 进程结束，正在重连"
             try:
                 subprocess.run([ADB, "connect", ADB_SERIAL], capture_output=True, timeout=10)

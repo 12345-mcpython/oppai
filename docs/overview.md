@@ -472,7 +472,7 @@ python script\repl.py "jsb.reflection.callStaticMethod('org/cocos2dx/javascript/
 `CCJavascriptJavaBridge: Failed to find method id of ...`，logcat 里能看到）；
 `AppActivity.exit()` 是实例方法，得走它的静态包装 `QuickAdapter.exit()`。
 
-> ⚠️ `adb shell input tap` 在 MuMu 上**不可靠**（注入的事件不一定到得了 App），
+> ⚠️ `adb shell input tap` 在 MEmu 上**不可靠**（注入的事件不一定到得了 App），
 > `adb screencap` 有时抓不到 GL 层（截出来一片白）。别用它俩下结论 ——
 > 以用户看到 / 服务端日志 / `uiautomator` 为准。
 

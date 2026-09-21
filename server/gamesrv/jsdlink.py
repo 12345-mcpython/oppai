@@ -302,7 +302,7 @@ def find_sources(sources: list, needle: str) -> list:
 
 
 def setup_adb_forward(port: int = DEFAULT_PORT, quiet: bool = False) -> None:
-    """MuMu 是 NAT 的，宿主机连不上模拟器里的端口，得先转发。"""
+    """MEmu 是 NAT 的，宿主机连不上模拟器里的端口，得先转发。"""
     if os.environ.get("GS_JSD_NO_ADB"):
         return
     if not os.path.isfile(ADB):

@@ -148,7 +148,7 @@ cc.textureCache.addImage('res/ui/common/res/bgimage1.jpg').getContentSize()
 | `armeabi` | 原版包自带 | 19.0 MB | 7.2 MB |
 | `armeabi-v7a` | 官方依赖包里有，直接编 | 18.1 MB | 6.9 MB |
 | **`arm64-v8a`** | **本文（自建依赖）** | 21.6 MB | ≈7.5 MB |
-| `x86` | 官方依赖包里有（MuMu 原生跑，不走 houdini） | 24.0 MB | 8.3 MB |
+| `x86` | 官方依赖包里有（MEmu 原生跑，不走 houdini） | 24.0 MB | 8.3 MB |
 
 打包侧（哪几个 ABI 进包、设备会挑哪一份）见
 [`../docs/build.md`](../docs/build.md) 的「ABI」一节。

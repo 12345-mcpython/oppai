@@ -46,7 +46,7 @@
 | **Android SDK build-tools** | **36.0.0**（别的版本大概率也行） | 提供 `zipalign` / `apksigner` |
 | **adb** | 任意 | 装包、截图、看 logcat |
 | **Android NDK** | **r10e**（**版本必须对**） | **只有 `-Engine` 重编引擎才需要**。别的 NDK 版本编不过（工具链/头文件差异） |
-| **模拟器** | **MuMu，Android 9，x86_64，已 root** | 见下面「为什么是 MuMu」 |
+| **模拟器** | **MEmu（逍遥模拟器），Android 9（API 28），x86_64，已 root** | 见下面「为什么是 MEmu / x86」 |
 
 环境变量（都给默认值，不改也能跑，放在别的盘就设一下）：
 
@@ -54,10 +54,10 @@
 $env:GS_JAVA_HOME   = "D:\java\zulu17.68.203-ca-jdk17.0.20.1-win_x64"
 $env:GS_BUILD_TOOLS = "D:\Android\android-sdk\build-tools\36.0.0"
 $env:GS_ADB         = "D:\Android\android-sdk\platform-tools\adb.exe"
-$env:GS_ADB_SERIAL  = "127.0.0.1:21503"
+$env:GS_ADB_SERIAL  = "127.0.0.1:21503"   # MEmu（逍遥）的 adb 端口；先 adb connect 一下
 ```
 
-> **为什么是 MuMu / x86**：包里有 `lib/x86/` 时 Android 会原生跑；
+> **为什么是 MEmu / x86**：包里有 `lib/x86/` 时 Android 会原生跑；
 > 只有 `armeabi` 的话会被 **houdini**（ARM→x86 翻译层）接管，实测会在
 > 新手引导那段代码上被 houdini 自己 trap 掉，tombstone 里永远只有
 > `/system/lib/libhoudini.so` 一帧 —— 排查时完全是噪音。

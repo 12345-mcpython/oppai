@@ -198,7 +198,7 @@ cd E:\code\zcsmw
 python script\patch_js_debugger.py # 调试器自己的 JS 换成明文可改（不用重编引擎）
 python script\build_apk.py
 adb install -r -d E:\code\zcsmw\out\zcsmw-mod-signed.apk
-adb forward tcp:5086 tcp:5086     # MuMu 是 NAT 的，要把端口转出来
+adb forward tcp:5086 tcp:5086     # MEmu 是 NAT 的，要把端口转出来
 
 python script\jsd.py tabs          # 连得上吗
 python script\jsd.py repl          # 交互式：断点 / 单步 / 栈 / 求值

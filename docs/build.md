@@ -333,7 +333,7 @@ apktool 会照样按「不压缩」处理，有时还会把原版 APK 里的 unk
 | `armeabi` | 原版包自带 | 19.0 MB | 7.2 MB |
 | `armeabi-v7a` | **2026-09-20 自己编**（`.\build.ps1 -Engine -Abi armeabi-v7a`） | 18.1 MB | 6.9 MB |
 | **`arm64-v8a`** | **2026-09-20 自建依赖编出来**（[`../engine/ARM64.md`](../engine/ARM64.md)） | 21.6 MB | ≈7.5 MB |
-| `x86` | 自己编（MuMu 是 x86 模拟器，不走 houdini） | 24.0 MB | 8.3 MB |
+| `x86` | 自己编（MEmu 是 x86 模拟器，不走 houdini） | 24.0 MB | 8.3 MB |
 
 `manifest` 里是 `android:extractNativeLibs="true"`，所以 `.so` 在包里是**压缩**存放的
 （18 MB 的 so 只占 6.9 MB）—— 别拿 `libs/` 的字节数估包体积。

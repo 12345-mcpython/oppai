@@ -50,7 +50,7 @@ if (!fu->isFileExist(wp + "jsdebugger.off")) {      // 想临时关掉就建这�
 cd ..\game_server
 python tools\build_apk.py         # 重打包 + 签名
 adb install -r -d E:\code\zcsmw\out\zcsmw-mod-signed.apk
-adb forward tcp:5086 tcp:5086     # MuMu 是 NAT 的，要把端口转发出来
+adb forward tcp:5086 tcp:5086     # MEmu 是 NAT 的，要把端口转发出来
 python tools\jsd.py tabs          # 连上去看看
 ```
 """

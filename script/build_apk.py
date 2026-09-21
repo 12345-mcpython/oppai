@@ -906,7 +906,7 @@ def normalize_android_manifest() -> None:
 # 我们后来自己编了 armeabi-v7a（`build.ps1 -Engine -Abi armeabi-v7a` 会把产物
 # 直接拷进 `game/lib/armeabi-v7a/`）。
 #
-# 真机只用得上 arm 那套；x86 那 24 MB 纯粹是给模拟器/Nox 这类 x86 环境用的。
+# 真机只用得上 arm 那套；x86 那 24 MB 纯粹是给模拟器（MEmu 这类 x86 环境）用的。
 # 所以打包支持只带指定 ABI：
 #
 #     python script\build_apk.py --abis armeabi-v7a,armeabi

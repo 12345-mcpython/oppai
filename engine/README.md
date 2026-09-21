@@ -1,6 +1,6 @@
 # 引擎复现（移植）工作区
 
-目标：用源代码重建 `libcocos2djs.so`。**x86** 是第一步（摆脱 MuMu 的 libhoudini ARM 翻译层），
+目标：用源代码重建 `libcocos2djs.so`。**x86** 是第一步（摆脱 MEmu 的 libhoudini ARM 翻译层），
 后来 armeabi / armeabi-v7a / **arm64-v8a** 也都编出来了 —— 四份 ABI 的打包与依赖见
 [`ARM64.md`](ARM64.md)（同目录）。
 
@@ -206,7 +206,7 @@ ndk-build -jN -C oppai-engine NDK_TOOLCHAIN_VERSION=4.8 NDK_DEBUG=0
 
 ### 为什么要同时编 x86：让崩溃栈能说话
 
-MuMu 是 x86 模拟器。包里只有 `armeabi` 时，引擎被 **houdini**（ARM→x86
+MEmu（逍遥）是 x86 模拟器。包里只有 `armeabi` 时，引擎被 **houdini**（ARM→x86
 二进制翻译层）接管；这时只要我们自己的代码里有空指针，tombstone 里往往
 只剩一帧：
 

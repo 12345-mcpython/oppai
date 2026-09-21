@@ -65,7 +65,7 @@ python script\jsc_find.py "favor\..*" --regex
 | `shots.py` | 重启客户端并连续截图 |
 | `bisect_init.py` | 逐个构造 `initUserData` 里的数据模块，找会把 JS 主线程卡死的那个 |
 
-> ⚠️ `adb shell input tap` 在 MuMu 上不可靠（注入事件不一定到得了 App），
+> ⚠️ `adb shell input tap` 在 MEmu 上不可靠（注入事件不一定到得了 App），
 > `adb screencap` 有时也抓不到 GL 层（截出来一片白）。
 > 别用它俩下结论，以用户看到 / 服务端日志为准。
 

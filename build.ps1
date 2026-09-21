@@ -12,7 +12,7 @@
                                     # 没选中的挪到 out\lib-abi-cache\，不删，能来回切。
                                     # 真机就配 -Serial 用这套：-Install -Serial <手机>
 
-为什么默认两个 ABI 都编：MuMu 是 **x86** 模拟器，只带 armeabi 的包会被
+为什么默认两个 ABI 都编：MEmu（逍遥）是 **x86** 模拟器，只带 armeabi 的包会被
 houdini（ARM->x86 二进制翻译层）接管，实测会在新手引导那段代码里被
 houdini 自己 trap 掉（tombstone 里唯一一帧永远是 /system/lib/libhoudini.so）。
 包里同时放 lib/x86 和 lib/armeabi，Android 按 abilist32 = x86,armeabi-v7a,armeabi
