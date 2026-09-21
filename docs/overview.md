@@ -49,7 +49,8 @@
 | **副本 / 关卡（主线战斗）** | ✅ | 11 章 / 1142 关，关卡表在客户端；服务端只存进度 |
 | **任务 → 主线任务** | ✅ | 12 条窗口；**进度接的是真实战斗**（打一次关卡胜利 = 一次任务进度） |
 | **编成 → 军士培养 / 突破 / 技能** | ✅ | `char.upgradesoldierlv` / `improvesoldierstar` / `upgradesoldierskill`；升级公式和客户端逐字段对齐（`script/check_soldier_calc.py`） |
-| 日常 / 成就任务 | ⚠️ | 数据是空的（只做了主线，`type=2`） |
+| **日常 / 成就任务** | ✅ | 三类任务（主线/日常/成就）共用 `quest.*`；日常一天放当前等级那一档、换日 05:00、奖励真发 |
+| **好友** | ⚠️ | 9 条 `friend.*` 全实现（搜索/申请/同意/拒绝/删除/送收物资/两个列表）；好友是 **NPC**（没有别的玩家），见 §7 |
 | 开场/引导视频 | ✅ | 视频层清理 + 幂等守卫 |
 | 扭蛋 / 抽卡 | ⚠️ | 缺运营配置（`gachaMasterList`），靠兜底不让它崩 |
 | **培养（天赋）** | ✅ | 三条课题（101 军士 / 102 机甲 / 103 克制），`player.selecttalent` / `player.upgradetalent` 落盘、升级真扣材料。⚠️ 入口是编成→培养里的「**萌源增幅**」，要**通关 3-6** 才解锁（`table_function_open[100014].unlock_level_key = "100316"`）；103 还要指挥部 40 级 |
@@ -377,10 +378,19 @@ vanilla 不传参 → 游戏代码 `function (eventName) { if (/began\d/.test(ev
       通关数 / 军士升级·突破 / 抚摸（含按角色）/ 送礼 / 演习 / 派遣 / 分解 / **累计获得道具**
       （挂在 `items.add_item` 这个唯一入账口上）/ 战役星数 / 军士数量 / 私密开启数。
       ⚠️ 三类拿不到数据的条件（12208 击杀鸭子数、12209 我方军士跪倒数、13102 技能熟练度）
-      进度恒 0、不假装达成；18201「给好友送物资」卡在好友系统没做。
+      进度恒 0、不假装达成。（18201「给好友送物资」原来也卡着，好友系统做完后**已经通了**。）
       **奖励真发**：新抽的表 `table_quest_reward`（1534 行）→ `items.settle`，回包
       `data.rewards = [{type,key,count}]`（`ccuiManager.popupReward` 认的形状）——
       主线以前领奖只回空数组，这次一并补上。见 [protocol.md](protocol.md) 的「任务」一节。
+- [x] **好友系统**（9 条 `friend.*`：搜索 / 申请 / 同意 / 拒绝 / 删除 / 送物资 / 收物资 /
+      `getfriendlist` / `getrecommendationlist`）：位掩码、条目形状、上限全按客户端反汇编来
+      （`status` 的 A/B 是 **key 里的第一/第二个人**，本服自己恒为 A；上限读客户端表
+      `table_player_level_function[lv]` 的 `friend_limit` / `take_materials_limit`）。
+      单机没有别的玩家，所以好友是 `table_friend_support_npc` 的 101 个 NPC：
+      建号送 5 个好友 + 2 条待处理申请，申请出去 60 秒后自动同意，换日清空物资位并让
+      2 个好友重新送物资；收物资给行动力（回包 `data.reward` 是 `{itemKey: count}`）。
+      顺手解开了日常 **18201「给好友送物资」**（`quests.on_friend_send`）。
+      见 [protocol.md](protocol.md) 的「好友」一节 + [differences.md](differences.md) §B/§D。
 - [x] 文档：协议 / 逆向手法 / 打包逻辑 / 调试台 / 引擎调试 / 本总览 / **与原版的差异** / **从零复刻**
 
 ### 待办（按卡点排序）
@@ -413,21 +423,22 @@ vanilla 不传参 → 游戏代码 `function (eventName) { if (/began\d/.test(ev
    `{item, innSize, index}`），所以卡在「层的 `_recommendList` 是 0」。
    **不影响战斗**（这个弹窗是可选的好友助战）。
 3. **其余未实现的 route** —— `python script/route_gap.py --static` 能列出全部。
-   当前：客户端静态候选 **161** 条，服务端 **90** 条，缺 **79** 条。按单机价值排：
+   当前：客户端静态候选 **161** 条，服务端 **99** 条，缺 **70** 条。按单机价值排：
 
    | 命名空间 | 缺 | 说明 |
    |---|---|---|
-   | `diary.*` / `convert.*` / `share.*` | 1+1+1 | 零散领奖类，工作量最小，适合热身 |
+   | `diary.*` / `convert.*` / `share.*` | 2+1+1 | 零散领奖类，工作量最小，适合热身 |
    | `boss.*` | 5 | 好友 BOSS（`getbosslist` 已实现并回空表） |
    | `society.*` / `societyclg.*` | 33+6 | 军团——单机价值低、量最大 |
-   | `friend.*` / `medal.*` | 9+9 | 社交类，同上 |
+   | `medal.*` | 9 | 勋章 / 换头像衣服背景（数据形状还没逆） |
 
    ⚠️ **`rank.*` / `boss.getbosslist` 这类"回空表"不算缺口**：私服没有榜、没有好友，
    回空才是对的（见 `handlers/rank.py` 的论证），别当成没实现去"补"。
 
    ✅ 已经补完的：`equipment.*`(7)、`favor.*`(5)、`favorevent.*`(1)、
    **`char.upgradedaemon`**(1)、**`player.updateasst`**(1)、
-   `player.selecttalent`/`upgradetalent`、`sign.*`(1)、`detect.*`(6)、**`arena.*`**(4)。
+   `player.selecttalent`/`upgradetalent`、`sign.*`(1)、`detect.*`(6)、**`arena.*`**(4)、
+   **`friend.*`**(9)。
 4. `hashKey` / `hmac64` 还没复刻（登录靠单位元绕过）；自研 DH 的完整算法也没还原。
 
 ---

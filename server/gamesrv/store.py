@@ -1130,6 +1130,11 @@ def new_player(account: str) -> dict:
         "id": 1,
         "account": account,
         "name": account,
+        # 数字 ID（客户端 `Player.ctor` 读 `data.numberId`）。**0 = 待分配**，
+        # 由 `_migrate` 分配一个稳定且不撞号的号（见 `_next_number_id`）：
+        # 好友系统的记录 key 就是 `"<我的numberId>#<对方numberId>"`，
+        # 客户端 `Friend.getFriendNumberId` / `isBeApplyFor` 全拿它比。
+        "numberId": 0,
         "lv": MIN_PLAYER_LV,
         "curExp": 0,
         "maxSoldiersCount": 50,
@@ -1235,6 +1240,13 @@ def _migrate(player: dict) -> bool:
         if key not in player:
             player[key] = value
             changed = True
+    # 数字 ID（好友系统要用）。老存档和 new_player 给的都是 0，这里分配一个
+    # **稳定**的号并留在存档里 —— 每次现算的话好友记录 key 会跟着变，
+    # 玩家一重登好友列表就全对不上了。
+    if not int(player.get("numberId") or 0):
+        player["numberId"] = _next_number_id(player.get("account"))
+        changed = True
+        log.info("玩家 %s 分配数字 ID %s", player.get("account"), player["numberId"])
     # moduleState 要按 key 合并，不能整个覆盖掉玩家已有的开启状态
     state = player.get("moduleState")
     if not isinstance(state, dict):
@@ -1322,6 +1334,31 @@ def _migrate(player: dict) -> bool:
 def player_exists(account: str) -> bool:
     with _lock:
         return account in _load()
+
+
+# 玩家数字 ID 的起始号。和 NPC 好友的号段（`friends.NPC_ID_BASE` = 900001）错开，
+# 免得搜好友时搜到自己人。
+NUMBER_ID_START = 100001
+
+
+def _next_number_id(account: str | None) -> int:
+    """给一个还没号的老存档分配数字 ID：从 `NUMBER_ID_START` 起找没被占的最小号。
+
+    `_migrate` 是在 `_lock` 里被调的（`_load` / `all_players` 都拿同一把
+    RLock，可重入），所以这里直接读全库是安全的。只在真的缺号时调一次。
+    """
+    used = set()
+    for name, row in all_players().items():
+        if name == account or not isinstance(row, dict):
+            continue
+        try:
+            used.add(int(row.get("numberId") or 0))
+        except (TypeError, ValueError):
+            continue
+    number_id = NUMBER_ID_START
+    while number_id in used:
+        number_id += 1
+    return number_id
 
 
 def get_or_create_player(account: str) -> dict:

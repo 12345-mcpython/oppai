@@ -9,8 +9,8 @@ route 名字来自客户端 src/manager/datamanager.js：
 from __future__ import annotations
 
 from ..gameproto import CODE_OK
-from .. import (arena, config, detect, exchange, favor, gacha, instance, logx, quests,
-                sign, store, subarea)
+from .. import (arena, config, detect, exchange, favor, friends, gacha, instance, logx,
+                quests, sign, store, subarea)
 from . import route
 
 log = logx.get("handler.agent")
@@ -105,7 +105,13 @@ def _module_stubs(player: dict | None = None) -> dict:
         # （我一度以为它是 scratch 对象、不读 —— 实机量过：184 条里 19 条带 id，
         #   正好是这里建的那 19 条。见 favor.py「宿舍事件」段 + overview §6.8）
         "favorevent": favor.event_block(player),
-        "friend": {"friendMapList": [], "recommendationList": [], "isNeedShowTip": 0},
+        # 好友。形状由 `Friend.ctor` / `Friend.update` 定死：
+        # `{friendMapList, recommendationList, takeMaterialsCount}` —— `friendMapList`
+        # 是 map（key = `"<我的numberId>#<对方numberId>"`），不是数组。
+        # ⚠️ `dataManager.player.numberId` 必须一起给（见 friends.player_number_id）：
+        # 客户端拿它跟 key 的两端比，没有它好友面板的按钮状态全是错的。
+        # 这里返回的是**真实好友状态**（NPC 好友，见 gamesrv/friends.py）。
+        "friend": friends.block(player),
         # 功能开启标记**不在这里**：客户端读的是 `data.player.moduleOpenMark`
         # （`Player.ctor`），放顶层等于没发 —— 见 `_player_block()`。
         # 黑市交易所 / 充值页。形状 `{<itemKey>: 行}` —— 客户端 `_exchangeData` 直接用它，
@@ -294,6 +300,11 @@ def get_login_data(session: dict, msg: dict, req_id):
     new_events = favor.sync_events(player)
     if new_events:
         store.save_player(player)
+    # 好友：建号第一次给几个 NPC 好友 + 待处理申请；换日时重置物资状态。
+    # `friends.block()`（在 _module_stubs 里）也会调一次 ensure，但那次不负责落盘，
+    # 所以这里要先 save —— 不然每次登录都重新「初始化好友」（id/申请时间每次都变）。
+    if friends.ensure(player):
+        store.save_player(player)
     t = store.time_obj()
     log.info("agent.getlogindata account=%s playerId=%s", account, player["id"])
     data = {
@@ -333,6 +344,8 @@ def create_player(session: dict, msg: dict, req_id):
         store.save_player(player)
     new_events = favor.sync_events(player)
     if new_events:
+        store.save_player(player)
+    if friends.ensure(player):
         store.save_player(player)
 
     t = store.time_obj()

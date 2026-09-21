@@ -17,6 +17,7 @@
 - [9. 任务（quest.*）](#9-任务quest)
 - [10. 关卡 / 副本（instance.*）](#10-关卡--副本instance)
 - [11. 军士养成（char.*）](#11-军士养成char)
+- [12. 好友（friend.*）](#12-好友friend)
 
 ---
 
@@ -1399,3 +1400,154 @@ while (true) {
 
 对齐验证：`python script/check_soldier_calc.py`（44 个用例，和服务端算的逐字段比对）。
 链路验证：`python script/selftest_game.py`（喂两个材料 -> 重登确认等级落盘、材料没复活）。
+
+---
+
+## 12. 好友（friend.*）
+
+服务端实现见 `server/gamesrv/friends.py` + `handlers/friend.py`。
+下面每条都是 `assets/src/data/friend.jsc`（逐函数反汇编）和
+`assets/src/config/friendconfig.jsc`（常量表）里读出来的，不是猜的。
+
+### 12.1 九条路由
+
+| route | 请求 | 成功 `data` | 客户端回调 |
+| --- | --- | --- | --- |
+| `friend.getfriendlist` | `{}` | `{friendMapList, recommendationList, takeMaterialsCount}` | `Friend.update(res.data)` |
+| `friend.getrecommendationlist` | `{}` | `{recommendationList}` | `Friend.update({recommendationList})` |
+| `friend.searchplayer` | `{numberId}` | `{playerInfo}` | 回给搜索面板（当推荐条目用） |
+| `friend.applyfor` | `{numberId}` | `{friendMap}` | `updateFriendMap(data.friendMap)` |
+| `friend.agreeapplication` | `{numberId}` | `{friendMap}` | 同上 |
+| `friend.refuseapplication` | `{numberId}` | `{friendMap}` | 同上 |
+| `friend.deletefriend` | `{numberId}` | `{friendMap}` | 同上 |
+| `friend.sendmaterials` | `{numberId}` | `{friendMap}` | 同上 |
+| `friend.takematerials` | `{numberId}` | `{friendMap, takeMaterialsCount, reward}` | 同上 + 弹奖励 |
+
+⚠️ **`getfriendlist` 的字段必须在 `data` 顶层**：回调是 `this.update(res.data)`，
+而 `Friend.update` 读 `data.friendMapList` / `data.recommendationList` /
+`data.takeMaterialsCount`。套一层 `{friend: {...}}` 的话三个全是 `undefined`，
+`update` 直接 return —— 表现是「面板打开是空的，但服务端日志里请求是 200」。
+
+### 12.2 两种条目形状（不一样，别混）
+
+好友记录（`friendMapList` 的值 / `friendMap` 回包）：
+
+```json
+{"numberId1": 100001, "numberId2": 900001, "status": 40, "updateTimeSec": 1789968251,
+ "player": {"numberId": 900001, "name": "大阪小松子", "lv": 10,
+            "headId": "601001:2", "lastLoginTimeSec": 1789961051}}
+```
+
+* key = `"<numberId1>#<numberId2>"`（`Friend.getFriendMapKey` 就是 `a + "#" + b`）；
+* **`player` 必给**：好友列表每条都走
+  `FriendItem._updateFriendLabel -> _updateInfo(this._info.player)`，
+  `player` 是 `undefined` 的话 `info.lv` 当场 TypeError（整页列不出来）；
+* `updateTimeSec` 是**申请列表的排序键**（`getApplicationList` 按它倒序）。
+
+推荐条目（`recommendationList` 的元素 / `data.playerInfo`）是**平铺**的：
+
+```json
+{"numberId": 900008, "name": "鬼龍院皋月", "lv": 10,
+ "headId": "601009:2", "lastLoginTimeSec": 1789967231}
+```
+
+`FriendItem._updateRecommendationLabel` 直接 `_updateInfo(this._info)`，
+`getNumberId()` 也直接读 `_info.numberId` —— 多套一层 `player` 就全 `undefined`。
+
+### 12.3 `status` 位掩码（`FRIEND_MAP_STATUS`）
+
+```
+DELETE 1   A_APPLY_FOR_B 2   B_APPlY_FOR_A 4   BE_FRIEND 8
+A_SEND_MATERIALS_B 16   B_SEND_MATERIALS_A 32   A_TAKE_MATERIALS_B 64   B_TAKE_MATERIALS_A 128
+```
+
+⚠️ **名字里的 A/B 是「key 里的第一/第二个人」，不是「我 / 他」。**
+客户端 `isBeApplyFor` / `isGetMaterials` / `isSendMaterials` / `isTakeMaterials`
+都是先看「我在 numberId1 还是 numberId2」，再查对应的那一位。
+本服的约定是**自己永远当 A**（key = `"<我的numberId>#<对方numberId>"`），
+所以每条分支都落在 A 那一支：
+
+| 事件 | 位 |
+| --- | --- |
+| 我申请加他 | `A_APPLY_FOR_B` |
+| 他申请加我（我能同意/拒绝） | `B_APPlY_FOR_A` |
+| 成为战友 | `BE_FRIEND` |
+| 我给他送了物资 | `A_SEND_MATERIALS_B` |
+| 他给我送了物资（我能收） | `B_SEND_MATERIALS_A` |
+| 我收过了 | `A_TAKE_MATERIALS_B` |
+| 他收过了 | `B_TAKE_MATERIALS_A` |
+
+组状态（都已实测）：
+
+* 好友列表 = `isFriend(status)` = **有 `BE_FRIEND` 且没有 `DELETE`**；
+* 申请列表 = `isBeApplyFor(status)` = 有 `B_APPlY_FOR_A` —— **不看 `DELETE`**，
+  所以「拒绝」必须把申请位清掉，只标 `DELETE` 的话这条会一直赖在申请页签里；
+* 可收物资 = `isGetMaterials` && !`isTakeMaterials`；「已送」「已收」位要**各自留着**，
+  界面就是靠它们显示「已送 / 已收」（清了「已送」位，重复收取会回 234「还没收到物资」
+  而不是客户端文案里那句 213「已经收过啦」）。
+
+### 12.4 上限来自客户端表
+
+`Friend.isFriendListFull()` / `isTakeMaterialsFull()` 读的是
+
+```
+table_player_level_function[玩家等级].friend_limit        // 1 级 18，每 10 级 +2，120 级 42
+table_player_level_function[玩家等级].take_materials_limit // 1 级 4， 每 10 级 +1，120 级 16
+```
+
+（抽表：`python script/decompile_table.py tableplayerlevelfunction` ->
+`server/gamesrv/data/table_player_level_function.json`，1~120 级全有。）
+服务端用**同一张表**算上限，界面上「3/18」「4/4」才对得上。
+
+### 12.5 `player.numberId`
+
+`Player.ctor` 读 `data.numberId`，好友那一套全拿它跟 key 两端比
+（`Friend.getFriendNumberId` 甚至会在两边都不等时 `cc.error` 并返回 `undefined`）。
+本服在建号 / 迁移时分配一个稳定号（`store._next_number_id`，100001 起，
+NPC 好友占 900001 起），存在存档里 —— 每次现算的话一重登好友就全对不上了。
+
+### 12.6 错误码
+
+`FRIEND_ERROR_CODE`（`friendconfig.jsc`）把码映射到 `table_dictionary` 的文案，
+回调里是 `FRIEND_ERROR_CODE[code] || data`，所以**回对应的码就行**，文案客户端自己弹：
+
+| 码 | 文案 | 什么时候 |
+| --- | --- | --- |
+| 201 | 参数错误 | `numberId` 缺失 / 自己加自己 |
+| 210 | 伦家已经是你的战友啦~ | 对已经是战友的人再申请 / 再同意 |
+| 211 | 申请重复啦~ | 重复申请 |
+| 212 | 已经送过啦~ | 同一天给同一个人送第二次 |
+| 213 | 已经收过啦~ | 同一份物资收第二次 |
+| 221 | 找不到申请哦~ | 同意/拒绝一条不存在的申请 |
+| 222 | 你确定他在这片大陆上吗~ | 搜不到这个号 |
+| 223 | 找不到这位指挥官哦~ | 操作对象不是好友 / 不在表里 |
+| 231 | 你的萌友达到上限了~ | 我这边好友满了 |
+| 232 | 收取物资次数达到上限了 | 今天收的次数到 `take_materials_limit` |
+| 234 | 你还没收到物资哦~ | 对方没送就点收 |
+
+### 12.7 收物资的奖励形状
+
+`friend.takematerials` 的 `data.reward` 是 **`{itemKey: count}`**（不是数组）：
+客户端 `FriendItem.showTakeMaterialsPanel` 用 `for (key in reward)` 迭代，
+包成 `{key, count, type: REWARD_TYPE.ITEM}` 再 `ccuiManager.popupReward`。
+
+请求体里**只有 `numberId`**，没有任何道具参数 —— 给什么是服务端说了算
+（本服给行动力 `100003` ×2，见 `friends.TAKE_REWARD_*` 两个环境变量）。
+
+### 12.8 红点（`recevieMaterialsTip` / `applicationTip`）
+
+`util/server.jsc` 的 `responseConfig` 里有 `friend` 这一项，响应 `data` 里出现
+`friend` 就会派发给 `Friend.updateByServer(data.friend)`，它只认这两个提示键
+（只看真值、从不置回 false）。所以有可收物资 / 有待处理申请时带上它们是红点的来源。
+
+### 12.9 私服的取舍
+
+原版这些数据在别的玩家身上，单机没有别的玩家，所以：
+好友全是 `table_friend_support_npc` 的 101 个 NPC（numberId = 900001 + 表内下标），
+建号第一次送 5 个好友 + 2 条待处理申请，申请出去 60 秒后 NPC 自动同意，
+换日（`quests.RESET_HOUR` = 05:00）清空四个物资位并让 2 个好友重新送物资。
+细节和"哪些是猜的"见 `docs/differences.md` §B/§D。
+
+链路验证：`python script/selftest_game.py --only 好友`（形状 / 上限 / 申请自动同意 /
+送物资 + 日常 18201 / 收物资进背包 / 重复与上限 / 同意拒绝删除 / 换日，收尾还原）。
+

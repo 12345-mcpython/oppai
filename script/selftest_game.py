@@ -1760,11 +1760,20 @@ def quest_check(ok: bool) -> bool:
                         bad.append(f"{k}「完成所有日常」tar={tar}，该档有 {len(same_band)} 条"
                                    f"（应该 = 档内条数-1，这条不变式是分档设计的判据）")
             print(f"       日常档：lv={band}，{len(same_band)} 条")
-            # 进度：把档里第一条 12204（通关任意关卡 N 次）的计数器灌满
+            # 进度：把档里第一条 12204（通关任意关卡 N 次）的计数器灌满。
+            # ⚠️ 要挑一条**今天还没领过**的：玩家自己玩的时候会真去领日常，
+            # 领过的条目服务端回 state=4（已领），拿它验「计数满了 -> 3」必然失败。
+            claimed = set(quests.done_of(player, quests.TYPE_DAILY))
             target = next((k for k in same_band
-                           if str((quests.table().get(k) or {}).get("ct")) == "12204"), None)
+                           if str((quests.table().get(k) or {}).get("ct")) == "12204"
+                           and k not in claimed), None)
             if target is None:
-                bad.append("这一档里没有 12204（通关任意关卡）那条，没法验进度")
+                cands = [k for k in same_band
+                         if str((quests.table().get(k) or {}).get("ct")) == "12204"]
+                if cands:
+                    print(f"       （这一档的 12204 日常今天已经领过了：{cands[:2]}，跳过进度/领奖验证）")
+                else:
+                    bad.append("这一档里没有 12204（通关任意关卡）那条，没法验进度")
             else:
                 tar = int((quests.table()[target].get("tar") or [0])[0])
                 p = store.get_or_create_player(config.DEFAULT_ACCOUNT)
@@ -1857,6 +1866,405 @@ def quest_check(ok: bool) -> bool:
     return ok
 
 
+def friend_check(ok: bool) -> bool:
+    """好友系统：契约形状 / 上限 / 申请→同意 / 送收物资 / 删除 / 换日 / 错误码。
+
+    客户端契约（全部来自 `src/data/friend.jsc` 的反汇编，错一条界面对不上）：
+
+    * 登录块 `data.friend` = `{friendMapList, recommendationList, takeMaterialsCount}`
+      —— `Friend.update(data)` 读的就是这三个键。
+    * `friendMapList` 是 **map**，key = `"<我的numberId>#<对方numberId>"`；每条必须带
+      `player`（`FriendItem._updateInfo(this._info.player)`，undefined 就 TypeError）。
+    * `recommendationList` 的条目是**平铺**的（`_updateInfo(this._info)`，
+      `lastLoginTimeSec` 也在顶层，客户端按它排序）。
+    * `data.player.numberId` 必须有值：`Friend.getFriendNumberId` / `isBeApplyFor` /
+      `isGetMaterials` 全拿它跟 key 两端比，没有它按钮状态全错。
+    * 上限来自客户端表 `table_player_level_function[lv]` 的 `friend_limit` /
+      `take_materials_limit`（界面上「3/18」「4/4」就是它）。
+    * `getfriendlist` 的三个键必须在 **data 顶层**（回调是 `this.update(res.data)`）。
+    * `takematerials` 的 `data.reward` 是 **`{itemKey: count}`**（不是数组）。
+    * 错误码走 `FRIEND_ERROR_CODE` 映射到 `table_dictionary` 文案：210 已是战友 /
+      211 申请重复 / 212 已经送过 / 213 已经收过 / 221 找不到申请 / 222 搜索不到 /
+      223 找不到这位指挥官 / 232 收取次数达上限 / 234 还没收到物资。
+
+    ⚠️ 会真改好友状态（申请/送收/删除）和背包，最后整块还原。
+    """
+    from gamesrv import config, friends, items, quests, store
+
+    account = config.DEFAULT_ACCOUNT
+    player = store.get_or_create_player(account)
+    before_friend = json.loads(json.dumps(player.get("friend") or {}))
+    before_items = dict(items.items_of(player))
+    before_stats = json.loads(json.dumps(player.get("questStats") or {}))
+    bad = []
+
+    def save(**fields):
+        p = store.get_or_create_player(account)
+        p.update(fields)
+        store.save_player(p)
+        return p
+
+    def other_of(key):
+        """记录 key -> 对方的 numberId（自己永远在 `#` 前面）。"""
+        parts = str(key).split("#")
+        return int(parts[1]) if parts[0] == str(me) else int(parts[0])
+
+    try:
+        # ---- A. 登录块形状 ----
+        login = call("agent.getlogindata", {}, 200)
+        data = login.get("data") or {}
+        me = int((data.get("player") or {}).get("numberId") or 0)
+        if not me:
+            bad.append("data.player.numberId 是空的（好友记录 key 的一端就是它）")
+        blk = data.get("friend") or {}
+        for key in ("friendMapList", "recommendationList", "takeMaterialsCount"):
+            if key not in blk:
+                bad.append(f"登录块 data.friend 缺 {key}（Friend.update 读它）")
+        fmap = blk.get("friendMapList")
+        if not isinstance(fmap, dict):
+            bad.append(f"friendMapList 是 {type(fmap).__name__}，客户端要 map、"
+                       f"key 是 '<我的numberId>#<对方numberId>'")
+            fmap = {}
+        if not fmap:
+            bad.append("登录块里一个好友/申请都没有（friends.ensure 没跑？）")
+        for key, entry in list(fmap.items())[:40]:
+            if not isinstance(entry, dict):
+                bad.append(f"{key}: 不是对象")
+                continue
+            if "#" not in key or str(me) not in key.split("#"):
+                bad.append(f"{key}: key 里没有我的 numberId（{me}）")
+            if not isinstance(entry.get("player"), dict):
+                bad.append(f"{key}: 缺 player 子块（FriendItem._updateInfo 会 TypeError）")
+            else:
+                for field in ("numberId", "name", "lv", "lastLoginTimeSec"):
+                    if field not in entry["player"]:
+                        bad.append(f"{key}: player 缺 {field}")
+            if str(entry.get("status") or 0) == "0":
+                bad.append(f"{key}: status 是 0（既不是好友也不是申请）")
+        friends_n = sum(1 for e in fmap.values()
+                        if friends.is_friend(int(e.get("status") or 0))) if fmap else 0
+        applies_n = sum(1 for e in fmap.values()
+                        if friends.is_be_apply_for(int(e.get("status") or 0))) if fmap else 0
+        print(f"       登录块：好友 {friends_n} 个、待处理申请 {applies_n} 条、"
+              f"今日收取 {blk.get('takeMaterialsCount')} 次")
+
+        # ---- B. 上限要和客户端表一致 ----
+        row = (friends.items.table("table_player_level_function")
+               .get(str(int(player.get("lv") or 1))) or {})
+        if int(row.get("friend_limit") or 0) != friends.friend_limit(player):
+            bad.append(f"friend_limit 用的是 {friends.friend_limit(player)}，"
+                       f"客户端表里是 {row.get('friend_limit')}")
+        if int(row.get("take_materials_limit") or 0) != friends.take_materials_limit(player):
+            bad.append(f"take_materials_limit 用的是 {friends.take_materials_limit(player)}，"
+                       f"客户端表里是 {row.get('take_materials_limit')}")
+        print(f"       上限（lv={player.get('lv')}）：好友 {friends.friend_limit(player)}、"
+              f"收取 {friends.take_materials_limit(player)}（和客户端表一致）")
+
+        # ---- C. getfriendlist：三个键必须在 data 顶层 ----
+        r = call("friend.getfriendlist", {}, 201)
+        d = r.get("data") or {}
+        if r.get("code") != 200:
+            bad.append(f"friend.getfriendlist code={r.get('code')}")
+        if not isinstance(d.get("friendMapList"), dict):
+            bad.append("getfriendlist 的 data.friendMapList 不是 map（回调 this.update(res.data) "
+                       "读的就是它，套一层 friend 的话好友列表永远是空的）")
+        if not isinstance(d.get("recommendationList"), list):
+            bad.append("getfriendlist 的 data.recommendationList 不是数组")
+        if "takeMaterialsCount" not in d:
+            bad.append("getfriendlist 没回 takeMaterialsCount")
+
+        # ---- D. 推荐列表：条目平铺（没有 player 外层）----
+        rec = (call("friend.getrecommendationlist", {}, 202).get("data") or {})
+        rec_list = rec.get("recommendationList")
+        if not isinstance(rec_list, list) or not rec_list:
+            bad.append(f"推荐列表是 {rec_list!r}（NPC 表有 101 行，不该是空的）")
+            rec_list = []
+        for one in rec_list[:5]:
+            if not isinstance(one, dict) or "numberId" not in one or "lastLoginTimeSec" not in one:
+                bad.append(f"推荐条目形状不对：{str(one)[:80]}（客户端要在顶层读 "
+                           f"numberId / lastLoginTimeSec）")
+                break
+            if "player" in one:
+                bad.append(f"推荐条目多了 player 外层：{str(one)[:60]}")
+                break
+        print(f"       推荐列表 {len(rec_list)} 条（平铺，numberId/lastLoginTimeSec 在顶层）")
+
+        # 拿一个「不在我列表里」的 NPC 做搜索/申请
+        busy = {str(k).split("#")[0] for k in fmap} | {str(k).split("#")[-1] for k in fmap}
+        cand = next((int(o["numberId"]) for o in rec_list if str(o["numberId"]) not in busy), None)
+        if cand is None:
+            cand = int(rec_list[0]["numberId"]) if rec_list else 0
+
+        # ---- E. searchplayer ----
+        if cand:
+            s = call("friend.searchplayer", {"numberId": cand}, 203)
+            info = (s.get("data") or {}).get("playerInfo") or {}
+            if s.get("code") != 200:
+                bad.append(f"搜索 NPC {cand} code={s.get('code')}（应该 200）")
+            elif not all(k in info for k in ("numberId", "name", "lv", "headId", "lastLoginTimeSec")):
+                bad.append(f"playerInfo 字段不全：{info}")
+            else:
+                print(f"       搜索 {cand} -> {info['name']}（lv{info['lv']}，头像 {info['headId']}）")
+        s404 = call("friend.searchplayer", {"numberId": 123456789}, 204)
+        if s404.get("code") != 222:
+            bad.append(f"搜一个不存在的号 code={s404.get('code')}，应该是 222"
+                       f"（客户端弹 table_dictionary[1406]「你确定他在这片大陆上吗~」）")
+
+        # ---- F. 申请 -> 重复申请 211 -> 到点自动同意 ----
+        if cand:
+            a = call("friend.applyfor", {"numberId": cand}, 205)
+            entry = (a.get("data") or {}).get("friendMap") or {}
+            if a.get("code") != 200:
+                bad.append(f"申请 NPC {cand} code={a.get('code')}")
+            elif not (int(entry.get("status") or 0) & friends.A_APPLY_FOR_B):
+                bad.append(f"申请后 status={entry.get('status')} 没有 A_APPLY_FOR_B 位")
+            elif not isinstance(entry.get("player"), dict):
+                bad.append("申请回包的 friendMap 缺 player（这条会当场画到列表里）")
+            else:
+                print(f"       申请 {cand} -> status={entry['status']}（A_APPLY_FOR_B）")
+            again = call("friend.applyfor", {"numberId": cand}, 206)
+            if again.get("code") != 211:
+                bad.append(f"重复申请 code={again.get('code')}，应该是 211")
+            # 把申请时间往前拨，模拟 NPC 到点同意
+            p = store.get_or_create_player(account)
+            key = friends.key_of(me, cand)
+            st = (p.get("friend") or {}).get("map") or {}
+            if key in st:
+                st[key]["updateTimeSec"] = int(st[key].get("updateTimeSec") or 0) - \
+                    (friends.ACCEPT_DELAY_SEC + 10)
+                store.save_player(p)
+                call("friend.getfriendlist", {}, 207)
+                p2 = store.get_or_create_player(account)
+                st2 = ((p2.get("friend") or {}).get("map") or {}).get(key) or {}
+                if not friends.is_friend(int(st2.get("status") or 0)):
+                    bad.append(f"申请 {friends.ACCEPT_DELAY_SEC}s 后 NPC 没同意：status={st2.get('status')}")
+                else:
+                    print(f"       申请 {cand} 过了 {friends.ACCEPT_DELAY_SEC}s -> 自动变成战友"
+                          f"（status={st2.get('status')}）")
+
+        # ---- G. 送物资 + 日常任务 18201 ----
+        friend_keys = [k for k, e in fmap.items()
+                       if friends.is_friend(int(e.get("status") or 0))] if fmap else []
+        if not friend_keys:
+            bad.append("一个好友都没有，送/收物资没法验")
+        else:
+            target = other_of(friend_keys[0])
+            before_sends = int((store.get_or_create_player(account).get("questStats") or {})
+                               .get("friendSends") or 0)
+            s = call("friend.sendmaterials", {"numberId": target}, 208)
+            sent = (s.get("data") or {}).get("friendMap") or {}
+            if s.get("code") != 200:
+                bad.append(f"送物资 code={s.get('code')}")
+            elif not (int(sent.get("status") or 0) & friends.A_SEND_MATERIALS_B):
+                bad.append(f"送完 status={sent.get('status')} 没有 A_SEND_MATERIALS_B 位")
+            else:
+                print(f"       送物资给 {target} -> status={sent['status']}（A_SEND_MATERIALS_B）")
+            again = call("friend.sendmaterials", {"numberId": target}, 209)
+            if again.get("code") != 212:
+                bad.append(f"同一天送第二次 code={again.get('code')}，应该是 212")
+            after_sends = int((store.get_or_create_player(account).get("questStats") or {})
+                              .get("friendSends") or 0)
+            if after_sends != before_sends + 1:
+                bad.append(f"日常 18201 的计数没涨：{before_sends} -> {after_sends}"
+                           f"（quests.on_friend_send 没被调用）")
+            else:
+                # 等级这一档里 ct=18201 的那条日常应当当场达成
+                qmap = ((s.get("data") or {}).get("quest") or {}).get("quests") or {}
+                band_keys = [k for k, r in quests.table().items()
+                             if str(r.get("type")) == "1" and str(r.get("ct")) == "18201"
+                             and int(r.get("lv") or 0) <= int(player.get("lv") or 0)]
+                achieved = [k for k in band_keys if str((qmap.get(k) or {}).get("state")) in ("3", "4")]
+                if not achieved:
+                    bad.append(f"送完物资后日常 18201 没达成（该档候选 {band_keys[:2]}，"
+                               f"回包 quest 里有 {len(qmap)} 条）")
+                else:
+                    print(f"       日常 18201（给好友送物资）{achieved[0]} "
+                          f"state={(qmap.get(achieved[0]) or {}).get('state')} ✓")
+
+        # ---- H. 收物资：reward 形状 / 背包 / 计数 / 重复 213 / 上限 232 ----
+        if friend_keys:
+            key = [k for k in friend_keys][0]
+            other = other_of(key)
+            p = store.get_or_create_player(account)
+            st = (p.get("friend") or {}).get("map") or {}
+            st[friends.key_of(me, other)] = {
+                "status": friends.BE_FRIEND | friends.B_SEND_MATERIALS_A,
+                "updateTimeSec": 0,
+            }
+            # 收取次数先清 0，免得撞上限
+            p.setdefault("friend", {})["takeCount"] = 0
+            store.save_player(p)
+            before_item = int(items.items_of(store.get_or_create_player(account))
+                              .get(str(friends.TAKE_REWARD_KEY)) or 0)
+            before_take = int((store.get_or_create_player(account).get("friend") or {})
+                              .get("takeCount") or 0)
+            t = call("friend.takematerials", {"numberId": other}, 210)
+            td = t.get("data") or {}
+            reward = td.get("reward")
+            if t.get("code") != 200:
+                bad.append(f"收物资 code={t.get('code')}")
+            elif not isinstance(reward, dict) or not reward:
+                bad.append(f"reward 是 {reward!r}（客户端 showTakeMaterialsPanel 要 "
+                           f"{{itemKey: count}} 然后 for-in）")
+            else:
+                got = {str(k): int(v) for k, v in reward.items()}
+                after_item = int(items.items_of(store.get_or_create_player(account))
+                                 .get(str(friends.TAKE_REWARD_KEY)) or 0)
+                gain = sum(got.values()) if str(friends.TAKE_REWARD_KEY) in got else 0
+                if gain and after_item < before_item + 1:
+                    bad.append(f"收取回包给了 {got}，但背包没涨（{before_item} -> {after_item}）")
+                if int(td.get("takeMaterialsCount") or 0) != before_take + 1:
+                    bad.append(f"takeMaterialsCount={td.get('takeMaterialsCount')}，"
+                               f"应该是 {before_take + 1}")
+                taken = td.get("friendMap") or {}
+                if not (int(taken.get("status") or 0) & friends.A_TAKE_MATERIALS_B):
+                    bad.append(f"收完 status={taken.get('status')} 没有 A_TAKE_MATERIALS_B 位")
+                print(f"       收物资 -> reward={got}，背包 {before_item} -> {after_item}，"
+                      f"今日第 {td.get('takeMaterialsCount')} 次")
+            twice = call("friend.takematerials", {"numberId": other}, 211)
+            if twice.get("code") != 213:
+                bad.append(f"同一份再收一次 code={twice.get('code')}，应该是 213（已经收过啦）")
+            # 上限：把 takeCount 顶到表里的值
+            p = store.get_or_create_player(account)
+            st = (p.get("friend") or {}).get("map") or {}
+            st[friends.key_of(me, other)] = {
+                "status": friends.BE_FRIEND | friends.B_SEND_MATERIALS_A,
+                "updateTimeSec": 0,
+            }
+            p.setdefault("friend", {})["takeCount"] = friends.take_materials_limit(p)
+            store.save_player(p)
+            full = call("friend.takematerials", {"numberId": other}, 212)
+            if full.get("code") != 232:
+                bad.append(f"收取次数到上限 code={full.get('code')}，应该是 232")
+
+        # ---- I. 同意 / 拒绝申请 ----
+        p = store.get_or_create_player(account)
+        st = p.setdefault("friend", {}).setdefault("map", {})
+        other = next((other_of(k) for k in st
+                      if friends.is_be_apply_for(int(st[k].get("status") or 0))), 0)
+        if not other:
+            # 没有待处理申请就自己造一条
+            ids = [i for i, _k, _r, _h in friends.npc_rows() if friends.key_of(me, i) not in st]
+            if ids:
+                other = ids[0]
+                st[friends.key_of(me, other)] = {"status": friends.B_APPLY_FOR_A, "updateTimeSec": 0}
+                store.save_player(p)
+        if other:
+            ag = call("friend.agreeapplication", {"numberId": other}, 213)
+            aentry = (ag.get("data") or {}).get("friendMap") or {}
+            if ag.get("code") != 200 or not friends.is_friend(int(aentry.get("status") or 0)):
+                bad.append(f"同意申请 code={ag.get('code')} status={aentry.get('status')}")
+            elif int(aentry.get("status") or 0) & friends.APPLY_BITS:
+                bad.append(f"同意之后申请位没清：status={aentry.get('status')}")
+            else:
+                print(f"       同意 {other} 的申请 -> status={aentry['status']}（BE_FRIEND，申请位已清）")
+            no_apply = call("friend.agreeapplication", {"numberId": other}, 214)
+            if no_apply.get("code") != 221:
+                bad.append(f"同意一个没有申请的 code={no_apply.get('code')}，应该是 221")
+            # 再造一条拒绝
+            p = store.get_or_create_player(account)
+            st = p.setdefault("friend", {}).setdefault("map", {})
+            ids = [i for i, _k, _r, _h in friends.npc_rows() if friends.key_of(me, i) not in st]
+            if ids:
+                other2 = ids[0]
+                st[friends.key_of(me, other2)] = {"status": friends.B_APPLY_FOR_A, "updateTimeSec": 0}
+                store.save_player(p)
+                rf = call("friend.refuseapplication", {"numberId": other2}, 215)
+                rentry = (rf.get("data") or {}).get("friendMap") or {}
+                rstatus = int(rentry.get("status") or 0)
+                if rf.get("code") != 200 or (rstatus & friends.APPLY_BITS):
+                    bad.append(f"拒绝后 status={rstatus}（申请位必须清掉，客户端申请页签"
+                               f"只看 isBeApplyFor）")
+                elif not (rstatus & friends.DELETE):
+                    bad.append(f"拒绝后 status={rstatus} 没有 DELETE 位")
+                else:
+                    print(f"       拒绝 {other2} -> status={rstatus}（DELETE，申请位已清）")
+                after = ((call("friend.getfriendlist", {}, 216).get("data") or {})
+                         .get("recommendationList") or [])
+                if str(other2) not in {str(o.get("numberId")) for o in after}:
+                    bad.append(f"拒绝掉的 {other2} 没回到推荐列表（客户端就再也加不回来了）")
+
+        # ---- J. 删好友 -> 回到推荐列表 ----
+        p = store.get_or_create_player(account)
+        st = p.setdefault("friend", {}).setdefault("map", {})
+        victim = next((other_of(k) for k in st
+                       if friends.is_friend(int(st[k].get("status") or 0))), 0)
+        if not victim:
+            bad.append("没有好友可删")
+        else:
+            dl = call("friend.deletefriend", {"numberId": victim}, 217)
+            dentry = (dl.get("data") or {}).get("friendMap") or {}
+            if dl.get("code") != 200 or not (int(dentry.get("status") or 0) & friends.DELETE):
+                bad.append(f"删好友 code={dl.get('code')} status={dentry.get('status')}")
+            else:
+                ls = (call("friend.getfriendlist", {}, 218).get("data") or {}).get("friendMapList") or {}
+                if friends.key_of(me, victim) in ls:
+                    bad.append(f"删掉的好友 {victim} 还在 friendMapList 里")
+                rec2 = ((call("friend.getrecommendationlist", {}, 219).get("data") or {})
+                        .get("recommendationList") or [])
+                if str(victim) not in {str(o.get("numberId")) for o in rec2}:
+                    bad.append(f"删掉的 {victim} 没回到推荐列表")
+                else:
+                    print(f"       删除 {victim} -> 从好友列表消失、回到推荐列表")
+
+        # ---- J2. 对已经是好友的人申请 -> 210 ----
+        p = store.get_or_create_player(account)
+        st = p.setdefault("friend", {}).setdefault("map", {})
+        is_f = next((other_of(k) for k in st
+                     if friends.is_friend(int(st[k].get("status") or 0))), 0)
+        if is_f:
+            dup = call("friend.applyfor", {"numberId": is_f}, 220)
+            if dup.get("code") != 210:
+                bad.append(f"对已经是战友的人再申请 code={dup.get('code')}，应该是 210")
+
+        # ---- K. 换日：物资位清零 + 收取次数归零 ----
+        p = store.get_or_create_player(account)
+        fstate = p.setdefault("friend", {})
+        fstate["day"] = "2000-01-01"
+        fstate["takeCount"] = 99
+        for e in (fstate.get("map") or {}).values():
+            if isinstance(e, dict):
+                e["status"] = int(e.get("status") or 0) | friends.MATERIAL_BITS
+        store.save_player(p)
+        call("friend.getfriendlist", {}, 221)
+        p2 = store.get_or_create_player(account)
+        f2 = p2.get("friend") or {}
+        leftover = [k for k, e in (f2.get("map") or {}).items()
+                    if isinstance(e, dict) and (int(e.get("status") or 0) & friends.A_TAKE_MATERIALS_B
+                                                or int(e.get("status") or 0) & friends.A_SEND_MATERIALS_B)]
+        if int(f2.get("takeCount") or 0) != 0:
+            bad.append(f"换日后 takeMaterialsCount={f2.get('takeCount')}，应该是 0")
+        if leftover:
+            bad.append(f"换日后还有 {len(leftover)} 条带着「已送/已收」位：{leftover[:2]}")
+        if f2.get("day") != quests.day_str():
+            bad.append(f"换日后 day={f2.get('day')!r}，应该是 {quests.day_str()!r}")
+        if not bad:
+            sent_again = sum(1 for e in (f2.get("map") or {}).values()
+                             if isinstance(e, dict)
+                             and int(e.get("status") or 0) & friends.B_SEND_MATERIALS_A)
+            print(f"       换日：物资位清零、收取次数归零、{sent_again} 个好友重新送了物资")
+    finally:
+        p = store.get_or_create_player(account)
+        p["friend"] = before_friend
+        p["questStats"] = before_stats
+        got = items.items_of(p)
+        for k in [k for k in got if k not in before_items]:
+            del got[k]
+        for k, v in before_items.items():
+            got[k] = v
+        store.save_player(p)
+
+    if bad:
+        for one in bad[:12]:
+            print(f"  BAD {one}")
+        return False
+    print("  OK  好友：登录块形状（friendMapList 是 map、每条带 player）、numberId 齐、"
+          "上限=客户端表、推荐条目平铺、搜索/申请/重复申请/自动同意、送物资+日常 18201、"
+          "收物资 reward 是 {key:count} 且进背包、重复收取/次数上限、同意/拒绝/删除、"
+          "换日清物资位（收尾已还原）")
+    return ok
+
+
 def run_check(ok: bool, name: str, fn) -> bool:
     """跑一项检查：支持 --only 过滤 + 打印用时（自检太慢，得知道时间花在哪）。"""
     if ONLY and ONLY not in name:
@@ -1943,6 +2351,8 @@ def main():
     ok = run_check(ok, "签到自检异常", sign_check)
 
     ok = run_check(ok, "任务自检异常", quest_check)
+
+    ok = run_check(ok, "好友自检异常", friend_check)
 
     ok = run_check(ok, "功能开启弹窗自检异常", module_open_check)
 

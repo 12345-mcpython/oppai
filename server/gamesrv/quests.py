@@ -363,7 +363,7 @@ def _stats(player: dict) -> dict:
     st.setdefault("detects", 0)              # 任务派遣完成次数        ct 16202
     st.setdefault("soldierSells", 0)         # 军士退伍（分解）个数    ct 13201
     st.setdefault("itemGained", {})          # itemKey -> 累计获得     ct 11201
-    st.setdefault("friendSends", 0)          # 给好友送物资次数        ct 18201（好友系统未实现，恒 0）
+    st.setdefault("friendSends", 0)          # 给好友送物资次数        ct 18201（friends.send_materials）
     return st
 
 
@@ -464,7 +464,7 @@ def progress_of(player: dict, key: str) -> int:
         return int(st.get("arenaFights") or 0)
     if ct == "16202":        # 完成任务派遣 N 次
         return int(st.get("detects") or 0)
-    if ct == "18201":        # 给基友发送物资 N 次（好友系统还没做）
+    if ct == "18201":        # 给基友发送物资 N 次（好友系统：friends.send_materials）
         return int(st.get("friendSends") or 0)
     if ct == "19201":        # 完成所有日常：今天在本档里已领的条数（不含自己）
         daily_done = set(_record(player)["daily"]["done"])
@@ -591,6 +591,16 @@ def on_detect_complete(player: dict) -> None:
 def on_soldier_sell(player: dict, count: int = 1) -> None:
     """军士退伍 / 分解（char.sellsoldiers，成就 13201）。"""
     _bump(player, "soldierSells", max(0, int(count)))
+    _touch(player)
+
+
+def on_friend_send(player: dict, count: int = 1) -> None:
+    """给好友送物资（日常 18201「给基友发送物资 N 次」）。
+
+    由 `friends.send_materials()` 调。每送一个好友算一次，和客户端
+    `table_quest` 里那批 `ct=18201`、`tar=[1]` 的日常对得上（送一次就能领）。
+    """
+    _bump(player, "friendSends", max(1, int(count)))
     _touch(player)
 
 

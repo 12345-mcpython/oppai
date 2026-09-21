@@ -48,6 +48,7 @@ def load_all():
     from . import exchange  # noqa: F401
     from . import favor  # noqa: F401
     from . import favorevent  # noqa: F401
+    from . import friend  # noqa: F401
     from . import friendsupport  # noqa: F401
     from . import gacha  # noqa: F401
     from . import instance  # noqa: F401
