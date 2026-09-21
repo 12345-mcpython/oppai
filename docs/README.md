@@ -21,6 +21,7 @@
 |---|---|---|
 | 从零复刻操作手册 | [`../REPRODUCE.md`](../REPRODUCE.md) | 环境、要自备的外部资源、逐步操作 + 每步验证点 |
 | 脚本索引 | [`../script/README.md`](../script/README.md) | 六类脚本每个一句话 + 加新玩法模块的流程 + `out/` 哪些能删 |
+| **arm64 引擎怎么编** | [`../engine/ARM64.md`](../engine/ARM64.md) | 依赖从哪来、四个坑、怎么验证 |
 | 引擎移植过程 | [`../engine/README.md`](../engine/README.md) | 版本确认、里程碑、踩过的坑 |
 | 引擎补丁清单 | [`../engine/ENGINE_PATCHES.md`](../engine/ENGINE_PATCHES.md) | 16 个补丁的证据链与复现脚本 |
 

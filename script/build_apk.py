@@ -956,11 +956,13 @@ def select_lib_abis(want) -> None:
     if miss:
         hint = f"   要自己编：.\\build.ps1 -Engine -Abi {' '.join(miss)}"
         if "arm64-v8a" in miss:
+            # ⚠️ 这条提示原来写的是「arm64-v8a 现在编不了」—— 2026-09-20 已经能编了
+            #    （依赖由 script\build_arm64_deps.py 凑齐）。别再把它写回去。
             hint += (
-                "\n   ⚠️ 但 **arm64-v8a 现在编不了**：进 engine 的第三方预编译库"
-                "（chipmunk/curl/freetype2/jpeg/lua/png/tiff/webp/websockets/zlib）和"
-                "SpiderMonkey 的 libjs_static.a 都只有 armeabi / armeabi-v7a / x86 三套，"
-                "得先把这些依赖交叉编译出 arm64 版本（见 server\\docs\\build.md 的「ABI」节）")
+                "\n   ℹ️ arm64-v8a 要**先备依赖**：python script\\build_arm64_deps.py"
+                "（cocos 官方那套预编译库只有 armeabi / armeabi-v7a / x86，"
+                "arm64 是仓库脚本自己凑的：自编 chipmunk 6.2.1 / libwebsockets 1.23 + 按 ABI 分头文件），"
+                "然后再 -Engine -Abi arm64-v8a。详见 engine\\ARM64.md")
         raise SystemExit(
             f"!! 要的 ABI 在 game/lib 和 {os.path.relpath(LIB_ABI_CACHE)} 里都没有：{miss}\n"
             f"   现有：{sorted(set(in_tree) | set(in_cache))}\n{hint}")

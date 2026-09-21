@@ -17,7 +17,7 @@
 | `build_apk.py` | 打包 APK 全套：从原版包恢复带地址的文件 → 改 assets → 写 `patch.js`/`probe.js` → **规范化清单**（targetSdk 33 / exported / 明文 HTTP / 缺 `<uses-sdk>` 就补）→ 删死代码与 SDK 资源 → apktool 完整打包 → zipalign → 签名。`--no-probe` 出正式包，`--abis` 只带指定 ABI。**幂等**，可以反复跑 |
 | `serve.py` | 服务端守护：`run.py` 挂了自动拉起。**推荐用这个起服务端**，别用 `Start-Process python run.py`（会被回收） |
 | `merge_dex.py` | 把 apktool 拆出来的 `smali_classesN` 合并进 `smali/`（合成单个 dex）。⚠️ 必须在 `build_apk.py` **之前**跑 —— `DROP_SMALI` 里的路径都是按合并后写的 |
-| `build_arm64_deps.py` | 备齐 arm64-v8a 的引擎依赖（预编译库 + 自建 chipmunk 6.2.1 / libwebsockets 1.23 + 按 ABI 分的 SM/curl/**jpeg** 头文件）。`--check` 只报告。详见 [`../docs/build.md`](../docs/build.md) §ABI |
+| `build_arm64_deps.py` | 备齐 arm64-v8a 的引擎依赖（预编译库 + 自建 chipmunk 6.2.1 / libwebsockets 1.23 + 按 ABI 分的 SM/curl/**jpeg** 头文件）。`--check` 只报告。详见 [`../engine/ARM64.md`](../engine/ARM64.md) |
 | `patch_js_debugger.py` | 把调试器自己的 JS（`assets/script/jsb_debugger.js` + `assets/script/debugger/**`，**注意是游戏 assets 里的 `script/`，不是本目录**）换成**明文并打补丁**，并删掉同名 `.jsc`（`.jsc` 是缓存，删掉引擎才改读 `.js`）—— 不用重编引擎就能改调试器 |
 | `sdk_strip/` | 删掉没用到的第三方 SDK：扫引用 → 生成桩类 → 删 smali → 清 manifest / assets / lib。细目见 §5 |
 

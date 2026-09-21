@@ -234,6 +234,7 @@ python script\serve.py           # 守护进程，run.py 挂了自动拉起（�
 | [`docs/engine-debug.md`](docs/engine-debug.md) | 引擎层调试：自带远程 JS 调试器怎么打开、协议、4 个坑 |
 | [`docs/build.md`](docs/build.md) | 打包逻辑（为什么这么做）、ABI、完整重建命令 |
 | [`engine/ENGINE_PATCHES.md`](engine/ENGINE_PATCHES.md) | 16 个引擎补丁的证据链与复现脚本 |
+| [`engine/ARM64.md`](engine/ARM64.md) | ★ **arm64 引擎怎么编**：依赖从哪来、四个坑（含 jpeg 变黑那个）、验证方法 |
 | [`engine/README.md`](engine/README.md) | 引擎移植过程、版本确认、踩过的坑 |
 | [`script/README.md`](script/README.md) | 脚本索引 + 加新玩法模块的推荐流程 |
 

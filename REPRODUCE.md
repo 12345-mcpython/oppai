@@ -406,7 +406,7 @@ adb -s <手机序列号> install -r --bypass-low-target-sdk-block out\zcsmw-mod-
 > **`primaryCpuAbi=arm64-v8a`**（原生 64 位，不走厂商 32 位兼容层），MEmu 挑 `x86`。
 > 真机建议：`-PackAbis arm64-v8a -Install -Serial <手机>`（只带 64 位那一份，543 MB）。
 > arm64 依赖怎么凑（chipmunk 6.2.1 / libwebsockets 1.23 / 按 ABI 分头文件）见
-> [`build.md`](docs/build.md) 的「ABI」一节 + `script/build_arm64_deps.py`。
+> [`engine/ARM64.md`](engine/ARM64.md)（依赖怎么凑、四个坑、怎么验证）+ `script/build_arm64_deps.py`。
 
 **实测结论（一加 PLZ110，Android 16 / SDK 36）**：
 
