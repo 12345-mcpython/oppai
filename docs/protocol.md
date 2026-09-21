@@ -3,6 +3,21 @@
 所有结论都来自两种手段：**jsc 反汇编**（`script/jsc_disasm.py`）和
 **运行时观察**（`server/client/hook.js` 的探针日志 / REPL）。
 
+## 本节目录
+
+- [1. 远程配置（CDN）](#1-远程配置cdn)
+- [2. 网关状态](#2-网关状态)
+- [3. 账号 oauth](#3-账号-oauth)
+- [4. WebSocket 登录握手](#4-websocket-登录握手)
+- [5. 业务协议（HTTP POST）](#5-业务协议http-post)
+- [6. `agent.getlogindata`](#6-agentgetlogindata)
+- [7. 切主场景](#7-切主场景)
+- [7.5 新号起名（player.naming）](#75-新号起名playernaming)
+- [8. 客户端内部数据模型（从反汇编读出来的接口）](#8-客户端内部数据模型从反汇编读出来的接口)
+- [9. 任务（quest.*）](#9-任务quest)
+- [10. 关卡 / 副本（instance.*）](#10-关卡--副本instance)
+- [11. 军士养成（char.*）](#11-军士养成char)
+
 ---
 
 ## 1. 远程配置（CDN）

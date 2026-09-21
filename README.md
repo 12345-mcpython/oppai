@@ -160,6 +160,8 @@ python script\serve.py           # 守护进程，run.py 挂了自动拉起（�
 
 ## 脚本速查（`script\`）
 
+只列最常用的；**全量索引**（六类、每个脚本一句话）见 [`script/README.md`](script/README.md)。
+
 **日常**
 
 | 脚本 | 干什么 |

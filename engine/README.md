@@ -1,7 +1,8 @@
 # 引擎复现（移植）工作区
 
-目标：用源代码重建 `libcocos2djs.so`，优先产出 **x86** 版本，摆脱 MuMu 的
-libhoudini ARM 翻译层。
+目标：用源代码重建 `libcocos2djs.so`。**x86** 是第一步（摆脱 MuMu 的 libhoudini ARM 翻译层），
+后来 armeabi / armeabi-v7a / **arm64-v8a** 也都编出来了 —— 四份 ABI 的打包与依赖见
+[`../docs/build.md`](../docs/build.md) 的「ABI」一节。
 
 ---
 
