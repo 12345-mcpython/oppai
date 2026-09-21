@@ -103,9 +103,8 @@
   （`data.rewards.dropReward / firstComplete / appraise / levelReward`），
   但 `instancemanager` 是少数反汇编对不齐的文件，`showCb` 的入参拼不出来，
   所以「`args.result` 是不是 finishlevel 那个 `ret`」还没实机确认（见 `overview.md` §7 待办 2）
-* **助战（好友支援）弹窗渲染不出来** —— 服务端能正确回 20 个 `npcId`，
-  客户端 `FriendSupport._recommendList` 也收到了，但 `SupportChoiceLayer` 不显示。
-  **不影响战斗**（那弹窗是可选的）
+* ~~**助战（好友支援）弹窗渲染不出来**~~ —— **2026-09-21 修好**：回包形状错了
+  （客户端读 `data.recommendList`，我们发的裸数组），见 `protocol.md` §15。
 * **装备星级显示 0 颗** —— 第二属性组的选取规则没还原，`secondAttrKeys` 留空
 * **指挥部（玩家）等级不会升** —— 服务端只累加 `curExp`，没有升级逻辑；
   经验条会涨、等级一直不变

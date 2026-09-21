@@ -432,13 +432,14 @@ vanilla 不传参 → 游戏代码 `function (eventName) { if (/began\d/.test(ev
    少数对不齐的文件，`showCb` 的入参拼不出来）。如果实机面板还是空的，
    下一步就是在 `patch.js` 里包 `instanceManager` 的 `showCb` 入参，把 `ret` 塞进 `args.result`。
 
-2. **助战（好友支援）列表渲染不出来** —— 服务端已经能正确回 NPC 名单
-   （`friendsupport.getrecommendsoldiers` -> 20 个 `npcId`，客户端
-   `FriendSupport._recommendList` 里也确实收到了 20 个），
-   但 `SupportChoiceLayer` 那边渲染不出来。已确认的：
-   `setSupportList()` 手动调是好的（会往 `_pushAsynList` 里塞 18 个
-   `{item, innSize, index}`），所以卡在「层的 `_recommendList` 是 0」。
-   **不影响战斗**（这个弹窗是可选的好友助战）。
+2. ~~**助战（好友支援）列表渲染不出来**~~ —— **2026-09-21 修好了**：根因是回包形状。
+   客户端那条链是 `FriendSupport.getRecommendList/<` 成功回调 `succCb(res.data)`
+   （整个 data），而真正画列表的 `SupportChoiceLayer._init/</` 读的是
+   **`data.recommendList`** —— 我们以前回的是**裸数组**，于是
+   `setSupportList(undefined)` 第一句 `if (!list) return;` 直接退出，
+   症状就是「弹窗打得开、里面一个军士都没有」。
+   现在回 `{recommendList: [...]}`（实机量过：客户端拿到 20 条，第一条 `ai001`）。
+   见 [protocol.md §15](protocol.md) + `handlers/friendsupport.py` 的模块注释。
 3. **其余未实现的 route** —— `python script/route_gap.py --static` 能列出全部。
    当前：客户端静态候选 **161** 条，服务端 **110** 条，缺 **59** 条。按单机价值排：
 

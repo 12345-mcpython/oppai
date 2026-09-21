@@ -20,6 +20,7 @@
 - [12. 好友（friend.*）](#12-好友friend)
 - [13. 勋章 / 头像 / 衣柜（medal.*）](#13-勋章--头像--衣柜medal)
 - [14. 分享 / 礼包兑换（share.* / convert.*）](#14-分享--礼包兑换share--convert)
+- [15. 助战（friendsupport.*）](#15-助战friendsupport)
 
 ---
 
@@ -1739,4 +1740,42 @@ cc.director.getRunningScene().push(new MedalLayer(data), true);   // 整个 data
 
 验证：`python script/selftest_game.py --only 分享`（rewards 是 map、一天一次、换日清零、
 礼包扣道具且 `data` 是数组、没道具不给兑，收尾还原）。
+
+---
+
+## 15. 助战（`friendsupport.*`）
+
+| route | 请求 | 成功 `data` |
+| --- | --- | --- |
+| `friendsupport.getrecommendsoldiers` | `{levelid}` | **`{recommendList: [ … ]}`**（⚠️ 不是裸数组） |
+| `friendsupport.setfriendsupport` | `{soldiers, userecord, …}` | 任意真值（登记出战助战） |
+| `friendsupport.delfriendsupport` | 同上 | 任意真值 |
+
+⚠️⚠️ **`getrecommendsoldiers` 的 `data` 必须是对象、里面放 `recommendList`**：
+
+```js
+// src/data/friendsupport.js
+server.request('friendsupport.getrecommendsoldiers', {levelid}, function (err, res) {
+    this._recommendList = res.data;      // ← 整个 data 存下来
+    succCb && succCb(res.data);          // ← 回调也只传 data 本身
+});
+// src/ui/friendsupport/supportchoicelayer.js
+function (data) { this._initUI(data.recommendList); }        // ← 层读的是 .recommendList
+```
+
+发裸数组的话 `data.recommendList` 是 `undefined` →
+`_initUI(undefined)` → `setSupportList(undefined)` 第一句 `if (!list) return;` 直接退出
+—— 症状就是**弹窗打得开、里面一个军士都没有**（2026-09-21 之前一直是这样；
+`_recommendList = res.data` 那句存的是整个 data，所以查数据类会以为"收到了 20 个"，
+容易被误判成"data 本身就是列表"）。
+
+条目里的字段（`SupportChoiceLayer.setSupportList` 逐个读）：
+
+* `npcId` —— `SupportChoiceItem.createSolider` 拿它查 `table_friend_support_npc`，
+  NPC 的名字/等级/各兵种军士全在客户端表里，服务端**只需要回 id**；
+* `playerId` —— 层拿它查 `friendSupport.userecord`（借出记录，登录块
+  `data.friendsupport.userecord`），没有就按 NPC 分支走。
+
+验证：`python script/selftest_game.py --only 助战`；实机量过客户端拿到
+`count=20 first=ai001/ai001`（在运行中的客户端里直接调 `getRecommendList` 的回调）。
 

@@ -5,8 +5,19 @@
     server.request('friendsupport.getrecommendsoldiers', {levelid: levelId}, function (err, res) {
         if (err || res.code != 200) { failedCb && failedCb(err, res); return; }
         this.clearRecommendList();
-        this._recommendList = res.data;          // ← 整个 data 就是列表（数组）
+        this._recommendList = res.data;          // ← 整个 data 存下来
+        succCb && succCb(res.data);              // ← 回调也只传 data 本身
     });
+
+⚠️⚠️ **回包形状是 `{recommendList: [...]}`，不是裸数组**（2026-09-21 才定位到）：
+
+    SupportChoiceLayer._init/</   →   function (data) { this._initUI(data.recommendList) }
+
+真正画列表的**层**读的是 `data.recommendList`。发裸数组的话它是 undefined →
+`_initUI(undefined)` → `setSupportList(undefined)` 第一句 `if (!list) return;` 直接退出
+—— 症状就是「助战弹窗打得开、里面一个军士都没有」。
+（`_recommendList = res.data` 存的是整个 data，所以查数据类会以为"收到了 20 个"，
+  之前就是被那句带偏、判成「data 本身就是列表」。）
 
 然后 `SupportChoiceLayer.setSupportList(list)` 遍历它，每个元素：
 
@@ -20,7 +31,8 @@
             this.getSoldierInfo(topType, null, item, ...);     // 好友：item.soldiers[]
         }
 
-所以**服务端只需要回 npcId**，NPC 的名字/等级/各兵种军士都是客户端自己表里的。
+所以**服务端只需要回 npcId**（外加 `playerId`：层会拿它查 `userecord`），
+NPC 的名字/等级/各兵种军士都是客户端自己表里的。
 （列表里的 NPC 就是玩家口中的"助战军士"，选一个可以带进关卡。）
 
 抽表见 `tools/extract_client_tables.py` -> `gamesrv/data/table_friend_support_npc.json`。
@@ -82,8 +94,18 @@ def get_recommend_soldiers(session: dict, msg: dict, req_id):
     level_id = (msg or {}).get("levelid")
     items = recommend_list()
     log.info("助战推荐 levelid=%s -> %d 个 NPC", level_id, len(items))
-    # ⚠️ data 本身就是列表，不是 {soldiers:[...]}
-    return {"code": CODE_OK, "msg": "", "data": items}
+    # ⚠️⚠️ **必须是 `{recommendList: [...]}`，不能发裸数组**（2026-09-21 才定位到）。
+    # 反汇编这条链：
+    #
+    #   FriendSupport.getRecommendList/<  成功回调 → succCb(res.data)      // 整个 data
+    #   SupportChoiceLayer._init/</       function (data) { this._initUI(data.recommendList) }
+    #
+    # 也就是**层**（真正画列表的那个）读的是 `data.recommendList`。发裸数组的话
+    # `data.recommendList` 是 undefined → `_initUI(undefined)` → `setSupportList(undefined)`
+    # 里第一句 `if (!list) return;` 直接退出 ⇒ 弹窗能打开、里面**一个军士都没有**。
+    # （`FriendSupport._recommendList = res.data` 那句确实是把整个 data 存下来的，
+    #   所以数据类那边看着"有 20 个"，层这边却是空的 —— 之前就是被这句带偏了。）
+    return {"code": CODE_OK, "msg": "", "data": {"recommendList": items}}
 
 
 @route("friendsupport.setfriendsupport")

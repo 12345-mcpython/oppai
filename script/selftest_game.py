@@ -2724,6 +2724,66 @@ def share_convert_check(ok: bool) -> bool:
     return ok
 
 
+def friendsupport_check(ok: bool) -> bool:
+    """助战（`friendsupport.*` 3 条）：推荐名单的形状 / 登记 / 取消登记。
+
+    ⚠️ **`getrecommendsoldiers` 的 data 必须是 `{recommendList: [...]}`，不能是裸数组**
+    （2026-09-21 定位）：反汇编这条链是
+
+        FriendSupport.getRecommendList/<  成功 → succCb(res.data)        // 整个 data
+        SupportChoiceLayer._init/</       function (data) { this._initUI(data.recommendList) }
+
+    真正画列表的**层**读 `data.recommendList`；发裸数组的话它是 undefined →
+    `setSupportList(undefined)` 第一句 `if (!list) return;` 直接退出 ——
+    症状就是「助战弹窗打得开、里面一个军士都没有」。之前
+    `FriendSupport._recommendList = res.data` 那句把整个 data 存下来，
+    看数据类会以为"收到了 20 个"，所以一直判成"data 本身就是列表"。
+    """
+    from gamesrv import items
+
+    bad = []
+    r = call("friendsupport.getrecommendsoldiers", {"levelid": "101001"}, 330)
+    d = r.get("data")
+    if r.get("code") != 200:
+        bad.append(f"friendsupport.getrecommendsoldiers code={r.get('code')}")
+    if not isinstance(d, dict) or not isinstance(d.get("recommendList"), list):
+        bad.append(f"回包 data 是 {type(d).__name__}，必须是 {{recommendList: [...]}}"
+                   f"（裸数组会让助战弹窗一个军士都画不出来）")
+        items_list = []
+    else:
+        items_list = d["recommendList"]
+    npc = items.table("table_friend_support_npc")
+    if not items_list:
+        bad.append("推荐名单是空的（客户端弹窗会是空的）")
+    for one in items_list[:5]:
+        if not isinstance(one, dict):
+            bad.append(f"条目不是对象：{one!r}")
+            break
+        if "npcId" not in one or "playerId" not in one:
+            bad.append(f"条目缺 npcId/playerId：{sorted(one)[:8]}"
+                       f"（层拿 playerId 查 userecord，SupportChoiceItem 只认 npcId）")
+            break
+        if str(one["npcId"]) not in npc:
+            bad.append(f"npcId={one['npcId']!r} 不在 table_friend_support_npc 里")
+            break
+    if not bad:
+        print(f"       助战推荐：{len(items_list)} 个 NPC（第一条 "
+              f"{items_list[0].get('npcId')}/{items_list[0].get('playerId')}，"
+              f"名字 {items_list[0].get('player_name')}）")
+    for route in ("friendsupport.setfriendsupport", "friendsupport.delfriendsupport"):
+        rr = call(route, {"soldiers": [], "userecord": {}}, 331)
+        if rr.get("code") != 200:
+            bad.append(f"{route} code={rr.get('code')}")
+
+    if bad:
+        for one in bad[:8]:
+            print(f"  BAD {one}")
+        return False
+    print("  OK  助战：推荐名单是 {recommendList:[…]}（不是裸数组）、条目带 npcId/playerId "
+          "且 npcId 在客户端表里、登记/取消登记都回 200")
+    return ok
+
+
 def run_check(ok: bool, name: str, fn) -> bool:
     """跑一项检查：支持 --only 过滤 + 打印用时（自检太慢，得知道时间花在哪）。"""
     if ONLY and ONLY not in name:
@@ -2819,6 +2879,8 @@ def main():
     ok = run_check(ok, "任务自检异常", quest_check)
 
     ok = run_check(ok, "好友自检异常", friend_check)
+
+    ok = run_check(ok, "助战自检异常", friendsupport_check)
 
     ok = run_check(ok, "勋章自检异常", medal_check)
 
