@@ -634,6 +634,10 @@ E:\code\zcsmw\out\
   debug.keystore             签名密钥
 ```
 
+> `out\` 里哪些能删、哪些**千万别删**（`debug.keystore` = 签名密钥、`des_ref.json` =
+> DES 参考向量、`lib-abi-cache\` = 没选中的 ABI）见
+> [`../../script/README.md`](../../script/README.md) 的「附 2」。
+
 ## 解包目录里哪些可以删
 
 ```
