@@ -410,80 +410,36 @@ vanilla 不传参 → 游戏代码 `function (eventName) { if (/began\d/.test(ev
 
 ## 8. 工具与工作流
 
-### 8.1 构建链路（每一步都是幂等的）
+### 8.1 构建链路
 
-```powershell
-cd E:\code\zcsmw
-python server\client\modernize.py            # 【一次性，已跑过】minSdk 21 / 运行时权限；targetSdk 见下
-python script\sdk_strip\strip.py             # 删第三方 SDK + 装桩
-python script\sdk_strip\gen_native_stubs.py  # .so 硬依赖的类
-python server\client\patch_smali.py          # Java 层补丁（⚠️ 必须最后，见 docs/build.md）
-# 引擎：ndk-build（见 E:\code\zcsmw\engine\build\build.ps1）
-python script\build_apk.py [--no-probe]      # 改 assets + apktool 打包 + 对齐 + 签名
-adb install -r -d E:\code\zcsmw\out\zcsmw-mod-signed.apk
-```
+**单一口径在 [`build.md`](build.md) 的「完整重建命令」** —— 六步
+（`modernize` → `sdk_strip/strip` → `gen_native_stubs` → `merge_dex` → `patch_smali` →
+`patch_js_debugger` → `build_apk`），那边逐条写了为什么顺序不能换。
+
+日常改完客户端只跑 `.uild.ps1 -Install` 就够：它内部会自动打 smali 补丁、
+写 `patch.js` / `probe.js`、打包签名。
 
 ### 8.2 调试工作流
 
-**首选浏览器调试台**（服务端自己托管，不用改 APK）：
+**首选浏览器调试台**（服务端自己托管，不用改 APK）：`http://127.0.0.1:18080/devtools`。
+流量（含「客户端调了但服务端没实现」的高亮 + 一键重放）/ JS 控制台 / 存档编辑 + 作弊 /
+客户端日志流 / 表查询 / 引擎调试器。见 [`devtools.md`](devtools.md)。
 
-```
-http://127.0.0.1:18080/devtools
-```
-
-流量（含「客户端调了但服务端没实现」的高亮 + 一键重放）/ JS 控制台 /
-存档编辑 + 作弊 / 客户端日志流 / 表查询，五个面板。见
-[`docs/devtools.md`](devtools.md)。
-
-命令行那套仍然有用（批量、脚本化）：
+命令行那套用于批量和脚本化，最常用的三条：
 
 ```powershell
-# 服务端（用守护脚本，别用 Start-Process 直接拉 run.py，会被回收）
-python script\serve.py
-
-# 在游戏进程里执行任意 JS（前提：probe 版本 + 服务端在跑）
-python script\repl.py "dataManager.player._moduleState ? Object.keys(dataManager.player._moduleState).length : 'none'"
-
-# 抽客户端表。**只补新表时务必加 --only**：每张表都是一次 /control/eval，
-# eval 跑在游戏主线程上、返回值还要 base64+DES 回传，整轮全抽（含 table_soldier /
-# table_equipment 那种几十万字的）会把模拟器压到卡死
-python script\extract_client_tables.py --only favor
-python script\extract_client_tables.py --only char_desc
-
-# 反汇编
-python script\jsc_strings.py  <assets>\src\ui\main\mainlayer.jsc _initModuleButtons
-python script\disasm_func.py  <assets>\src\data\questcenter.jsc _createQuest
-
-# 反查：这个 key / route / 方法名在哪个 .jsc 的哪个函数里用过
-#（.jsc 是二进制，裸 grep 搜不到，必须走原子表）
-python script\jsc_find.py useGiftStatus --func
-python script\jsc_find.py "favor\..*" --regex
-
-# 自测
-python script\selftest_favor.py    # 好感度公式，**不需要模拟器也不需要服务端**
-python script\selftest_game.py     # 走 HTTP 的协议/路由/落盘冒烟（要服务端在跑）
+python script\serve.py                    # 起服务端（守护脚本；别用 Start-Process 直接拉 run.py，会被回收）
+python script\repl.py "..."               # 在游戏进程里执行任意 JS（前提：probe 版 APK + 服务端在跑）
+python script\jsc_find.py useGiftStatus --func    # 这个 key/route/方法名在哪个 .jsc 的哪个函数里用过
 ```
 
-**排障顺序**（按复用性排序）：
+其余（反汇编、抽表、自测、可达性分析…）在 [`../script/README.md`](../script/README.md)
+里按用途列全了；**排查顺序**见 [`../REPRODUCE.md`](../REPRODUCE.md) §5
+（按复用性排序：先看服务端日志和调试台流量，再分层，最后才上引擎级断点）。
 
-1. 先看调试台的**流量**面板 —— 「客户端调了但服务端没实现」会直接标黄，
-   请求 msg 和回包都能看到原文，还能一键重放
-2. 再分清是 Java 层 / 引擎层 / JS 层 —— `dumpsys activity top`、tombstone
-3. 抓 logcat，`OPPAIPATCH|` / `OPPAIHOOK|` 前缀的日志是补丁和探针打的
-   （调试台的**日志**面板就是这条流，不用手动 `adb logcat`）
-4. JS 异常先看 stack；`initUserData` 抛异常会连累一大片（见 [`pitfalls.md`](pitfalls.md)）
-5. 拿不准的数据形状，直接在调试台控制台里试 —— 几秒钟一个
-6. **要看「这个函数被谁调的 / 某个变量到底是多少」**：调试台的**调试器**页签
-   （或 `python script\jsd.py repl`）下断点 —— 那是引擎级的断点，游戏会真的停住，
-   能拿调用栈、能在栈帧里求值。见 [`docs/engine-debug.md`](engine-debug.md)
-7. 实在不行就包一层打日志，别猜
+两个实测技巧 —— 点击/截图类工具靠不住的时候用：
 
-> ⚠️ `adb shell input tap` 在 MuMu 上**不可靠**，注入的事件不一定到得了 App。
-> 别用它判断"点击坏了"。同理 `adb screencap` 有时抓不到 GL 层（截出来一片白），
-> 以用户看到 / 服务端日志为准。
-
-✅ **要验原生弹窗（Java 层 AlertDialog）别靠截图，导 View 层级**——比截图可靠得多，
-GL 层截不到的时候它照样能拿到文字：
+✅ **验原生弹窗（Java 层 AlertDialog）别靠截图，导 View 层级** —— GL 层截不到时它照样能拿到文字：
 
 ```powershell
 adb shell uiautomator dump /sdcard/ui.xml
@@ -492,8 +448,7 @@ adb pull /sdcard/ui.xml
 #   android:id/alertTitle  android:id/message  android:id/button1  android:id/button2
 ```
 
-实测：`screencap` 连抓 4 张全白，同一时刻 `uiautomator` 里弹窗的标题/正文/两个按钮
-原文一个不缺。**判断"弹窗到底显示成什么样"以它为准。**
+实测：`screencap` 连抓 4 张全白，同一时刻 `uiautomator` 里弹窗的标题/正文/两个按钮原文一个不缺。
 
 💡 想触发某个原生弹窗来验，用 `script\repl.py` 调**静态**入口：
 
@@ -501,42 +456,25 @@ adb pull /sdcard/ui.xml
 python script\repl.py "jsb.reflection.callStaticMethod('org/cocos2dx/javascript/QuickAdapter','exit','()V')"
 ```
 
-⚠️ `jsb.reflection.callStaticMethod` **调不到实例方法**，会报
-`CCJavascriptJavaBridge: Failed to find method id of ...`（logcat 里能看到）。
+⚠️ `jsb.reflection.callStaticMethod` **调不到实例方法**（会报
+`CCJavascriptJavaBridge: Failed to find method id of ...`，logcat 里能看到）；
 `AppActivity.exit()` 是实例方法，得走它的静态包装 `QuickAdapter.exit()`。
 
----
-
-## 9. 文档地图
-
-| 文档 | 内容 |
-|---|---|
-| `README.md` | 上手：项目结构、快速开始、补丁清单、协议骨架 |
-| **`../REPRODUCE.md`** | ★ **从零复刻**：环境、要自备的外部资源、逐步操作 + 每步验证点 |
-| **`docs/overview.md`**（本文） | 全景：成果、分层、逆向结论、坑速查、待办 |
-| `docs/devtools.md` | 浏览器调试台：六个面板怎么用、架构取舍、怎么加面板 |
-| `docs/engine-debug.md` | **引擎层调试**：引擎自带的远程 JS 调试器怎么打开、协议、4 个坑、复现清单 |
-| `docs/protocol.md` | 协议逐项细节 + 反汇编证据（含 quest 协议、session 前缀） |
-| **`docs/differences.md`** | ★ **与原版的差异总账**：A 不得不改 / B 私服取舍 / C 还没做 / D **数值是猜的** |
-| `docs/reverse-engineering.md` | jsc 反汇编器原理、运行时探测手法、排障套路 |
-| `docs/build.md` | 打包逻辑（为什么这么做） |
-| `script/README.md` | 工具索引（哪个脚本干什么、加新模块的推荐流程） |
-| `E:\code\zcsmw\engine\ENGINE_PATCHES.md` | 14 个引擎补丁的证据链与复现脚本 |
-
-仓库外的关键路径：
-
-```
-E:\code\zcsmw\game\             apktool 解包目录（smali / assets / lib）
-E:\code\zcsmw\out\              打包中间产物 + zcsmw-mod-signed.apk
-E:\code\zcsmw\game\original\            原版 APK 备份（唯一的一份，别删）
-E:\code\zcsmw\engine\              引擎移植工作区（cocos2d-js 源码 + NDK + 构建脚本）
-E:\code\zcsmw\out\shots\             截图存档
-```
+> ⚠️ `adb shell input tap` 在 MuMu 上**不可靠**（注入的事件不一定到得了 App），
+> `adb screencap` 有时抓不到 GL 层（截出来一片白）。别用它俩下结论 ——
+> 以用户看到 / 服务端日志 / `uiautomator` 为准。
 
 ---
 
-## 10. 免责声明
+## 9. 关键路径
 
-- 本项目**不包含**任何游戏素材、`.jsc` 字节码、反编译产物或 APK。
-- 所有代码均为自行编写，仅通过公开的 SpiderMonkey / cocos2d-x 源码与运行时观察还原协议。
-- 仅供个人学习研究，请勿传播游戏素材或用于商业用途。
+```
+E:\code\zcsmw\game\                  apktool 解包目录（smali / assets / lib）—— 工作副本
+E:\code\zcsmw\game\original\        原版 APK 备份（唯一的一份，别删）
+E:\code\zcsmw\out\                   打包产物 + 缓存（哪些能删见 script/README.md 附 2）
+E:\code\zcsmw\engine\                引擎移植工作区（cocos2d-js 源码 + NDK + 构建脚本）
+E:\code\zcsmw\docs\                  本目录（项目文档）
+```
+
+**文档地图只有一份是全的**：在 [`../README.md`](../README.md) 的「文档地图」一节。
+免责声明也在那里（本项目只包含自己写的代码，不含游戏素材 / `.jsc` 字节码 / 反编译产物 / APK）。
