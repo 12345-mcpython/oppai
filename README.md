@@ -223,6 +223,7 @@ python script\serve.py           # 守护进程，run.py 挂了自动拉起（�
 | 文档 | 内容 |
 |---|---|
 | **[`REPRODUCE.md`](REPRODUCE.md)** | ★ **从零复刻**：环境、外部资源、逐步操作 + 验证点、排查顺序 |
+| [`docs/README.md`](docs/README.md) | 文档目录速览（一屏，含「不在 docs/ 的几份」和写文档的两条约定） |
 | [`docs/overview.md`](docs/overview.md) | ★ **先看这份**：全景、系统分层、关键逆向成果、现状与待办 |
 | [`docs/pitfalls.md`](docs/pitfalls.md) | ★ **坑速查**：症状 → 真正原因 → 在哪个文件（14 条，排查必翻） |
 | [`docs/differences.md`](docs/differences.md) | ★ **与原版的差异总账**：A 不得不改 / B 私服取舍 / C 还没做 / D **数值是猜的** |

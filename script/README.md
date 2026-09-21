@@ -77,6 +77,7 @@ python script\jsc_find.py "favor\..*" --regex
 | `selftest_favor.py` | **好感度（宿舍）公式自测，不需要模拟器、也不需要服务端在跑**：进程内直接调 handler，把「礼物加多少 / 升级结算 / 回礼概率 / 抚摸次数节流 / 宿舍事件解锁与奖励 / 衣柜发满 / 守护灵升级 / 设置助战」钉死（172 条断言）。存档写到临时目录，不碰真存档 |
 | `check_soldier_calc.py` | **交叉验证**：把服务端 `gamesrv/soldier.py` 的升级计算和客户端 `CharCenter.calcSoldierUpgrade` 在 44 组用例上逐字段比对。改升级公式后必跑（要求游戏在跑 + 探针已加载） |
 | `check_devtools.py` | 调试台自测：前端 id / 接口路径的静态一致性 + 把 `/devtools/api/*` 全打一遍（分「需要游戏」和「不需要」两组）+ 中文往返 + 快照回滚 |
+| `check_docs.py` | **文档自检**：相对链接、目录锚点、搬家前的旧路径残留、README 文档地图是否漏收新文档。改完文档跑一下（重构时加的，专治「同一件事三份说法」） |
 | `check_des.py` | DES 自检：`out/des_ref.json` 里 15 组参考向量逐字节比对 + 200 组随机往返 + 吞吐量，**纯 Python 和 libcrypto 两条后端都验** |
 | `bench_login.py` | 量一次「登录包」在服务端要花多久（`--parts` 拆成 handler / json / des / base64）—— DES 提速前后的对照尺子 |
 | `route_gap.py` | 把客户端里能当 route 的字符串全抽出来，和服务端已实现的对一遍（`--static` 静态盘点：候选 161 / 已实现 72 / 缺 97） |
