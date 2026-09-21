@@ -82,7 +82,7 @@ void Widget::propagateTouchEvent(...)
   所以不会出现两个 ScrollView 同时滚
 
 **验证**：宿舍列表在条目上直接拖动就能滚；条目点击照旧。
-排查手法见 `docs/overview.md` §6.11。
+排查手法见 `docs/pitfalls.md` 第 11 条。
 
 ---
 

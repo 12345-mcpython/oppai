@@ -210,7 +210,7 @@
 
 ## 相关文档
 
-* [`overview.md`](overview.md) —— 全景 + §6 坑速查
+* [`overview.md`](overview.md) —— 全景 / 分层 / 待办；坑速查单独一篇：[`pitfalls.md`](pitfalls.md)
 * [`protocol.md`](protocol.md) —— 协议逐项（含 A6 的握手差异）
 * [`build.md`](build.md) —— 打包链路
 * [`reverse-engineering.md`](reverse-engineering.md) —— 没有源码怎么反推

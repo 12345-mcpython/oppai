@@ -431,7 +431,7 @@ ro.zygote                 zygote64
 > `socket.readyState === WebSocket.OPEN`。包出来的函数不抄 `OPEN` 就等于
 > `undefined` → 判定恒假 → **登录握手一个字节都发不出去**（症状：WS 连上了、
 > 密钥也算完了，服务端发完欢迎包就一直阻塞在 recv）。详见
-> [`docs/overview.md`](docs/overview.md) §6.13。
+> [`docs/pitfalls.md`](docs/pitfalls.md) 第 13 条。
 >
 > ⚠️ 老路子（`-JscUrlPatch`）的坑，知道一下就行：它走**等长**替换
 > （`<host>:18080` 必须 19 字节 → **host 必须 13 个字符**），而且那几个文件是
@@ -519,7 +519,7 @@ python script\route_gap.py --static      # 客户端候选 161 / 已实现 72 / 
 > 而且判定框原版只有 100×100、不可见、还在角色右边。
 > 本项目在 [`server/client/patch.js`](server/client/patch.js) 末尾把它放大到覆盖角色了
 > （私下体验改动，见 [`docs/differences.md`](docs/differences.md) §B）。
-> 排查这类"点了没反应"，先看 [`docs/overview.md`](docs/overview.md) §6.10。
+> 排查这类"点了没反应"，先看 [`docs/pitfalls.md`](docs/pitfalls.md) 第 10 条。
 
 ---
 
@@ -537,7 +537,7 @@ python script\route_gap.py --static      # 客户端候选 161 / 已实现 72 / 
    那是引擎级断点，游戏会真的停住
 
 **症状 → 原因**的速查表在
-[`docs/overview.md`](docs/overview.md) **§6**（10 条坑，
+[`docs/pitfalls.md`](docs/pitfalls.md)（14 条坑，
 每条都有现象、根因、定位方法）。
 
 ---

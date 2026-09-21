@@ -143,7 +143,7 @@ python script\jsc_find.py "favor\..*" --regex
    ⚠️ 抽表时**在客户端 JS 里就把字段压到最小**，别把整表原样回传
 7. **验证** —— `selftest_game.py`（协议层）/ 数值逻辑单独写一个 `selftest_<模块>.py`（进程内，
    不用模拟器）/ `/devtools`（流量 + 存档 + 运行时状态）/ 服务端日志
-8. **记坑** —— 踩到的形状坑写进 `docs/overview.md` §6，不然下次还得再踩一遍
+8. **记坑** —— 踩到的形状坑写进 `docs/pitfalls.md`（坑速查），不然下次还得再踩一遍
 
 ## 附 2：`out/` 里哪些能删
 

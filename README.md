@@ -221,15 +221,17 @@ python script\serve.py           # 守护进程，run.py 挂了自动拉起（�
 | 文档 | 内容 |
 |---|---|
 | **[`REPRODUCE.md`](REPRODUCE.md)** | ★ **从零复刻**：环境、外部资源、逐步操作 + 验证点、排查顺序 |
-| [`docs/overview.md`](docs/overview.md) | ★ **先看这份**：全景、分层、逆向结论、按症状查原因的坑表、待办 |
+| [`docs/overview.md`](docs/overview.md) | ★ **先看这份**：全景、系统分层、关键逆向成果、现状与待办 |
+| [`docs/pitfalls.md`](docs/pitfalls.md) | ★ **坑速查**：症状 → 真正原因 → 在哪个文件（14 条，排查必翻） |
 | [`docs/differences.md`](docs/differences.md) | ★ **与原版的差异总账**：A 不得不改 / B 私服取舍 / C 还没做 / D **数值是猜的** |
 | [`docs/protocol.md`](docs/protocol.md) | 协议逐项细节 + 反汇编证据 |
 | [`docs/reverse-engineering.md`](docs/reverse-engineering.md) | jsc 反汇编器原理、运行时探测手法 |
 | [`docs/decompile.md`](docs/decompile.md) | jsc → js 反编译器：怎么做、三个关键字节码形状、已知问题 |
 | [`docs/devtools.md`](docs/devtools.md) | 浏览器调试台：六个面板、架构取舍、怎么加面板 |
 | [`docs/engine-debug.md`](docs/engine-debug.md) | 引擎层调试：自带远程 JS 调试器怎么打开、协议、4 个坑 |
-| [`docs/build.md`](docs/build.md) | 打包逻辑（为什么这么做） |
-| [`engine/ENGINE_PATCHES.md`](engine/ENGINE_PATCHES.md) | 13 个引擎补丁的证据链与复现脚本 |
+| [`docs/build.md`](docs/build.md) | 打包逻辑（为什么这么做）、ABI、完整重建命令 |
+| [`engine/ENGINE_PATCHES.md`](engine/ENGINE_PATCHES.md) | 16 个引擎补丁的证据链与复现脚本 |
+| [`engine/README.md`](engine/README.md) | 引擎移植过程、版本确认、踩过的坑 |
 | [`script/README.md`](script/README.md) | 脚本索引 + 加新玩法模块的推荐流程 |
 
 ---
