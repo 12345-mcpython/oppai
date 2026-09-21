@@ -70,6 +70,7 @@
 | **充值 / 月卡 / 礼包（IAP）** | **不可购买**（客户端的 `judgeexchangestate` 会先回 state≠0，直接弹提示；`exchange.payment` 也故意非 200） | 真实支付渠道 | 要有支付渠道才能开；道具兑换本身没关（见 [protocol.md §6.5](protocol.md)） |
 | **演习场对手** | 从 `table_friend_support_npc`（101 个 NPC）里按等级挑 8 个，名字/等级/5 个军士全抄 NPC 行 | 真人的 PvP 匹配（原版是别的玩家的阵容） | 单机没有别的玩家，只能拿 NPC 顶。想换口味改 `arena.make_rivals()` |
 | **演习场重复打同一个对手** | 照给积分和萌币（`state` 只影响「已战胜」标记） | 未知；理论上赢了就不能再打（客户端 `state == 1` 时点挑战只弹 1603「已经战胜过他了呢~」），但结算面板上有「再来一次」，客户端会拿同一个 `index` 再进战斗 —— 这里回非 200 会让用户卡在战斗结束什么都不弹 | 想限制就在 `arena.exit_fight()` 里按 `state` 拒绝（注意上面那个副作用） |
+| **日常 / 成就任务** | **按客户端表实现**：日常一天放当前等级那一档（7~11 条）、换日点 05:00、奖励按 `table_quest_reward` 真发 | 原版同样按表跑，但**部分条件的数据服务端拿不到**：12208 击杀鸭子数 / 12209 我方军士跪倒数 / 13102 技能熟练度 → 进度恒 0；18201「给好友送物资」要好友系统 | 前三个要战斗结算里的击杀/阵亡统计（客户端 `battleInfo` 里可能有）；18201 等好友系统做完 |
 
 > ⚠️ 行动力道具（100003）客户端 `limit_count` 是 **300**，而初始包发的是 999 ——
 > 这个是原版数据和我们初始值的冲突，`add_item` 已经不回缩了，但界面上仍可能对不齐。
@@ -98,7 +99,7 @@
 * **战果报告的「获得物资」** —— 服务端已经把奖励块挪到客户端真正读的那一层
   （`data.rewards.dropReward / firstComplete / appraise / levelReward`），
   但 `instancemanager` 是少数反汇编对不齐的文件，`showCb` 的入参拼不出来，
-  所以「`args.result` 是不是 finishlevel 那个 `ret`」还没实机确认（见 `overview.md` §7 待办 3）
+  所以「`args.result` 是不是 finishlevel 那个 `ret`」还没实机确认（见 `overview.md` §7 待办 2）
 * **助战（好友支援）弹窗渲染不出来** —— 服务端能正确回 20 个 `npcId`，
   客户端 `FriendSupport._recommendList` 也收到了，但 `SupportChoiceLayer` 不显示。
   **不影响战斗**（那弹窗是可选的）

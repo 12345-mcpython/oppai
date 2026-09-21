@@ -15,7 +15,7 @@
 
 from __future__ import annotations
 
-from .. import config, detect, logx, store
+from .. import config, detect, logx, quests, store
 from ..gameproto import CODE_OK
 from . import route
 
@@ -60,6 +60,8 @@ def go_detect(session: dict, msg: dict, req_id):
 def go_detect_complete(session: dict, msg: dict, req_id):
     player = _player(session)
     result = detect.complete(player, (msg or {}).get("detectkey"))
+    if result.get("code") == 200:
+        quests.on_detect_complete(player)      # 日常 16202「完成任务派遣 N 次」
     store.save_player(player)
     return result
 

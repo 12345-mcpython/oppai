@@ -597,6 +597,37 @@ adb install -r -d E:\code\zcsmw\out\zcsmw-mod-signed.apk
 
 ---
 
+## 离线抽表（游戏没跑起来时）
+
+常规路径是 `script/extract_client_tables.py`：走探针让**运行中的客户端**把
+`window.table_*` 序列化成 JSON。两种情况下走不通：装的那份包里没有 `probe.js`
+（比如模拟器上的旧包），或者手边根本没开游戏。
+
+这时用 `script/decompile_table.py` —— 表脚本其实就是一句
+`var table_xxx = { ... };` 的对象字面量，所以可以**离线**抽：
+
+```powershell
+python script\decompile_table.py tablequestreward tablequestcondition
+#   game\assets\src\table\tablequestreward.jsc -> server\gamesrv\data\table_quest_reward.json
+#   （table_quest_reward，1534 行，61.9 KB）
+
+python script\decompile_table.py tablequestreward --keep-js --out out\x.json   # 想留中间产物
+```
+
+它内部三步：`jsc_decompile.py` 反编译成 JS → `node --check` 验语法 →
+node 的 `new Function(src + "; return <表名>;")()` 求值 → 写
+`server/gamesrv/data/<全局名>.json`。形状和探针路径**完全一致**（探针也是
+`JSON.stringify` 同一个对象），所以要提交进仓库。
+
+三个坑（都踩过，脚本里已经处理）：
+
+1. **必须先 `node --check`**：反编译器对个别字节码形状会吐出不合法 JS
+   （`assets/src/**` 里 3/575 个文件过不了），不合法时求值那步才炸、报错难读。
+2. **全局名要认**：文件名 `tablequestreward.jsc`，全局名却是 `table_quest_reward`
+   —— 脚本从反编译结果里扫 `^\s*(?:var|let|const)?\s*(table_\w+)\s*=` 自动认，
+   认不到就 `--name` 手填。
+3. **表脚本不是模块**：sloppy mode 下是裸赋值（隐式全局），`require`/`import` 都不行。
+
 ## 产物
 
 ```

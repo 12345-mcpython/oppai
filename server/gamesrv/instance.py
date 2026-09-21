@@ -470,10 +470,13 @@ def finish_level(player: dict, msg: dict) -> dict | None:
     #    首通奖励会漏发。
     first_clear = star_mark > 0 and prev_star < 0
 
-    # 一次胜利 = 一次主线任务进度
+    # 一次胜利 = 一次主线任务进度；日常/成就还要知道「通的哪一关、队伍里有谁」
+    # （12207 = 通关某副本 N 次、12210 = 队伍中存在某角色通关某关）
     team = _team(player, (msg or {}).get("curTeamIdx"))
     team_size = len(team.get("soldierKeys") or team.get("soldiers") or [])
-    quests.on_level_result(player, victory=star_mark > 0, team_size=team_size)
+    team_chars = [team.get("heroKey"), team.get("mechaKey")] + list(team.get("soldierKeys") or [])
+    quests.on_level_result(player, victory=star_mark > 0, team_size=team_size,
+                           level_key=level_id, char_keys=[c for c in team_chars if c])
 
     # ---- 奖励 ----
     #

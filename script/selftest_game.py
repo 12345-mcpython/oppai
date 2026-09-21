@@ -1680,6 +1680,183 @@ def char_manual_check(ok: bool) -> bool:
 ONLY = None
 
 
+def quest_check(ok: bool) -> bool:
+    """任务：主线 + 日常 + 成就三类一起验（登录块形状 / 分档 / 进度 / 领奖 / 跨天重置）。
+
+    客户端契约（都从 jsc 反汇编里核过，写错一条界面就不对）：
+
+    * 任务界面三个页签各自 `QuestCenter.getQuests(QUEST_TYPE.X)`，而 getQuests 是从
+      **同一个** `_quests` map 里按 type 筛 —— 所以服务端必须把 1/2/3 三类都塞进
+      `data.quest.quests`，页签自己会分好（少一类那个页签就是空的）。
+    * 每条必须带 `id`：`_createQuest` 最后一句是 `quest.id = data.id`，领奖用它。
+    * `schedule` 是**对象**（key 取 `table_quest.sk`、值是当前进度），回数组的话
+      `scheduleCur` 算不出来，「领奖」按钮永远是灰的。
+    * `quest.submitquest` 的 `data.rewards` 必须是 `[{type, key, count}]`
+      （`ccuiManager.popupReward(rewards)` -> `RewardTipsLayer`；经验那条 key 为空串）。
+    * 日常分档：type=1 在表里按 `lv` 分 24 档，**一天只放当前等级那一档**；
+      档内「完成所有的日常任务哦！」(`ct=19201`) 的 `tar` 正好 = 档内条数 − 1 ——
+      这条不变式是分档设计的判据，写错了日常就多放/少放。
+
+    ⚠️ 会真改任务状态、计数器和道具，跑完整块还原（所以可以反复跑）。
+    """
+    from gamesrv import config, items, quests, store
+    import time as _time
+
+    player = store.get_or_create_player(config.DEFAULT_ACCOUNT)
+    before_quests = json.loads(json.dumps(player.get("quests") or {}))
+    before_stats = json.loads(json.dumps(player.get("questStats") or {}))
+    before_items = dict(items.items_of(player))
+    bad = []
+
+    def by_type(quests_map):
+        out = {}
+        table = quests.table()
+        for key in quests_map:
+            row = table.get(key) or {}
+            out.setdefault(str(row.get("type")), []).append(key)
+        return out
+
+    try:
+        login = call("agent.getlogindata", {}, 190)
+        block = (login.get("data") or {}).get("quest") or {}
+        qmap = block.get("quests") or {}
+        groups = by_type(qmap)
+        for qtype, label in (("1", "日常"), ("2", "主线"), ("3", "成就")):
+            if not groups.get(qtype):
+                bad.append(f"登录块里没有任何{label}任务（客户端那个页签会是空的）")
+            else:
+                print(f"       {label} {len(groups[qtype])} 条")
+        # 每条任务的形状
+        for key, entry in list(qmap.items())[:40]:
+            if str(entry.get("id")) != str(key):
+                bad.append(f"{key}: id={entry.get('id')!r}（客户端领奖靠 id）")
+            if not isinstance(entry.get("schedule"), dict):
+                bad.append(f"{key}: schedule 不是对象")
+            for skey in (quests.table().get(key) or {}).get("sk") or []:
+                if skey not in (entry.get("schedule") or {}):
+                    bad.append(f"{key}: schedule 缺 key {skey!r}（客户端按它取 cur）")
+            if str(entry.get("state")) not in ("1", "2", "3", "4"):
+                bad.append(f"{key}: state={entry.get('state')!r} 不是 1..4")
+
+        # 日常分档 + 档内不变式
+        lv = int(player.get("lv") or 0)
+        daily = groups.get("1") or []
+        levels = {int((quests.table().get(k) or {}).get("lv") or 0) for k in daily}
+        if len(levels) != 1:
+            bad.append(f"日常跨了多个档：{sorted(levels)}（应该只有当前等级那一档）")
+        else:
+            band = levels.pop()
+            if band > lv:
+                bad.append(f"日常档 lv={band} 超过了玩家等级 {lv}")
+            same_band = [k for k, r in quests.table().items()
+                         if str(r.get("type")) == "1" and int(r.get("lv") or 0) == band]
+            if len(daily) != len(same_band):
+                bad.append(f"日常只发了 {len(daily)} 条，该档共 {len(same_band)} 条")
+            for k in same_band:
+                row = quests.table()[k]
+                if str(row.get("ct")) == "19201":
+                    tar = (row.get("tar") or [0])[0]
+                    if int(tar) != len(same_band) - 1:
+                        bad.append(f"{k}「完成所有日常」tar={tar}，该档有 {len(same_band)} 条"
+                                   f"（应该 = 档内条数-1，这条不变式是分档设计的判据）")
+            print(f"       日常档：lv={band}，{len(same_band)} 条")
+            # 进度：把档里第一条 12204（通关任意关卡 N 次）的计数器灌满
+            target = next((k for k in same_band
+                           if str((quests.table().get(k) or {}).get("ct")) == "12204"), None)
+            if target is None:
+                bad.append("这一档里没有 12204（通关任意关卡）那条，没法验进度")
+            else:
+                tar = int((quests.table()[target].get("tar") or [0])[0])
+                p = store.get_or_create_player(config.DEFAULT_ACCOUNT)
+                p.setdefault("questStats", {})["wins"] = tar + 5
+                store.save_player(p)
+                r = call("quest.getnewquest", {}, 191)
+                entry = ((r.get("data") or {}).get("quest") or {}).get("quests", {}).get(target) or {}
+                if str(entry.get("state")) != "3":
+                    bad.append(f"{target} 计数器灌满后 state={entry.get('state')!r}，应该是 3(已达成)")
+                else:
+                    print(f"       {target}: 进度 {entry.get('schedule')} → state=3（可领）")
+                    # 领奖
+                    before = dict(items.items_of(store.get_or_create_player(config.DEFAULT_ACCOUNT)))
+                    sub = call("quest.submitquest", {"questKey": target}, 192)
+                    if sub.get("code") != 200:
+                        bad.append(f"quest.submitquest code={sub.get('code')} {str(sub)[:120]}")
+                    else:
+                        data = sub.get("data") or {}
+                        rewards = data.get("rewards")
+                        if not isinstance(rewards, list) or not rewards:
+                            bad.append(f"领奖回包 rewards={rewards!r}（客户端 popupReward 要非空数组）")
+                        else:
+                            for one in rewards:
+                                if not isinstance(one, dict) or set(("type", "key", "count")) - set(one):
+                                    bad.append(f"奖励条目形状不对：{one!r}（要 {{type,key,count}}）")
+                                    break
+                            print(f"       奖励 {[(r0['type'], r0['key'], r0['count']) for r0 in rewards]}")
+                        nentry = ((data.get("quest") or {}).get("quests") or {}).get(target) or {}
+                        if str(nentry.get("state")) != "4":
+                            bad.append(f"领完之后 {target} state={nentry.get('state')!r}，应该是 4(已领)")
+                        after = ((call("agent.getlogindata", {}, 193).get("data") or {}).get("item") or {})
+                        got_any = any(int(after.get(str(r0["key"])) or 0) >
+                                      int(before.get(str(r0["key"])) or 0)
+                                      for r0 in (rewards or []) if r0.get("type") == "2")
+                        if any(r0.get("type") == "2" for r0 in (rewards or [])) and not got_any:
+                            bad.append("领奖回包说有道具，但包里没变（settle 没发？）")
+                        again = call("quest.submitquest", {"questKey": target}, 194)
+                        if again.get("code") == 200:
+                            bad.append("重复领同一件日常竟然又成功了")
+
+        # 跨天重置：把 day 改成昨天，再拉一次列表，应当清空当日 done
+        p = store.get_or_create_player(config.DEFAULT_ACCOUNT)
+        rec = quests._record(p)                                    # noqa: SLF001
+        rec["daily"]["done"] = list(groups.get("1") or [])[:1]
+        rec["daily"]["day"] = "2000-01-01"
+        store.save_player(p)
+        call("quest.getnewquest", {}, 195)
+        p2 = store.get_or_create_player(config.DEFAULT_ACCOUNT)
+        rec2 = quests._record(p2)                                  # noqa: SLF001
+        if rec2["daily"]["done"]:
+            bad.append(f"跨天后日常 done 没清空：{rec2['daily']['done']}")
+        elif rec2["daily"]["day"] != quests.day_str():
+            bad.append(f"跨天后 daily.day 没更新：{rec2['daily']['day']!r}")
+        else:
+            print(f"       跨天重置：done 清空、day={rec2['daily']['day']}（换日点 "
+                  f"{quests.RESET_HOUR:02d}:00）")
+
+        # 成就：计数器驱动的那条（304001 = 战胜 500 次）
+        p3 = store.get_or_create_player(config.DEFAULT_ACCOUNT)
+        ach = [k for k, r in quests.table().items()
+               if str(r.get("type")) == "3" and str(r.get("ct")) == "12204"]
+        if ach:
+            p3.setdefault("questStats", {})["wins"] = 99999
+            store.save_player(p3)
+            r = call("quest.getnewquest", {}, 196)
+            got = ((r.get("data") or {}).get("quest") or {}).get("quests") or {}
+            achieved = [k for k in ach if str((got.get(k) or {}).get("state")) == "3"]
+            if not achieved:
+                bad.append(f"成就里这几条（战胜 N 次）该达成：{ach[:3]}")
+            else:
+                print(f"       成就：{len(achieved)}/{len(ach)} 条（战胜次数）已达成")
+    finally:
+        p = store.get_or_create_player(config.DEFAULT_ACCOUNT)
+        p["quests"] = before_quests
+        p["questStats"] = before_stats
+        got = items.items_of(p)
+        for k in [k for k in got if k not in before_items]:
+            del got[k]
+        for k, v in before_items.items():
+            got[k] = v
+        store.save_player(p)
+
+    if bad:
+        for one in bad[:12]:
+            print(f"  BAD {one}")
+        return False
+    print("  OK  任务：三类（主线/日常/成就）都在同一份 quests 里、id/schedule/state 形状对、"
+          "日常=当前等级那一档且档内 19201 不变式成立、计数器驱动进度、领奖发道具且不能重复领、"
+          "跨天清空当日进度（收尾已还原）")
+    return ok
+
+
 def run_check(ok: bool, name: str, fn) -> bool:
     """跑一项检查：支持 --only 过滤 + 打印用时（自检太慢，得知道时间花在哪）。"""
     if ONLY and ONLY not in name:
@@ -1764,6 +1941,8 @@ def main():
     ok = run_check(ok, "派遣自检异常", detect_check)
 
     ok = run_check(ok, "签到自检异常", sign_check)
+
+    ok = run_check(ok, "任务自检异常", quest_check)
 
     ok = run_check(ok, "功能开启弹窗自检异常", module_open_check)
 

@@ -14,7 +14,7 @@
 
 from __future__ import annotations
 
-from .. import arena, config, logx, store
+from .. import arena, config, logx, quests, store
 from . import route
 
 log = logx.get("handler.arena")
@@ -54,5 +54,7 @@ def exit_fight(session: dict, msg: dict, req_id):
     player = _player(session)
     result = arena.exit_fight(player, (msg or {}).get("index"),
                               (msg or {}).get("success"), (msg or {}).get("battleInfo"))
+    if (msg or {}).get("success"):
+        quests.on_arena_fight(player)          # 日常 15202「完成演习 N 次」
     store.save_player(player)
     return result

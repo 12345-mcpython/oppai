@@ -368,12 +368,24 @@ vanilla 不传参 → 游戏代码 `function (eventName) { if (/began\d/.test(ev
       （否则价格变 NaN）—— 见 [protocol.md [`pitfalls.md`](pitfalls.md) 第 10 条](protocol.md)。顺带修了一个**老 bug**：
       `items._add_soldier` 查错表名（`table_soldier` 应为 `card`），导致**所有军士奖励
       被静默丢掉**（抽卡/派遣/关卡奖励都中招）
+- [x] **日常 / 成就任务**（`type=1` / `type=3`，路由仍是 90 —— 复用 `quest.getnewquest` /
+      `quest.submitquest`）：日常 246 条按 `lv` 分 24 档（1/5/10/…/116），**一天只放当前等级
+      那一档**（7~11 条）。判据很硬：档内那条「完成所有的日常任务哦！」(`ct=19201`) 的 `tar`
+      正好 = **档内条数 − 1**，24 个档逐一核对都对得上。换日点 **05:00**（和分区每日次数同一个
+      换日点，`quests.RESET_HOUR`），`daily.day` 存「游戏内的今天」，跨天清空当日 done。
+      成就 91 条按 `lv` 门槛解锁、长期累计。进度全部由计数器现算：通关次数 / 某副本各难度
+      通关数 / 军士升级·突破 / 抚摸（含按角色）/ 送礼 / 演习 / 派遣 / 分解 / **累计获得道具**
+      （挂在 `items.add_item` 这个唯一入账口上）/ 战役星数 / 军士数量 / 私密开启数。
+      ⚠️ 三类拿不到数据的条件（12208 击杀鸭子数、12209 我方军士跪倒数、13102 技能熟练度）
+      进度恒 0、不假装达成；18201「给好友送物资」卡在好友系统没做。
+      **奖励真发**：新抽的表 `table_quest_reward`（1534 行）→ `items.settle`，回包
+      `data.rewards = [{type,key,count}]`（`ccuiManager.popupReward` 认的形状）——
+      主线以前领奖只回空数组，这次一并补上。见 [protocol.md](protocol.md) 的「任务」一节。
 - [x] 文档：协议 / 逆向手法 / 打包逻辑 / 调试台 / 引擎调试 / 本总览 / **与原版的差异** / **从零复刻**
 
 ### 待办（按卡点排序）
 
-1. **日常 / 成就任务** —— 只做了 `type=2`（主线）；日常 246 条 / 成就 91 条。
-2. **战果报告的「获得物资」还没在实机确认** —— 服务端现在把奖励块放在**对的那一层**了
+1. **战果报告的「获得物资」还没在实机确认** —— 服务端现在把奖励块放在**对的那一层**了
    （`data.rewards.dropReward / firstComplete / appraise / levelReward`，
    日志里能看到 `掉落={'100002': 593} 首通={'100001': 20} exp=60`）。
 
@@ -393,14 +405,14 @@ vanilla 不传参 → 游戏代码 `function (eventName) { if (/began\d/.test(ev
    少数对不齐的文件，`showCb` 的入参拼不出来）。如果实机面板还是空的，
    下一步就是在 `patch.js` 里包 `instanceManager` 的 `showCb` 入参，把 `ret` 塞进 `args.result`。
 
-3. **助战（好友支援）列表渲染不出来** —— 服务端已经能正确回 NPC 名单
+2. **助战（好友支援）列表渲染不出来** —— 服务端已经能正确回 NPC 名单
    （`friendsupport.getrecommendsoldiers` -> 20 个 `npcId`，客户端
    `FriendSupport._recommendList` 里也确实收到了 20 个），
    但 `SupportChoiceLayer` 那边渲染不出来。已确认的：
    `setSupportList()` 手动调是好的（会往 `_pushAsynList` 里塞 18 个
    `{item, innSize, index}`），所以卡在「层的 `_recommendList` 是 0」。
    **不影响战斗**（这个弹窗是可选的好友助战）。
-4. **其余未实现的 route** —— `python script/route_gap.py --static` 能列出全部。
+3. **其余未实现的 route** —— `python script/route_gap.py --static` 能列出全部。
    当前：客户端静态候选 **161** 条，服务端 **90** 条，缺 **79** 条。按单机价值排：
 
    | 命名空间 | 缺 | 说明 |
@@ -416,7 +428,7 @@ vanilla 不传参 → 游戏代码 `function (eventName) { if (/began\d/.test(ev
    ✅ 已经补完的：`equipment.*`(7)、`favor.*`(5)、`favorevent.*`(1)、
    **`char.upgradedaemon`**(1)、**`player.updateasst`**(1)、
    `player.selecttalent`/`upgradetalent`、`sign.*`(1)、`detect.*`(6)、**`arena.*`**(4)。
-5. `hashKey` / `hmac64` 还没复刻（登录靠单位元绕过）；自研 DH 的完整算法也没还原。
+4. `hashKey` / `hmac64` 还没复刻（登录靠单位元绕过）；自研 DH 的完整算法也没还原。
 
 ---
 

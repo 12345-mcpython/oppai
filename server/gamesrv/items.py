@@ -143,6 +143,12 @@ def add_item(player: dict, key, count: int) -> None:
     items[k] = new
     if new != cur:
         log.info("发道具 %s: %d -> %d", k, cur, new)
+        # 成就 11201「累计获得某道具 N 个」：这里是**所有**入账的唯一出口
+        # （奖励/购买/邮件附件都走 add_item），所以累计值是名副其实的。
+        # 扣道具走 sub_item，不进这个计数。局部 import 避免循环依赖。
+        if int(count) > 0:
+            from . import quests as _quests
+            _quests.on_item_gained(player, k, int(count))
 
 
 def changed_block(player: dict, known_keys) -> dict:

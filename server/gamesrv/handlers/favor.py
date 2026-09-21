@@ -33,7 +33,7 @@ from __future__ import annotations
 
 import time
 
-from .. import config, favor, items, logx, store
+from .. import config, favor, items, logx, quests, store
 from ..gameproto import CODE_OK
 from . import route
 
@@ -196,6 +196,7 @@ def use_gift(session: dict, msg: dict, req_id):
         items.add_item(player, rk, int(rc))
     # 好感度涨了 → 可能跨过某条宿舍事件的解锁等级，顺带把新解锁的推下去
     new_events = favor.sync_events(player)
+    quests.on_gift(player, sum(c for _, c, _ in plan))   # 日常 13231「赠送 N 个礼物」
     store.save_player(player)
 
     log.info("favor.usegift %s 礼物 %s 好感 +%d%s（升 %d 级 -> lv%d）回礼 %s",
@@ -325,6 +326,8 @@ def touch_char_asst(session: dict, msg: dict, req_id):
         favor.add_exp(row, bonus)
 
     new_events = favor.sync_events(player)
+    # 日常 13232「抚摸妹纸 N 次」/ 成就里指定角色的那一条（cp2 = 角色 key）
+    quests.on_touch_char(player, char_key)
     store.save_player(player)
     st = store.favor_interact(player)
     log.info("favor.touchcharasst %s 好感 +%d%s（升 %d 级 -> lv%s，剩 %d 次）",

@@ -16,7 +16,7 @@ route 名字是从 .jsc 里搜出来的：
 
 from __future__ import annotations
 
-from .. import config, logx, quests, store
+from .. import config, items, logx, quests, store
 from ..gameproto import CODE_OK
 from . import route
 
@@ -50,6 +50,7 @@ def submit_quest(session: dict, msg: dict, req_id):
     领掉的那条从窗口消失、后面一条顶上来（变成可领）。
     """
     player = _player(session)
+    known = {str(k) for k in items.items_of(player)}   # 改动前的背包 key（见 items.changed_block）
     result = quests.submit(player, msg)
     if result["code"] != CODE_OK:
         return result
@@ -57,7 +58,10 @@ def submit_quest(session: dict, msg: dict, req_id):
     # 改完必须写回去，否则这次领奖下次刷新就「忘了」——
     # 表现就是「反复刷新，顶上一直是同两条任务」（done 永远是空的）。
     store.save_player(player)
-    return _ok(player, rewards=result["data"].get("rewards") or [])
+    # items 块让背包当场刷新（不然领到的道具要重登才看得到，
+    # 和 sign.receivereward 一样只回客户端本来就认识的 key）
+    return _ok(player, rewards=result["data"].get("rewards") or [],
+               items=items.changed_block(player, known))
 
 
 @route("quest.schedule")

@@ -34,7 +34,8 @@
 | `jsc_scope.py` | 打印各 script 的 bindings / 槽位 —— 把 `getaliasedvar slot=N` 对回变量名时用 |
 | `alias_use.py` | 列出某个 jsc 里所有 `getaliasedvar/setaliasedvar` 的槽位和上下文 |
 | `csb_dump.py` | 解析 cocostudio 的 `.csb`（FlatBuffers）：列出动画区间和所有帧事件 |
-| `extract_client_tables.py` | **把客户端 `table_*` 抽成服务端 JSON**（`gamesrv/data/table_quest.json` 就是这么来的）。客户端换版本重跑一次。⚠️ **只补新表时加 `--only <子串>`** —— 每张表都是一次 `/control/eval`，整轮全抽会把模拟器压卡 |
+| `extract_client_tables.py` | **把客户端 `table_*` 抽成服务端 JSON**（走探针；游戏没开时改用 `jsc_decompile.py` + node 离线抽，见 [build.md](../docs/build.md) 的「离线抽表」）（`gamesrv/data/table_quest.json` 就是这么来的）。客户端换版本重跑一次。⚠️ **只补新表时加 `--only <子串>`** —— 每张表都是一次 `/control/eval`，整轮全抽会把模拟器压卡 |
+| `decompile_table.py` | **离线抽表**：`jsc_decompile.py` + node 求值，把 `assets/src/table/*.jsc` 直接转成 `gamesrv/data/*.json`（游戏没开 / 包里没探针时用；正常路径是 `extract_client_tables.py`）。见 [build.md](../docs/build.md) 的「离线抽表」 |
 | `gen_opcodes.py` | 从 SpiderMonkey 的 `vm/Opcodes.h` 重新生成 `_opcodes_gen.py`（一般不用跑） |
 
 典型用法：

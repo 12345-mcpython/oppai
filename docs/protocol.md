@@ -1064,7 +1064,7 @@ for (var k in window) if (typeof window[k]==='function' && node instanceof windo
   },
   "finishQuests": {"209001": 1},
   "finishQuestsId": [],
-  "dailyQuestsTime": "2026-09-18 20:15:33",
+  "dailyQuestsTime": "2026-09-22 05:00:00",   // 下次日常换日时刻（客户端只存不读）
   "updateTime": "2026-09-18 20:15:33"
 }
 ```
@@ -1085,45 +1085,115 @@ for (var k in window) if (typeof window[k]==='function' && node instanceof windo
 状态机：`0 未激活 / 1 已激活 / 2 已接受 / 3 已达成(可领) / 4 已完成(已领) / 5 无效`
 类型：`1 日常 / 2 主线 / 3 成就 / 4 公会 / 5 活动 / 6 新手`
 
+⚠️ **三类任务回在同一个 `quests` map 里**：任务界面三个页签各自调
+`QuestCenter.getQuests(QUEST_TYPE.DAILY / NORMAL / ACHIEVEMENT)`，而 getQuests 是从
+同一个 map 按 `type` 筛 —— 服务端不用分通道，少放一类那个页签就是空的。
+
 ### 9.2 任务表是客户端静态配置
 
 `table_quest` / `table_quest_condition` / `table_quest_reward` 编译在
-`assets/src/table/tablequest*.jsc` 里，服务端没有原始文件。
-用 `script/extract_client_tables.py` 让游戏自己把要用的字段吐出来，
-存成 `gamesrv/data/table_quest.json`（508 条，只留 type/rank/activate_lv/
-activate_quest_key/条件个数/达成值/schedule key）。客户端换版本重跑一次即可。
+`assets/src/table/tablequest*.jsc` 里，服务端没有原始文件。两条拿表的路：
 
-### 9.3 主线推进
+* **常规**：`script/extract_client_tables.py` —— 让游戏自己把要用的字段吐成 JSON；
+* **离线**（游戏没装 / 没探针时用，2026-09-21 加的奖励表就是这么来的）：
+  `jsc_decompile.py` 反编译 → node 求值 → 落 JSON，配方见
+  [`build.md`](build.md) 的「离线抽表」。
 
-`gamesrv/quests.py` 只维护主线（type=2，共 135 条）：
-按 `activate_quest_key` 前序遍历出推进顺序，一次给客户端一个 12 条的窗口，
-领掉一条之后窗口往后滑。
+服务端实际用两份：
 
-`sync.syncupclient` 也实现了：客户端上报 `actquest.questUpdateTime`，
-和服务端的 `quests.update_time(player)` 不一致时把整个 quest 块推回去
-（这是 `SyncManager.updateByServer` 唯一认的通道）。
+| 文件 | 内容 | 谁在用 |
+|---|---|---|
+| `data/table_quest.json` | **merge 过的**（508 条）：`type/rank/lv(=activate_lv)/ak(=activate_quest_key)` + 条件 `ct/cp1/cp2` + 达成值 `tar` + schedule key `sk` | `quests.py` 全部逻辑 |
+| `data/table_quest_reward.json` | 每条任务的奖励行：`"<questKey>#N" -> {type, param_1, param_2}`（1534 行） | 领奖（§9.5） |
+| `data/table_quest_condition.json` | 条件原文：`"<questKey>#1" -> {type, param_1..param_5}` | 留档：`ct` 的 `param_3+`（如 13102 的技能等级）只有这份表有 |
 
-### 9.4 任务进度是**服务端**算的
+> ⚠️ 客户端自己那份 `table_quest` 字段是 `{title, desc, icon, jump_view, activate_lv, …}`
+> —— **标题 / 描述 / 图标 / 跳转都是客户端渲染的**，服务端一个都不用发（两份表 key 集合一样）。
+> `ct` 的含义靠客户端 `desc` 反推，逐条记在 §9.4 的表里。
+
+### 9.3 三类任务的推进方式
+
+| 类型 | 窗口（一次放给客户端多少条） | 进度存在哪 |
+|---|---|---|
+| **2 主线**（135 条） | 按 `activate_quest_key` 前序遍历，一次 20 条；领一条滑一格 | `quests.done` |
+| **1 日常**（246 条） | **只放当前等级所在的那一档** | `quests.daily = {day, done}` |
+| **3 成就**（91 条） | 所有 `lv ≤ 玩家等级` 的都放（多数 `lv=0` 无门槛） | `quests.achievement.done` |
+
+**日常分档**：表里 type=1 按 `lv` 分 24 档（1 / 5 / 10 / … / 116），每档 7~11 条。
+判据很硬 —— 档内那条「完成所有的日常任务哦！」（`ct=19201`）的 `tar` 正好等于
+**档内条数 − 1**（24 档逐一核对都对得上）。所以窗口取「不超过玩家等级的最大档」，
+而不是把所有 ≤ 等级的档都铺出来（30 级会变成 40 多条，也不符合 `tar` 的语义）。
+
+**换日**：`quests.RESET_HOUR = 5`（和 `instance.SUBAREA_RESET_HOUR` 同一个换日点 ——
+同一个游戏里两处「每日」用不同换日点会让玩家觉得计数坏了）。`daily.day` 存
+「游戏内的今天」（`day_str()`，按换日点算日期），`ensure_daily_reset()` 在 block /
+submit 之前调用：跨天就清空当日 `done` 并**自己落盘**（`quest.getnewquest` 这类
+只读 handler 不会 save，不落盘的话磁盘上永远停在昨天、`updateTime` 反复变）。
+
+**成就**不分档，只按 `lv` 门槛解锁；进度是长期累计（不重置）。
+
+### 9.4 任务进度是**服务端**算的（条件码总表）
 
 `QuestCenter.checkQuestFinish(key)` 只有一句 `return this._finishQuests[key]`
 （「这条领过没有」），客户端**不算**条件。所以 ACHIEVED 完全由服务端决定，
 客户端只负责把 `schedule[cur]` 显示成进度条。
 
-条件类型从 `table_quest.desc` 反推（已抽进 `table_quest.json` 的 `ct/cp1/cp2`）：
+`ct` 的含义不是猜的：`table_quest_condition` 只有参数，文案在客户端 `table_quest.desc`
+里（例：`100001 ct=12204 cp1=5` → 「通关任意关卡5次！」；`100007 ct=13232 cp1=5` →
+「抚摸妹纸达到5次！」；`301001 ct=11201 cp2=100002` → 「累计获得萌抄达到5000000大元！」）。
+`gamesrv/quests.py:progress_of()` 按码分派，下表就是它的全部映射：
 
-| type | 含义 | 服务端怎么算 |
+| `ct` | 含义（日常/成就用到的） | 服务端怎么算 |
 |---|---|---|
-| `12212` | 队伍中只上阵 cp2 个军士获得胜利 cp1 次 | 关卡胜利时按「上阵人数」分桶计数 |
-| `12216` | 队伍中存在 cp2 兵种的军士获得胜利 cp1 次 | 兵种表在客户端 char 表里，简化成「任意胜场」 |
-| `13203` | 进行首次军士升级 | `char.upgradesoldierlv` 计数 |
-| `13102` | 1 位 cp2 军阶的军士等级达到 cp1 级 | 升到时记该军阶的最高等级 |
-| `13204` | 1 位军士进行首次突破 | `char.improvesoldierstar` 计数 |
+| `12204` | 通关任意关卡 / 战胜 N 次 | `wins` |
+| `12207` | 通关 cp2 里那些关卡（同一副本的各难度）共 N 次 | `clearsByLevel` 求和 |
+| `13203` | 提升军士等级 N 次 | `soldierUpgrades` |
+| `13232` | 抚摸 N 次（成就里 cp2 指定角色） | `touches` / `touchesByChar` |
+| `13231` | 赠送 N 个礼物 | `gifts` |
+| `18201` | 给好友发送物资 N 次 | `friendSends` —— **好友系统没做，恒 0** |
+| `19201` | 完成所有日常任务 | 当天本档已领条数（不含自己） |
+| `15202` | 完成演习 N 次 | `arenaFights` |
+| `16202` | 完成任务派遣 N 次 | `detects` |
+| `12201` / `12205` | 战斗次数 / 失败次数 | `battles` / `losses` |
+| `11201` | 累计获得 cp2 道具 N 个 | `itemGained`（挂在 `items.add_item` 这个唯一入账口） |
+| `12101` | 战役获得的星星数量 | 现算：关卡记录的 `starMark` 合计 ⚠️ 未按难度区分 |
+| `13103` | 不同 cp2 军阶的军士数量 | 现算：名单里去重 |
+| `13105` | 角色私密开启数量 | 现算：`favor` 行里 `desc == -1`（全解锁）的个数 |
+| `13201` | 累计军士退伍（分解）个数 | `soldierSells` |
+| `12210` | 队伍中存在 cp1 角色通关过 cp2 那个关卡 | 关卡结算时记 `clearsWithChar` |
+| `12212` / `12216` | 只上阵 cp2 人胜利 / 队伍里有 cp2 兵种胜利（**主线**） | `winsByTeamSize` / 简化成任意胜场 |
+| `13204` / `13102` | 首次突破 / 某军阶军士达到 N 级（**主线**） | `soldierStars` / `soldierMaxLv` |
+| `12208` / `12209` / `13102`(成就) | 击杀鸭子数 / 我方军士跪倒数 / 技能熟练度 | **拿不到数据 → 恒 0**，不假装达成 |
 
-玩家身上只存几个**计数器**（`player.questStats`），某条任务的 `cur` 现算：
+计数器都挂在 `player.questStats`（2026-09-21 从 5 个扩到 17 个）：
 
 ```json
-{"wins": 1, "winsByTeamSize": {"3": 1}, "soldierUpgrades": 0, "soldierMaxLv": {}}
+{"wins": 1, "winsByTeamSize": {"3": 1}, "soldierUpgrades": 0, "soldierStars": 0,
+ "soldierMaxLv": {}, "battles": 0, "losses": 0, "clears": 0, "clearsByLevel": {},
+ "clearsWithChar": {}, "touches": 0, "touchesByChar": {}, "gifts": 0,
+ "arenaFights": 0, "detects": 0, "soldierSells": 0, "itemGained": {}, "friendSends": 0}
 ```
+
+写入点：关卡结算（`instance.finish_level`）、军士升级·突破·分解（`char.*`）、
+抚摸·送礼（`favor.*`）、演习（`arena.exitfight`）、派遣（`detect.godetectcomplete`）、
+道具入账（`items.add_item`）。
+
+### 9.5 领奖与奖励形状
+
+```
+quest.submitquest {questKey}  ->  data.rewards = [{type, key, count}, ...]
+```
+
+* 形状是客户端定的：`ccuiManager.popupReward(rewards)` 会把它塞进
+  `RewardTipsLayer(rewards, cb, type, receiveState)`，而 `popupRewardWithItems` 拼的
+  就是 `{type, key, count}`（`manager/ccuimanager.jsc` 反汇编）。
+* `type` 用客户端 `REWARD_TYPE` 的字符串值：`1` 玩家经验（**key 给空串**）、`2` 道具、
+  `5` 军士、`6` 公会经验、`8` 装备（无数量，恒 1）。
+* 发放走 `items.settle()`：能发的只有 ITEM / PLAYER_EXP / SOLDIER；公会经验、装备
+  记进 `player.pendingRewards`（**不假装发成功**）。
+* 回包同时带 `items`（`items.changed_block`，只回客户端本来就认识的 key）让背包当场刷新；
+  道理和 §5 里讲的 `items.changed_block` 一样：只回客户端本来就认识的 key。
+* 主线以前 `submit` 只回 `rewards: []`（领了等于没领），现在三类统一发真奖励。
 
 上阵人数来自 `player.teams[curTeamIdx].soldierKeys` —— 也就是必须实现
 `player.updateteams`（见 §10.3），否则服务端永远以为队伍是空的。

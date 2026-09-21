@@ -224,8 +224,12 @@ def sell_soldiers(session: dict, msg: dict, req_id):
         except (TypeError, ValueError):
             continue
     if ids:
+        before = len(store.ensure_soldiers(player))
         player["soldiers"] = [s for s in store.ensure_soldiers(player)
                               if int(s.get("id") or 0) not in ids]
+        sold = max(0, before - len(player["soldiers"]))
+        if sold:
+            quests.on_soldier_sell(player, sold)   # 成就 13201「累计 N 个军士退伍」
         for team in player.get("teams") or []:
             keys = team.get("soldierKeys")
             if isinstance(keys, list):
