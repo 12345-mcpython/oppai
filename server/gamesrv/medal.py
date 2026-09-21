@@ -69,6 +69,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 import time
 
@@ -172,7 +173,23 @@ def bg_id_of(player: dict) -> str:
 
 
 def medal_wear(player: dict) -> dict:
+    """佩戴表（服务端内部一律用 dict）。
+
+    ⚠️ **上行的形状是 JSON 字符串**：客户端 `Player._getMedalWear` 是
+    `JSON.parse(this._medalWear)`、`updateMedalWear(v)` 是 `JSON.stringify(v)`
+    —— 转换点只有一处：`agent._player_block()`（发字符串）、
+    `medal.wear_medal()` 的回包（发对象，客户端自己 stringify）。
+    存档里存 dict，但**这里也认字符串**：devtools 的存档编辑器 / 老存档
+    可能把它写成串，别因为格式差异整个面板崩掉。
+    """
     wear = player.get("medalWear")
+    if isinstance(wear, str):
+        try:
+            wear = json.loads(wear)
+        except ValueError:
+            log.warning("存档里的 medalWear 不是合法 JSON：%r", wear[:60])
+            wear = {}
+        player["medalWear"] = wear
     if not isinstance(wear, dict):
         wear = {}
         player["medalWear"] = wear

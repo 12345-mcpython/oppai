@@ -8,6 +8,8 @@ route 名字来自客户端 src/manager/datamanager.js：
 
 from __future__ import annotations
 
+import json
+
 from ..gameproto import CODE_OK
 from .. import (arena, config, detect, exchange, favor, friends, gacha, instance, logx,
                 medal, quests, sign, store, subarea)
@@ -203,9 +205,21 @@ def _player_block(player: dict) -> dict:
     存档里只有 `{"1": 1}` 时，`_moduleOpenMark` 就只认 1 号，`popModuleOpen()`
     一口气弹了 31 个（logcat 里能看到紧接着的
     `player.setmoduleopenmark [2,3,…,32]` 回写）。
+
+    ⚠️⚠️ **`medalWear` 在这一层要转成 JSON 字符串**（2026-09-21 踩）：
+    客户端 `Player._getMedalWear` 是 `JSON.parse(this._medalWear)`、`updateMedalWear(v)`
+    是 `this._medalWear = JSON.stringify(v)` —— 也就是**存档里那份是字符串**。
+    发对象的话 `JSON.parse({})` 会先被转成 `"[object Object]"` 再解析 →
+    `SyntaxError: JSON.parse: unexpected character at line 1 column 2`，
+    而且它是在 `MedalLayer._initSelfUI -> _initMedalInfo` 里同步抛的 ⇒
+    整个「玩家信息/勋章」层建不出来，表现就是**左上角点了没反应**（还不报错到界面上）。
+    这里 `dict(player)` 是浅拷贝，改的是回包那份，不动存档里的 dict。
     """
     player["moduleOpenMark"] = _module_open_mark(player)
-    return player
+    data = dict(player)
+    data["medalWear"] = json.dumps(medal.medal_wear(player), ensure_ascii=False,
+                                  separators=(",", ":"))
+    return data
 
 
 def _module_open_mark(player: dict) -> dict:

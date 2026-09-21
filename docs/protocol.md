@@ -1610,6 +1610,14 @@ NPC 好友占 900001 起），存在存档里 —— 每次现算的话一重登
   （`401001`）和 `table_constant.default_medal_bg`（`501001`）。
 * `player.medalWear` = `{勋章id: 佩戴位下标}`。客户端 `isWearMedal` 是
   「**同一 group 只能戴一个**」的语义，所以服务端戴上新的会先把同组的摘掉。
+  ⚠️⚠️ **登录块里这个字段是 JSON 字符串**，不是对象：客户端
+  `Player._getMedalWear` 是 `JSON.parse(this._medalWear)`、`updateMedalWear(v)`
+  是 `this._medalWear = JSON.stringify(v)`。发对象的话 `JSON.parse({})` 会先被转成
+  `"[object Object]"` 再解析 → `SyntaxError: JSON.parse: unexpected character at
+  line 1 column 2`，而这个异常是在 `MedalLayer` ctor 里同步抛的 ⇒
+  整个「玩家信息/勋章」层建不出来，表现是**左上角点了没反应**。
+  转换点只有两处：`agent._player_block()`（发字符串）、`medal.wearmedal` 的回包（发对象）。
+  详见 `docs/pitfalls.md` 第 16 条。
 
 ### 13.4 衣柜 / 头像 / 勋章本体都是**背包道具**
 

@@ -1,6 +1,6 @@
 # 坑速查：按症状找原因
 
-> **一句话**：把这个项目里踩过的坑按「症状 → 真正原因 → 在哪个文件」列出来，共 15 条。
+> **一句话**：把这个项目里踩过的坑按「症状 → 真正原因 → 在哪个文件」列出来，共 16 条。
 >
 > **怎么用**：遇到「点了没反应 / 界面不动 / 数据不对 / 服务端明明发了客户端不认」，
 > 先扫下面那张表；命中之后再看对应编号那一节的定位过程。
@@ -25,6 +25,7 @@
 - [13. 包一层**原生构造函数**时，静态常量要一起抄](#13-包一层原生构造函数时静态常量要一起抄)
 - [14. 「界面点不动、服务端没请求」——**先去客户端日志里找异常**](#14-界面点不动服务端没请求先去客户端日志里找异常)
 - [15. 同名节点：`seekNodeByName` 是**层序**，不是深度优先](#15-同名节点seeknodebyname-是层序不是深度优先)
+- [16. 客户端会 `JSON.parse` 的字段：服务端必须发**字符串**](#16-客户端会-jsonparse-的字段服务端必须发字符串)
 
 ---
 
@@ -62,6 +63,7 @@
 | 宿舍里好感度涨了，**进度条/等级要重登才动** | 同上：`data.favor` 一直没人派发给 `FavorCenter.cb4ResFavor`（`Favor.prototype.update` 调用 0 次） | 同上 |
 | 关卡结算面板**「获得物资」永远空着**、`Exp+N` 恒为 0 | 奖励块挂在 `data.level` 上了；客户端读的是 `data.rewards.levelReward`，而 `data.level` 只走 `Level.updateLevel()` | `gamesrv/instance.py` |
 | 某个界面**整页空白 + 左上角返回键有按下反馈但退不出去** | 建界面时 `seekNodeByName` 命中了**更深处的同名节点**（我们的 polyfill 写成了深度优先，原版是层序）→ ctor 中途抛 TypeError → 后面的 `_recommendationListPanel` 没建出来 → 返回键回调里 `this._recommendationListPanel.destroy()` 再抛一次，`run(new MainLayer())` 永远走不到 | `patch.js` 的 polyfill（层序 BFS）—— 见第 15 条 |
+| **点了没反应**（按钮有反馈、界面一个字都不报），logcat 里 `SyntaxError: JSON.parse: unexpected character at line 1 column 2` | 客户端那个字段的 getter 是 `JSON.parse(this._x)`，服务端却发了**对象** → `JSON.parse({})` 先把对象转成 `"[object Object]"` 再解析，第 1 行第 2 列就是那个 `o` | 见第 16 条（`player.medalWear`） |
 | 真机/新系统**装不上**报 `INSTALL_FAILED_DEPRECATED_SDK_VERSION` | 原版 `targetSdkVersion=23`，Android 14+ 禁装 <23、Android 15+ 禁装 <24 | **已修**：`build_apk.py` 的 `normalize_android_manifest()` 每次打包把 targetSdk 提到 **33**（并给带 intent-filter 的组件补 `android:exported`，31+ 不写同样装不上）。现在 `.\build.ps1 -Install` 直接装，不再需要 `--bypass-low-target-sdk-block`（那条开关只在装**旧**包时用） |
 | 看 `abilist32` 为空就以为**跑不了** 32 位的 `armeabi` | **不一定** —— 有些 ROM 带厂商 32 位兼容层。实测一加 PLZ110（Android 16、`zygote64`、`abilist32` 空）能正常跑 | 直接装一个试；见 [`REPRODUCE.md`](../REPRODUCE.md) Step 4b |
 | 编好的**队伍一直消失**（重登又是空的） | 两个原因叠在一起：①**队伍 id 对不上** —— 客户端认的 id 是「服务端 teams 数组的**下标**」（`Player.initTeams` 里 `new Team(this._teams[i], this._character, i)`，第三个参数就是 `for..in` 的 key），所以 `player.updateteams` 发的是 `"0".."4"`；而 `new_team()` 早期给的是 `id = index + 1`（1 起）→ 服务端 `未知队伍 id=0`、**整单静默跳过**（偶尔还会"撞上"另一支队 → 写错队伍）。② 跑 `selftest_game.py` 的军士升级链路会真吃掉两个军士，`handlers/char.py` 顺手把它们从队伍里摘掉 | `store.new_team()` 的 `id` = `index`（0 起）+ `store.normalize_team_ids()`（加载时对齐老存档）+ `handlers/player.py` 的 `update_teams` 按 index 找；自检脚本 `snapshot_teams()`/`restore_teams()` 收尾放回编成 |
@@ -592,5 +594,48 @@ $od = "...\arm-linux-androideabi-objdump.exe"
   函数签名对了、能跑通，不代表语义对。这次的判据就是原版 `.so` 里那个 202 字节的函数；
 * 界面上「有按下反馈但没反应」= 回调接到了，但**回调体抛异常**了
   （按下反馈是按钮自己的事，跟回调无关）—— 直接去 logcat 找 `JS ERROR`。
+
+---
+
+## 16. 客户端会 `JSON.parse` 的字段：服务端必须发**字符串**
+
+**症状**（2026-09-21，勋章系统做完后点左上角玩家块时暴露）：
+
+* 主界面**左上角那块（头像 + 名字 + EXP）点了完全没反应**，其它按钮都正常；
+* 界面上不弹任何错误，logcat 里是一串（点几次就几条）：
+
+  ```
+  [oppai] JS ERROR: SyntaxError: JSON.parse: unexpected character at line 1 column 2 of the JSON data
+      @ .../src/data/player.js:807
+      ← MedalLayer<._initMedalInfo @ .../src/ui/medal/medallayer.js:480
+      ← MedalLayer<._initSelfUI    @ .../src/ui/medal/medallayer.js:215
+  ```
+
+**真正原因**：`Player._getMedalWear` 是
+
+```js
+get medalWear() { return JSON.parse(this._medalWear); }
+updateMedalWear(v) { this._medalWear = JSON.stringify(v); }
+```
+
+也就是说 **`player.medalWear` 在线上的形状是「JSON 字符串」**，而服务端发的是对象。
+`JSON.parse({})` 会先把对象转成字符串 `"[object Object]"`，第 1 行第 2 列正是那个 `o`
+—— 报错里的 `column 2` 就是判据。异常是在 `MedalLayer` 的 ctor 里**同步**抛的，
+所以整个层建不出来，玩家看到的就是「点了没反应」。
+
+**修法**：`agent._player_block()` 把存档那份 dict 转成字符串再发
+（`json.dumps(..., separators=(",", ":"))`）；`medal.medal_wear()` 反过来两种都认
+（存档里是 dict，devtools 手改过可能是串）。`medal.wearmedal` 的回包仍然是**对象**
+—— `Player.updateMedalWear` 自己会 `JSON.stringify`。
+
+**教训**：
+
+* **凡是喂给客户端的字段，先去它的 getter 里看一眼有没有 `JSON.parse`/`JSON.stringify`**
+  —— 这类字段在线上的形状是「字符串」而不是结构体。整套 `assets/src/data/*.jsc` 里
+  这么干的目前只有 `Player._getMedalWear`（按 `callprop "parse"` 扫过一遍），
+  但**每加一个新模块都要顺手扫一次**；
+* 「点了没反应 + 界面无报错」优先怀疑**回调体抛异常**（见第 14 条）——
+  这次报错只出现在 **logcat**，客户端界面一个字都没弹；
+* 服务端**两种形状都收**（dict / 字符串）能省掉一次「老存档把面板打不开」的回归。
 
 ---

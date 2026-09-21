@@ -2342,9 +2342,23 @@ def medal_check(ok: bool) -> bool:
             row = items.table("table_item").get(val) or {}
             if str(row.get("t")) != itype:
                 bad.append(f"player.{field}={val!r} 不是 type={itype} 的道具")
-        wear = pdata.get("medalWear")
+        # ⚠️ `medalWear` 在**登录块里是 JSON 字符串**（客户端 `Player._getMedalWear`
+        # 就是 `JSON.parse(this._medalWear)`）—— 发对象的话 `JSON.parse({})` 先变成
+        # `"[object Object]"` 再解析，抛 SyntaxError 把整个勋章层建不出来
+        # （表现：左上角点了没反应）。2026-09-21 踩过。
+        wear_raw = pdata.get("medalWear")
+        if not isinstance(wear_raw, str):
+            bad.append(f"player.medalWear 是 {type(wear_raw).__name__}，"
+                       f"登录块里必须是 JSON 字符串（客户端 _getMedalWear 会 JSON.parse）")
+            wear = {}
+        else:
+            try:
+                wear = json.loads(wear_raw)
+            except ValueError:
+                bad.append(f"player.medalWear 不是合法 JSON：{wear_raw[:60]!r}")
+                wear = {}
         if not isinstance(wear, dict):
-            bad.append(f"player.medalWear 是 {type(wear).__name__}，要是 map（勋章id->佩戴位）")
+            bad.append(f"medalWear 解析完是 {type(wear).__name__}，要是 map（勋章id->佩戴位）")
             wear = {}
         for mid, idx in wear.items():
             if str(mid) not in table:
