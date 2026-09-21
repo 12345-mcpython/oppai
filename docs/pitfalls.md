@@ -1,6 +1,6 @@
 # 坑速查：按症状找原因
 
-> **一句话**：把这个项目里踩过的坑按「症状 → 真正原因 → 在哪个文件」列出来，共 14 条。
+> **一句话**：把这个项目里踩过的坑按「症状 → 真正原因 → 在哪个文件」列出来，共 15 条。
 >
 > **怎么用**：遇到「点了没反应 / 界面不动 / 数据不对 / 服务端明明发了客户端不认」，
 > 先扫下面那张表；命中之后再看对应编号那一节的定位过程。
@@ -24,6 +24,7 @@
 - [12. 「服务端改了、客户端不动」——先查**推数据**有没有派发](#12-服务端改了客户端不动先查推数据有没有派发)
 - [13. 包一层**原生构造函数**时，静态常量要一起抄](#13-包一层原生构造函数时静态常量要一起抄)
 - [14. 「界面点不动、服务端没请求」——**先去客户端日志里找异常**](#14-界面点不动服务端没请求先去客户端日志里找异常)
+- [15. 同名节点：`seekNodeByName` 是**层序**，不是深度优先](#15-同名节点seeknodebyname-是层序不是深度优先)
 
 ---
 
@@ -60,6 +61,7 @@
 | 服务端**明明发了**数据（日志里有），客户端界面不动 | 中间那层转发（`responseConfig`）在这套引擎上不跑；`patch.js` 的 RESP-DISPATCH 补了没有 | 第 12 条 + [protocol.md §5.2](protocol.md) |
 | 宿舍里好感度涨了，**进度条/等级要重登才动** | 同上：`data.favor` 一直没人派发给 `FavorCenter.cb4ResFavor`（`Favor.prototype.update` 调用 0 次） | 同上 |
 | 关卡结算面板**「获得物资」永远空着**、`Exp+N` 恒为 0 | 奖励块挂在 `data.level` 上了；客户端读的是 `data.rewards.levelReward`，而 `data.level` 只走 `Level.updateLevel()` | `gamesrv/instance.py` |
+| 某个界面**整页空白 + 左上角返回键有按下反馈但退不出去** | 建界面时 `seekNodeByName` 命中了**更深处的同名节点**（我们的 polyfill 写成了深度优先，原版是层序）→ ctor 中途抛 TypeError → 后面的 `_recommendationListPanel` 没建出来 → 返回键回调里 `this._recommendationListPanel.destroy()` 再抛一次，`run(new MainLayer())` 永远走不到 | `patch.js` 的 polyfill（层序 BFS）—— 见第 15 条 |
 | 真机/新系统**装不上**报 `INSTALL_FAILED_DEPRECATED_SDK_VERSION` | 原版 `targetSdkVersion=23`，Android 14+ 禁装 <23、Android 15+ 禁装 <24 | **已修**：`build_apk.py` 的 `normalize_android_manifest()` 每次打包把 targetSdk 提到 **33**（并给带 intent-filter 的组件补 `android:exported`，31+ 不写同样装不上）。现在 `.\build.ps1 -Install` 直接装，不再需要 `--bypass-low-target-sdk-block`（那条开关只在装**旧**包时用） |
 | 看 `abilist32` 为空就以为**跑不了** 32 位的 `armeabi` | **不一定** —— 有些 ROM 带厂商 32 位兼容层。实测一加 PLZ110（Android 16、`zygote64`、`abilist32` 空）能正常跑 | 直接装一个试；见 [`REPRODUCE.md`](../REPRODUCE.md) Step 4b |
 | 编好的**队伍一直消失**（重登又是空的） | 两个原因叠在一起：①**队伍 id 对不上** —— 客户端认的 id 是「服务端 teams 数组的**下标**」（`Player.initTeams` 里 `new Team(this._teams[i], this._character, i)`，第三个参数就是 `for..in` 的 key），所以 `player.updateteams` 发的是 `"0".."4"`；而 `new_team()` 早期给的是 `id = index + 1`（1 起）→ 服务端 `未知队伍 id=0`、**整单静默跳过**（偶尔还会"撞上"另一支队 → 写错队伍）。② 跑 `selftest_game.py` 的军士升级链路会真吃掉两个军士，`handlers/char.py` 顺手把它们从队伍里摘掉 | `store.new_team()` 的 `id` = `index`（0 起）+ `store.normalize_team_ids()`（加载时对齐老存档）+ `handlers/player.py` 的 `update_teams` 按 index 找；自检脚本 `snapshot_teams()`/`restore_teams()` 收尾放回编成 |
@@ -524,5 +526,71 @@ WS 侧要替换构造函数（就出事）。定位靠的是**脱离游戏逻辑
 * 客户端表里**没有图标的那两个键**（`100101`/`100102`）是**计数器**，不是道具：
   只能躺在背包里（`Bag.getList(ITEM_TYPE.ALL)` 会跳过 `type == CURRENCY`），
   永远不要放进奖励列表
+
+---
+
+## 15. 同名节点：`seekNodeByName` 是**层序**，不是深度优先
+
+**症状**（2026-09-21，好友系统做完第一次进面板时暴露）：
+
+* 好友（萌友）面板**整页空白** —— 页签、标题、「数量：」「今天可收取：」都在，
+  但列表一条都没有；
+* 左上角**返回键点不动**：有按下反馈，就是不退；
+* logcat 里一串：
+
+  ```
+  [oppai] JS ERROR: TypeError: sendRedDotCase is null  @ .../ui/friend/friendlistpanel.js:56
+  [oppai] JS ERROR: TypeError: this._friendListPanel is undefined  @ .../ui/friend/friendlayer.js:114
+  [oppai] JS ERROR: TypeError: this._recommendationListPanel is undefined  @ .../ui/friend/friendlayer.js:214
+  ```
+
+**真正原因**：`ccui.helper.seekNodeByName` 的**遍历顺序错了**。
+
+* 原版 `libcocos2djs.so` 里这个绑定是**层序（BFS）**；
+  我们这边因为 cocos2d-js v3.6 没有这个 C++ 绑定（3.7 才加），
+  在 `patch.js` 里补了一个 **深度优先** 的实现；
+* 好友面板里 `sendbutton` / `chargedbutton` 这俩名字**重名**：
+  panel 自己的页签按钮在 `chargedbuttonpanel` 下，而**每条好友条目**
+  （`friendlistitemlayer.csb`）里也有同名的 `sendbutton` / `chargedbutton`；
+* `FriendListPanel._initViewLayer` 先把条目塞进 `scrollview`（panel 的**第一个**子节点），
+  然后 `_initButtons` 才 `seekNodeByName(panel, "sendbutton")` → 深度优先先钻进
+  scrollview，命中的是**条目里**那个按钮 —— 它没有 `newreseffect2` 子节点，
+  于是 `sendRedDotCase.visible = false` 抛 TypeError；
+* ctor 断在 `_initButtons` ⇒ `_friendListPanel` / `_recommendationListPanel`
+  都没赋上值 ⇒ 后面 `_updateView`（`friendlayer.js:114`）和
+  `RecommendationListPanel` 回调（`:214`）接连抛；返回键的回调是
+  `this._recommendationListPanel.destroy(); cc.director.getRunningScene().run(new MainLayer())`
+  —— 第一句就抛，**`run(MainLayer)` 永远走不到**，所以"有反馈但不退"。
+
+**原版是什么行为**（不是猜的，反汇编核实的）：
+
+```powershell
+# 从原版 APK 里抠出原始 .so
+python -c "import zipfile,io;io.open(r'out\orig-libcocos2djs.so','wb').write(zipfile.ZipFile(r'game\original\zcsmw-original.apk').read('lib/armeabi/libcocos2djs.so'))"
+$re = "engine\ndk\android-ndk-r10e\toolchains\arm-linux-androideabi-4.9\prebuilt\windows-x86_64\bin\arm-linux-androideabi-readelf.exe"
+& $re -sW out\orig-libcocos2djs.so | Select-String seekNodeByName
+#   _ZN7cocos2d2ui6Helper14seekNodeByNameEPNS_4NodeERKSs   00aea0fd  202
+$od = "...\arm-linux-androideabi-objdump.exe"
+& $od -d --start-address=0xaea0fc --stop-address=0xaea1d6 out\orig-libcocos2djs.so
+```
+
+反汇编出来的结构是「一个 `std::vector<Vector<Node*>*>` 当**层队列** + 下标 `r7` 递增」：
+先比 root 自己，再扫**当前层**全部节点（顺手把它们的 `getChildren()` 压进队列），
+扫完一层才进下一层（`_M_emplace_back_aux` 压队；`aea19a` 处 `r7++` 后跟 vector 的
+**实时 size** 比）。`seekNodeByTag`（0xaea059，164 字节）是同一套结构。
+
+**修法**：`patch.js` 里两个 polyfill 都改成层序（见 `seekNodeByName` 那段注释）。
+改完之后：好友面板 5 条好友正常列出、返回键能退；
+情报室返回键（`patch.js` 第 11 条那个 workaround）**根因也一起没了**，
+它自己会跳过（`btn === this._returnBtn`）。
+
+**教训**：
+
+* 「同名节点」在这套客户端里**到处都有**（csb 复用的按钮名），凡是
+  `seekNodeByName(某个容器, "很普通的名字")` 都有这个风险；
+* 自己补的**引擎语义**（polyfill / 绑定）必须**跟原版逐条对齐** ——
+  函数签名对了、能跑通，不代表语义对。这次的判据就是原版 `.so` 里那个 202 字节的函数；
+* 界面上「有按下反馈但没反应」= 回调接到了，但**回调体抛异常**了
+  （按下反馈是按钮自己的事，跟回调无关）—— 直接去 logcat 找 `JS ERROR`。
 
 ---

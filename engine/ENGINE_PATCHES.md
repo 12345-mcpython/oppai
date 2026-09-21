@@ -332,8 +332,14 @@ if (nullptr != _node && _betweenSkewX != 0 || _betweenSkewY != 0)   // && 优先
 | 差异 | vanilla 3.6 | 游戏那版 |
 |---|---|---|
 | `ui::Helper::seekNodeByName(Node*,name)` | 不存在（只有收 `Widget*` 的） | 存在（3.7+ 才加） |
+| ↳ 它的**遍历顺序** | ——（我们在 `patch.js` 里补的 polyfill） | **层序（BFS）**：`_ZN7cocos2d2ui6Helper14seekNodeByNameEPNS_4NodeERKSs` @ `0xaea0fd`（202 字节，层队列 + 下标递增）；`seekNodeByTag` @ `0xaea059`（164 字节）同一套 |
 | `RotationSkewFrame::onApply` 优先级 | 有 bug（4 处） | 已修 |
 | `setLastFrameCallFunc` 传参 | `invoke(0, ...)` 不传 | 传动画名 |
+
+> ⚠️ **遍历顺序也是"原版语义"的一部分**：`patch.js` 第一版 polyfill 写成了深度优先，
+> 结果「同名节点取到更深那个」——好友面板整页崩（`sendRedDotCase is null`）、
+> 情报室返回键点不动，两个都真踩过。2026-09-21 按上面的地址反汇编原版 `.so`
+> 才定成层序。判据/过程见 `docs/pitfalls.md` 第 15 条。
 
 对比脚本见 `E:\code\zcsmw\engine\src\cocos2d-x-new`（cocos2d-x 3.17 的
 ActionTimeline 目录，sparse checkout）。

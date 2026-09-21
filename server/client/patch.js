@@ -7,6 +7,11 @@
 //      原版 libcocos2djs.so 有这两个绑定，vanilla cocos2d-js v3.6 没有。
 //      缺了 UpdateScene._init() 抛 "seekNodeByName is not a function"，
 //      热更新界面建不出来 -> 一直黑屏。
+//      ⚠️ 遍历顺序必须照着原版写：**层序（BFS）**，不是深度优先。
+//      原版 so 里反汇编核实过（`_ZN7cocos2d2ui6Helper14seekNodeByNameEPNS_4NodeERKSs`
+//      @0xaea0fd，202 字节，层队列 + 下标递增）。写成深度优先会让
+//      「同名节点先命中更深那个」—— 好友面板整页崩、情报室返回键点不动，
+//      两个都真踩过（见下面 11) 和 12)）。
 //
 //   2. ActionTimeline 回调补动画名
 //      v3.6 的自动绑定是 func->invoke(0, ...)，而游戏回调写的是
@@ -67,10 +72,22 @@
 //  11. 情报室左上角返回键（`seekNodeByName` 命中了隐藏页里的同名节点）
 //      症状是「菜单 → 情报室，左上角那个返回箭头点不动」，而同一屏的类型页签、
 //      「升序」都能点。根因：`illustrationscommonlayer.csb` 里有**两个**
-//      `returnbutton`，`_init` 的 `seekNodeByName(_ui, "returnbutton")` 深度优先
-//      取到的是 `playillustrationspanel/levelpanel`（两级都不可见）里那个，
+//      `returnbutton`，`_init` 的 `seekNodeByName(_ui, "returnbutton")` 取到的是
+//      `playillustrationspanel/levelpanel`（两级都不可见）里那个，
 //      玩家看得见的那个（`returnbuttonpanel` 下）从来没接过回调。
+//      ⚠️ 这条的**根因已经由 1) 修掉了**（polyfill 改成层序后，层序会先命中
+//      浅的那个 = 可见的那个），这段现在会自己跳过（`btn === this._returnBtn`）。
+//      留着当兜底，防以后 polyfill 又被写回深度优先。
 //      详见文件末尾 ILLUST-RETURN 那段。
+//
+//  12. 好友（萌友）面板整页崩 —— 12) 其实是 1) 的后果，记在这里当案例：
+//      `FriendListPanel._initButtons` 找 `sendbutton` 时命中了**好友条目**里的
+//      同名按钮（条目 csb 里也有 sendbutton/chargedbutton），
+//      它没有 `newreseffect2` 子节点 → `sendRedDotCase.visible = false` 抛
+//      TypeError → ctor 断在 `_initButtons` → 好友列表空白、左上角返回键
+//      接不到回调（有按下反馈但退不出去）。修的是 1)，这段没有单独代码。
+//      证据：logcat `TypeError: sendRedDotCase is null @ friendlistpanel.js:56`
+//      + `this._friendListPanel is undefined @ friendlayer.js:114`。
 //
 // 探针/诊断部分在 probe.js —— release 可以不打包那个文件。
 // 两个文件互相独立，这个文件不依赖 probe.js 的任何东西。
@@ -228,45 +245,67 @@
     //
     // 原生层注册不了 —— ccui.helper 是 jsb_boot.js 用 JS 建的，
     // 原生 callback 跑在它之前会被覆盖。所以在这里补。
+    //
+    // ⚠️⚠️ **必须是层序（BFS），不能是深度优先** —— 这是原版的行为，
+    //   2026-09-21 从原版 APK 的 lib/armeabi/libcocos2djs.so 里反汇编核实的：
+    //
+    //     readelf -sW out/orig-libcocos2djs.so | grep seekNodeByName
+    //       _ZN7cocos2d2ui6Helper14seekNodeByNameEPNS_4NodeERKSs   00aea0fd  202
+    //     arm-linux-androideabi-objdump -d --start-address=0xaea0fc ... orig-libcocos2djs.so
+    //
+    //   它的结构是「一个 std::vector<Vector<Node*>*> 当层队列 + 下标 r7 递增」：
+    //   先比 root 自己，再扫**当前层**所有节点（顺带把它们的孩子压进队列），
+    //   扫完一层才进下一层（`_M_emplace_back_aux` 压队、aea19a 处 r7++ 后
+    //   跟 vector 的实时 size 比）。seekNodeByTag（0xaea059，164 字节）同一套结构。
+    //
+    //   写成深度优先的后果（都真踩过）：
+    //     * 好友面板（`FriendListPanel._initButtons` 找 `sendbutton`）——
+    //       `_initViewLayer` 先把 5 个好友条目塞进 scrollview，条目自己的 csb
+    //       （friendlistitemlayer）里**也有** `sendbutton`/`chargedbutton`，
+    //       而 scrollview 是 panel 的第一个子节点 ⇒ 深度优先命中的是**条目**那个，
+    //       它没有 `newreseffect2` 子节点 ⇒ `sendRedDotCase.visible = false`
+    //       抛 TypeError ⇒ ctor 断在 `_initButtons` ⇒ 好友面板空白、左上角返回键
+    //       没接上回调（点得动但退不出去）。
+    //     * 情报室返回键（见文件末尾 11) 那段）：隐藏页里的 `returnbutton` 更深，
+    //       层序会先命中浅的那个 = 玩家看得见的那个。
     // ------------------------------------------------------------------
     (function () {
         var H = (typeof ccui !== "undefined" && ccui.helper) ? ccui.helper : null;
         if (!H) { emit("POLYFILL ccui.helper 不存在，跳过"); return; }
 
+        // 层序（BFS）遍历：先自己，再一层一层往下。children 用队列摊平，
+        // 顺序 = 原版（同层按父节点的遍历顺序、同父按子节点顺序）。
+        function bfs(root, match) {
+            if (!root) { return null; }
+            var queue = [root];
+            var qi = 0;
+            while (qi < queue.length) {
+                var node = queue[qi++];
+                if (match(node)) { return node; }
+                var kids = null;
+                try { kids = node.getChildren ? node.getChildren() : null; } catch (e) { }
+                if (!kids) { continue; }
+                for (var i = 0; i < kids.length; i++) { queue.push(kids[i]); }
+            }
+            return null;
+        }
+
         if (typeof H.seekNodeByName !== "function") {
             H.seekNodeByName = function (root, name) {
-                if (!root) { return null; }
-                try {
-                    if (root.getName && root.getName() === name) { return root; }
-                } catch (e) { }
-                var kids = null;
-                try { kids = root.getChildren ? root.getChildren() : null; } catch (e) { }
-                if (!kids) { return null; }
-                for (var i = 0; i < kids.length; i++) {
-                    var hit = H.seekNodeByName(kids[i], name);
-                    if (hit) { return hit; }
-                }
-                return null;
+                return bfs(root, function (n) {
+                    try { return !!(n.getName && n.getName() === name); } catch (e) { return false; }
+                });
             };
-            emit("POLYFILL ccui.helper.seekNodeByName 已补");
+            emit("POLYFILL ccui.helper.seekNodeByName 已补（层序，和原版一致）");
         }
 
         if (typeof H.seekNodeByTag !== "function") {
             H.seekNodeByTag = function (root, tag) {
-                if (!root) { return null; }
-                try {
-                    if (root.getTag && root.getTag() === tag) { return root; }
-                } catch (e) { }
-                var kids = null;
-                try { kids = root.getChildren ? root.getChildren() : null; } catch (e) { }
-                if (!kids) { return null; }
-                for (var i = 0; i < kids.length; i++) {
-                    var hit = H.seekNodeByTag(kids[i], tag);
-                    if (hit) { return hit; }
-                }
-                return null;
+                return bfs(root, function (n) {
+                    try { return !!(n.getTag && n.getTag() === tag); } catch (e) { return false; }
+                });
             };
-            emit("POLYFILL ccui.helper.seekNodeByTag 已补");
+            emit("POLYFILL ccui.helper.seekNodeByTag 已补（层序，和原版一致）");
         }
     })();
     // ------------------------------------------------------------------

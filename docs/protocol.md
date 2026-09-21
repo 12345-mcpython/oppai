@@ -1551,3 +1551,10 @@ NPC 好友占 900001 起），存在存档里 —— 每次现算的话一重登
 链路验证：`python script/selftest_game.py --only 好友`（形状 / 上限 / 申请自动同意 /
 送物资 + 日常 18201 / 收物资进背包 / 重复与上限 / 同意拒绝删除 / 换日，收尾还原）。
 
+⚠️ **客户端必须打 `patch.js` 的层序 polyfill 才能显示这个面板**：
+`ccui.helper.seekNodeByName` 原版是**层序**遍历，我们补成深度优先的话，
+`FriendListPanel._initButtons` 会命中**好友条目里**的同名 `sendbutton`
+（条目 csb 里也有），ctor 直接抛 `sendRedDotCase is null` ——
+症状是「面板整页空白 + 左上角返回键有反馈但退不出去」。
+详见 `docs/pitfalls.md` 第 15 条。
+
