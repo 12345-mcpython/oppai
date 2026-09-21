@@ -22,6 +22,7 @@
 - [14. 分享 / 礼包兑换（share.* / convert.*）](#14-分享--礼包兑换share--convert)
 - [15. 助战（friendsupport.*）](#15-助战friendsupport)
 - [16. 私密剧情（diary.*）](#16-私密剧情diary)
+- [17. 好友 BOSS（boss.*）](#17-好友-bossboss)
 
 ---
 
@@ -1850,4 +1851,171 @@ cb() { dataManager.diary.unlockStory({chapterId, levelId}, function (err, res) {
 验证：`python script/selftest_game.py --only 私密剧情`（登录块形状、值是整数 1、
 `getdiarybuyinfo` 形状、解锁按章节价扣金条、重复 202 / 错章 204 / 错关 203 /
 金条不足 201，收尾还原存档与道具）。
+
+---
+
+## 17. 好友 BOSS（`boss.*`）
+
+### 17.1 六条路由
+
+| route | 请求 | 成功 `data` |
+| --- | --- | --- |
+| `boss.getbosslist` | `{type:"friend"}` | `{friendBossList: {bossId: 行}, bossRecordList: {boss表key: 行}}`（**都是 map**） |
+| `boss.startfight` | `{id, curTeamIdx}` | `{boss: {id, type:"friend", curHp}}` |
+| `boss.finishfight` | `{id, harm}` | `{boss, record, result: {harmReward, killReward, playerInfo, exp}}` |
+| `boss.getbossfightlog` | `{id}` | **记录数组本身**（不是 `{logList: […]}`） |
+| `boss.randomsharefriend` | `{id}` | `{shareFriends: [{name, lv, headId, asstKey, …}]}` |
+| `boss.shareboss` | `{id}` | 更新后的 `record`（`{firstFightFalg, shareFlag}`） |
+
+⚠️⚠️ **`data` 那一层不是 `{boss: {…}}`**：反汇编里是
+
+```js
+// src/data/bosscenter.js
+syncBossList: server.request('boss.getbosslist', {type}, function (err, res) {
+    if (res.code === 200) self.update(res.data);      // ← 整个 data
+});
+update: function (data) {
+    if (data.friendBossList) { … }                    // ← 顶层这两个键
+    if (data.bossRecordList) { … }
+}
+```
+
+`data.boss` 这个键另有用途：`BossCenter.updateByServer(data)` 只认 `data.rewardList`
+（登录块那份**击杀奖励列表**）—— 详见 §17.4。
+
+### 17.2 行形状（`BossUtil.ctor` 逐个读，字段名一个都不能差）
+
+```js
+// src/data/bossunit.js
+_ctor(args)   { id, key, type, ownerId, initHp, curHp, levelKey,
+                appearTimeSec, disappearTimeSec, ownerName, lv }
+_loadTable()  table_world_boss[this._key].{consume_key, consume_count, quality,
+                name, head_icon, desc, boss_level_key, level_robot_id}
+```
+
+也就是说 **BOSS 的名字 / 品质 / 消耗 / 战斗关卡全在客户端表里**，
+服务端只需要给 `key` + 状态。`table_world_boss`（客户端 36 行）的形状：
+
+| 字段 | 例子 | 说明 |
+| --- | --- | --- |
+| `boss_level_key` | `"401819"` | **打它时进的那一关**（`bossmanager.onFight` 用它当 `doorParams.id`，那一关的 `enemy_ids` 第一项正好是 `"2"+level_robot_id`） |
+| `level_robot_id` | `"40181901"` | BOSS 单位：`table_npc[level_robot_id].key` -> `table_boss[key]`（`Boss._initWithNpcId`） |
+| `init_hp` / `consume_count` / `quality` / `exist_time` | `150000` / `1` / `20` / `"0:10:00"` | 三档：`150000·1·20·10分钟` / `450000·2·30·1.5小时` / `1500000·3·40·5小时` |
+| `consume_key` | `"100201"` | `ITEM_KEY.FRIEND_BOSS_POINT`（BP） |
+| `exp` | `500/1000/2000` | 击杀经验 |
+
+⭐ **`levelKey`（服务端给）和 `boss_level_key`（表里）不是一回事**：
+
+* `boss_level_key` = 打它进哪一关；
+* `levelKey` = **它出现在哪一关** —— 客户端 `getChapterBossInfo(chapterId)` 是
+
+  ```js
+  var levels = dataManager.instance.getLevels(chapterId);
+  for (…每个 boss…) if (boss.levelKey === levels[i].levelId) { hasBoss = true; … }
+  ```
+
+  也就是说 `levelKey` 必须落在**某个章节的关卡列表**里，否则章节面板里看不到 BOSS 入口。
+  本服取「该族对应章节的最后一关」（`fb4018` -> 章节 `4018` -> 最后一关 `401818`），
+  见 `boss._appear_level()`。
+
+### 17.3 战斗链路（`src/manager/bossmanager.js`）
+
+```js
+onFight(bossId, cb)
+  judgeStartFight(bossId)        // 本地校验：不存在/已死/已逃/BP 不够/军士库满
+  bossCenter.startFight(bossId, function (err) {            // boss.startfight
+      var robotParams = {};
+      robotParams[boss.levelRobotId] = { base: {lv: boss.lv, hp: boss.initHp,
+                                               curHp: boss.curHp} };
+      BattleScene.combat({ id: boss.bossLevelKey, robotParams, team,
+                           resultCb, showCb, endCb, … });
+  });
+resultCb(args)  // 从 battleInfo.enemyUnitsInfo[levelRobotId].hp 反推伤害
+  finishFight(bossId, harm, function (rewards) {            // boss.finishfight
+      BossFightResultLayer.pop({result: rewards, …});
+  });
+```
+
+两点值得记：
+
+* **`harm` 是客户端算的**（`curHp - enemyUnitsInfo[levelRobotId].hp`），服务端必须
+  自己夹（不能超过剩余血量、不能为负）；
+* `robotParams` 是**按 `levelRobotId` 索引的 map**，`Boss._initWithNpcId` 里再取
+  `robotParams.base` —— 所以 HP 覆盖是按 NPC id 精确命中的，服务端只要把
+  `curHp`/`initHp` 给对就行。
+
+### 17.4 登录块 `data.boss` 是**击杀奖励列表**
+
+```js
+BossCenter.ctor(data) {
+    this._friendBossObj = {}; this._bossRecordObj = {}; …
+    this._updateBossKillReward(data);          // data = [{bossKey, reward:{scores,cards,items}}]
+}
+BossCenter.updateByServer(data) { this._updateBossKillReward(data.rewardList); }
+```
+
+⚠️ 以前这里发的是 `{bossShareObj, lastFightBossId, friendBossFlag, bossKillRewardList}`
+（照着 `_friendBossObj` 那些字段猜的）—— **一个都不是 ctor 读的**。
+现在发空数组 `[]`（原版是「萌友打死了你的 BOSS」的奖励，单机没有这回事），
+但 BOSS 列表本身走 `boss.getbosslist`，见 §17.1。
+
+### 17.5 记录 / 分享
+
+```js
+_bossRecordObj[boss.key] = {firstFightFalg, shareFlag}      // 按**表 key**索引，不是 bossId
+isFirstFight(id)  = boss.ownerId == me && !record.firstFightFalg
+getBossConsume(id) = (ownerId == me && (没记录 || !firstFightFalg) && status == FIGHT) ? 0
+                                                                                      : consumeCount
+isNeedShare(id)   = ownerId == me && record && record.firstFightFalg && !record.shareFlag
+```
+
+* **自己的 BOSS 第一场打免费**（`firstFightFalg` 落下来之前都免费）；
+* 打完一场之后 `isNeedShare` 为真 -> `bossManager` 会顺手弹 `BossShareLayer.firstFightShare()`
+  请你把 BOSS 分享给萌友；
+* ⚠️ **分享和取消分享是同一条 route**（`shareBoss()` 和 `cancelShareBoss()` 发的请求
+  一模一样，都只有 `id`）—— 服务端只能按 `record.shareFlag` 做成**开关**。客户端自己
+  那道闸（`judgeShare` -> `isNeedShare`）在 `shareFlag == 1` 时**两条路都拦住**
+  （toast 206「已经分享过了」），所以实机上「取消」基本点不到：那是客户端自己的毛病。
+
+挑战记录条目（`BossRecordInfoItem.update` 读）：`{name, lv, harm, createTimeSec, headId, asstKey}`
+（`headId` 走 `medal.getHeadSpr`，空则退回 `charManager.createCharHeadNode({key: asstKey})`）。
+
+### 17.6 失败码（`src/config/bossconfig.js` 的 `BOSS_CODE_DICT`）
+
+| 码 | `table_dictionary` | 文案 | 本服什么时候回 |
+| --- | --- | --- | --- |
+| 201 | 10000 | 参数错误 | `finishfight` 的 `harm` 是负数/非数字 |
+| 202 | 2202 | 木有找到对应BOSS | 列表里没有这个 id（客户端收到会 `_deleteBoss`） |
+| 204 | 2204 | 很可惜，BOSS已经被击杀了！ | `curHp <= 0` 还来打 |
+| 205 | 2205 | 太慢了，BOSS都逃走了！！ | 过了 `disappearTimeSec` |
+| 209 | 2209 | BP不足了！ | BP < `consume_count` |
+| 216 | 2217 | 要完成一次挑战才能分享给好友哦！ | 没打过就想 `shareboss` / `randomsharefriend` |
+| 215 | 2215 | 木有可以分享BOSS信息的萌友呢！ | 一个能分享的萌友都没有 |
+| 206/214 | 2206/2214 | 已经分享过 / 已经取消过 | 分享开关的另两种状态（客户端一般先拦住） |
+
+（`BOSS_CODE_DICT` 里还有 203/207/208/210/211/212/213，分别是「没有挑战权限 / 没有挑战记录 /
+另一场 BOSS 战斗中 / 军士库满员 / 木有找到可挑战的 BOSS / 无效的 BOSS ID / 找不到分享的萌友」，
+本服这几条用不到：单机没有并发战斗，军士库满员客户端自己就拦了。）
+
+### 17.7 私服的取舍
+
+| 项 | 本服 | 原版 | 旋钮 |
+| --- | --- | --- | --- |
+| BOSS 从哪来 | 服务端**直接刷**：3 只，1 只挂自己名下（首战免费 + 能分享）、2 只挂 NPC 萌友名下 | 好友的 BOSS（列表里是别人的） | `boss.BOSS_COUNT` / `owner_of()` |
+| 刷哪几族 | `fb4018 / fb4019 / fb4037`（只有这三族的出现关卡落在真实章节里） | 4 族（`fb4038` 那族没有 `4038` 章节，点不进去） | `boss.FAMILIES` |
+| BP（`100201`） | 每天补到 **30** | 靠活动 / 好友互动攒 | `boss.POINT_DAILY` |
+| 伤害奖励 | 按伤害比例给萌钞（打满一只 = 5000） | `harm_relate_key` 指向的表**客户端全库 0 命中**（原版服务端数据） | `boss.HARM_MONEY` |
+| 击杀奖励 | 金条 30 + 萌钞 20000 + 好人卡 5 + BP 3，再按品质（20/30/40）乘 1/2/4 | 同上，无从考证 | `boss.KILL_REWARD` |
+| 死了/跑了的 BOSS | 在列表里再留 **5 分钟**（客户端要画「已击杀/已逃跑」，也是留给分享和看记录的时间） | 未知 | `boss.KEEP_DEAD_SEC` |
+
+⚠️ **活动章节也得发**：好友 BOSS 的入口在「活动/分区」那个界面里
+（`ActivityInstanceLayer` 的 `BossInfoPanel.worldbosspanel` -> `BossListLayer`），
+而 `ActivityChapterPanel` 两个页签分别按 `table_chapter.type == "4"`（活动）和 `"5"`（分区）
+过滤。本服原来 `instance.getactivityinstance` **只发 type=="5" 的 4 个分区章节** ——
+「活动」页签永远是空的（46 个 type=="4" 章节一个都没发），BOSS 也就没地方显示。
+现在两类都发（`instance.ACTIVITY_CHAPTER_TYPES`）。
+
+验证：`python script/selftest_game.py --only 好友BOSS`（列表行形状、`levelKey` 落在活动章节里、
+首战免费 / 再战扣 BP、伤害与击杀奖励、击杀经验、挑战记录是数组、分享开关、
+202/204/209/216，收尾还原 BOSS 存档/背包/经验）。
 

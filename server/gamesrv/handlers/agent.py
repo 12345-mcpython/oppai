@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 
 from ..gameproto import CODE_OK
-from .. import (arena, config, detect, diary, exchange, favor, friends, gacha, instance,
+from .. import (arena, boss, config, detect, diary, exchange, favor, friends, gacha, instance,
                 logx, medal, quests, share, sign, store, subarea)
 from . import route
 
@@ -148,12 +148,7 @@ def _module_stubs(player: dict | None = None) -> dict:
         "score": {"scoreObj": {}, "scoreInfoObj": {}, "lastUpdateTime": t},
         "society": {"societyLv": 0, "society": {}},
         "societyclg": {"bossList": [], "records": [], "historyRecords": [], "playerInfoList": []},
-        "boss": {
-            "bossShareObj": {},
-            "lastFightBossId": 0,
-            "friendBossFlag": {},
-            "bossKillRewardList": [],
-        },
+        "boss": boss.login_block(player),
         "chat": {"channels": [], "panels": []},
         # 任务派遣（主界面「派遣」）。形状 `{speedInfo: {分类: 已用免费加速次数},
         # detect: {章节key: {beginTimeSec, waitTime, subCD, speedCount}}}` —— 都是**秒**，

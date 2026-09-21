@@ -81,7 +81,7 @@ python script\jsc_find.py "favor\..*" --regex
 | `check_docs.py` | **文档自检**：相对链接、目录锚点、搬家前的旧路径残留、README 文档地图是否漏收新文档。改完文档跑一下（重构时加的，专治「同一件事三份说法」） |
 | `check_des.py` | DES 自检：`out/des_ref.json` 里 15 组参考向量逐字节比对 + 200 组随机往返 + 吞吐量，**纯 Python 和 libcrypto 两条后端都验** |
 | `bench_login.py` | 量一次「登录包」在服务端要花多久（`--parts` 拆成 handler / json / des / base64）—— DES 提速前后的对照尺子 |
-| `route_gap.py` | 把客户端里能当 route 的字符串全抽出来，和服务端已实现的对一遍（`--static` 静态盘点：候选 161 / 服务端已实现 112 / 缺 57） |
+| `route_gap.py` | 把客户端里能当 route 的字符串全抽出来，和服务端已实现的对一遍（`--static` 静态盘点：候选 161 / 服务端已实现 117 / 缺 52） |
 | `smali_reach.py` | smali 可达性分析 —— 从「清单组件 ∪ .so 类名 ∪ js/jsc 类名」做闭包，找「谁都不引用」的类（`--unused` 只列不可达的）。`build_apk.py` 的 `DROP_SMALI` 就靠它给的结论 |
 | `apk_report.py` | APK 体积体检 —— 想精简包的时候先跑这个，别靠猜 |
 | `asset_usage.py` | 查 `assets/` 里某个文件到底有没有人用 |

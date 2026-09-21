@@ -493,13 +493,25 @@ def subarea_check(ok: bool) -> bool:
         print(f"  BAD 两处章节不一致：登录块 {sorted(chapters)} vs 路由 {sorted(data2)}")
         return False
     tbl = ginstance._chapter_table()
-    alien = [k for k in data2 if str((tbl.get(k) or {}).get("t") or "") != "5"]
+    # ⚠️ 这份 map 里现在有**两类**章节：`"5"` 分区（4 个）+ `"4"` 活动（46 个）。
+    # 客户端 `ActivityChapterPanel` 的两个页签分别按 type 过滤
+    # （`getActivityChapterListOfType(ACTIVITY/SUBAREA)`），只发一种的话另一个页签是空的
+    # （好友 BOSS 的入口就在活动页签的章节面板里，见 protocol §17.7）。
+    types = {str((tbl.get(k) or {}).get("t") or "") for k in data2}
+    alien = [k for k in data2 if str((tbl.get(k) or {}).get("t") or "") not in
+             ginstance.ACTIVITY_CHAPTER_TYPES]
     if alien:
-        print(f"  BAD 有不是分区章节（table_chapter.type != 5）的 key：{alien}")
+        print(f"  BAD 有既不是活动也不是分区章节（table_chapter.type ∉ "
+              f"{ginstance.ACTIVITY_CHAPTER_TYPES}）的 key：{alien}")
+        return False
+    sub_keys = [k for k in data2 if str((tbl.get(k) or {}).get("t") or "") == "5"]
+    if not sub_keys:
+        print(f"  BAD 分区章节（type==5）一个都没有 —— 分区界面左侧列表会是空的")
         return False
 
     print(f"  OK  分区关卡：登录块与 getsubarealevel 一致，{len(data)} 关，"
-          f"每日上限={limits[0]}；分区章节 {len(data2)} 个 {sorted(data2)}")
+          f"每日上限={limits[0]}；活动/分区章节共 {len(data2)} 个"
+          f"（类型 {sorted(types)}，分区 {len(sub_keys)} 个 {sorted(sub_keys)}）")
     return ok
 
 
@@ -2915,6 +2927,250 @@ def diary_check(ok: bool) -> bool:
     return ok
 
 
+def boss_check(ok: bool) -> bool:
+    """好友 BOSS（6 条 `boss.*`）：列表行形状 / 首战免费 / 扣 BP / 伤害奖励 /
+    击杀奖励 / 挑战记录 / 分享开关 / 失败码。
+
+    客户端契约（`assets/src/data/bosscenter.jsc` + `manager/bossmanager.jsc` 反汇编）：
+
+    * `data.boss`（登录块）= **击杀奖励列表**（`BossCenter.ctor` 只把它交给
+      `_updateBossKillReward`），不是 BOSS 列表 —— 给对象会被当数组读；
+    * `boss.getbosslist` 的 `data` **就是** `{friendBossList, bossRecordList}`（两个 map），
+      不是 `{boss: {...}}`；
+    * 行里 `BossUtil.ctor` 逐个读 11 个字段（少一个就是 undefined，`isEscape`/`getRemainTime`
+      会算出 NaN）；`key` 必须是 `table_world_boss` 的 key（名字/品质/消耗/战斗关卡都在那张表里）；
+    * `levelKey`（出现在哪一关）**不等于** `boss_level_key`（打它进的那一关）——
+      前者要能在某个活动章节的关卡列表里查到，否则章节面板里看不到 BOSS 入口；
+    * `startfight` 的回包必须带 `boss.id` + `boss.type`（客户端 `_updateBoss` 按 type 分流）；
+    * `getbossfightlog` 的 `data` 是**数组**；`shareboss` 分享/取消是**同一条**请求。
+
+    ⚠️ 会把 BOSS 存档清空重刷（快照 + 收尾还原），也真扣 BP / 真发奖励。
+    """
+    from gamesrv import boss as bossmod, config, instance, items, store
+
+    account = config.DEFAULT_ACCOUNT
+    player = store.get_or_create_player(account)
+    before_boss = json.loads(json.dumps(player.get("boss") or {}))
+    before_items = dict(items.items_of(player))
+    before_exp = int(player.get("curExp") or 0)
+    bad = []
+
+    def bp():
+        return items.count_of(store.get_or_create_player(account), bossmod.POINT_KEY)
+
+    try:
+        # 清空 BOSS 存档 -> 下一次 getbosslist 会重新刷一批（第 0 只挂自己名下）
+        p = store.get_or_create_player(account)
+        p["boss"] = {}
+        store.save_player(p)
+
+        login = call("agent.getlogindata", {}, 350)
+        dblk = (login.get("data") or {}).get("boss")
+        if not isinstance(dblk, list):
+            bad.append(f"登录块 data.boss 是 {type(dblk).__name__}，要是**列表**"
+                       f"（它是击杀奖励列表，BossCenter.ctor 直接当数组读）")
+
+        r = call("boss.getbosslist", {"type": "friend"}, 351)
+        data = r.get("data") or {}
+        lst = data.get("friendBossList")
+        recs = data.get("bossRecordList")
+        if r.get("code") != 200:
+            bad.append(f"boss.getbosslist code={r.get('code')}")
+        if not isinstance(lst, dict) or not lst:
+            bad.append(f"data.friendBossList 是 {type(lst).__name__}，要是 map（非空）")
+            lst = {}
+        if not isinstance(recs, dict):
+            bad.append(f"data.bossRecordList 是 {type(recs).__name__}，要是 map")
+            recs = {}
+
+        fields = ("id", "key", "type", "ownerId", "ownerName", "lv", "initHp", "curHp",
+                  "levelKey", "appearTimeSec", "disappearTimeSec")
+        wb = items.table("table_world_boss")
+        chapters = instance.activity_chapters(store.get_or_create_player(account))
+        level_owner = {}
+        for cid in chapters:
+            for lid in (items.table("table_chapter").get(str(cid)) or {}).get("lv") or []:
+                level_owner[str(lid)] = str(cid)
+        me = int(store.get_or_create_player(account).get("id") or 1)
+        own = None
+        for bid, row in lst.items():
+            if not isinstance(row, dict):
+                bad.append(f"friendBossList[{bid}] 不是对象")
+                break
+            missing = [f for f in fields if f not in row]
+            if missing:
+                bad.append(f"{bid} 少了 {missing}（BossUtil.ctor 逐个读，缺就是 undefined）")
+                break
+            if str(row.get("type")) != "friend":
+                bad.append(f"{bid}.type={row.get('type')!r}，客户端按 BOSS_TYPE.FRIEND 分流")
+                break
+            tb = wb.get(str(row.get("key")))
+            if not isinstance(tb, dict):
+                bad.append(f"{bid}.key={row.get('key')!r} 不在 table_world_boss 里")
+                break
+            if int(row.get("initHp") or 0) != int(tb.get("init_hp") or 0):
+                bad.append(f"{bid}.initHp 和表里的 init_hp 不一致")
+                break
+            if str(row.get("levelKey")) == str(tb.get("boss_level_key")):
+                bad.append(f"{bid}.levelKey 不能等于 boss_level_key —— 前者是「出现在哪一关」"
+                           f"（要在章节的关卡列表里），后者是「打它进哪一关」")
+                break
+            if str(row.get("levelKey")) not in level_owner:
+                bad.append(f"{bid}.levelKey={row.get('levelKey')!r} 不在任何活动章节的关卡列表里"
+                           f"（章节面板里就看不到 BOSS 入口）")
+                break
+            if int(row.get("ownerId") or 0) == me:
+                own = row
+        if lst and own is None:
+            bad.append("没有挂在自己名下的 BOSS —— 首战免费 / 分享那两条链就没人能触发")
+        print(f"       列表：{len(lst)} 只（自己的 {1 if own else 0} 只），"
+              f"章节 {len(chapters)} 个")
+
+        if not own:
+            return ok
+        own_id = own["id"]
+        own_tb = wb[str(own["key"])]
+        cost = int(own_tb.get("consume_count") or 1)
+
+        r = call("boss.getbossfightlog", {"id": own_id}, 352)
+        if r.get("code") != 200 or not isinstance(r.get("data"), list):
+            bad.append(f"boss.getbossfightlog 的 data 是 {type(r.get('data')).__name__}，要是数组")
+        for route, rid in (("boss.shareboss", 353), ("boss.randomsharefriend", 354)):
+            rr = call(route, {"id": own_id}, rid)
+            if rr.get("code") != 216:
+                bad.append(f"{route} 没打过就调用 code={rr.get('code')}，应该是 216"
+                           f"（要完成一次挑战才能分享）")
+        rr = call("boss.startfight", {"id": 999999999999, "curTeamIdx": 0}, 355)
+        if rr.get("code") != 202:
+            bad.append(f"打不存在的 BOSS code={rr.get('code')}，应该是 202（木有找到对应BOSS）")
+
+        bp0 = bp()
+        r = call("boss.startfight", {"id": own_id, "curTeamIdx": 0}, 356)
+        d = r.get("data") or {}
+        brow = d.get("boss") or {}
+        if r.get("code") != 200:
+            bad.append(f"startfight code={r.get('code')} {str(r)[:80]}")
+        if brow.get("id") != own_id or str(brow.get("type")) != "friend":
+            bad.append(f"startfight 的 data.boss 要带 id+type（客户端 _updateBoss 靠它们分流），"
+                       f"拿到 {brow}")
+        bp1 = bp()
+        if bp1 != bp0:
+            bad.append(f"自己的 BOSS 第一次打应该免费：BP {bp0} -> {bp1}")
+
+        # ⚠️ 「免费」一直持续到**打完第一场**（`record.firstFightFalg` 落下来）为止 ——
+        # 客户端的 `getBossConsume` 就是这个条件，所以下面先把这一场结算掉再试第二场。
+        harm = int(own["initHp"]) // 2
+        r = call("boss.finishfight", {"id": own_id, "harm": harm}, 357)
+        d = r.get("data") or {}
+        if r.get("code") != 200:
+            bad.append(f"finishfight code={r.get('code')} {str(r)[:80]}")
+        else:
+            if int((d.get("boss") or {}).get("curHp", -1)) != int(own["initHp"]) - harm:
+                bad.append(f"扣血不对：curHp={(d.get('boss') or {}).get('curHp')}，"
+                           f"应该 {int(own['initHp']) - harm}")
+            hr = (((d.get("result") or {}).get("harmReward")) or {}).get("items")
+            if not isinstance(hr, dict) or not hr:
+                bad.append(f"打掉一半血没有伤害奖励：{d.get('result')}")
+            if int((d.get("record") or {}).get("firstFightFalg") or 0) != 1:
+                bad.append("打完一场之后 record.firstFightFalg 应该是 1"
+                           "（客户端 isNeedShare 靠它）")
+            print(f"       伤害 {harm}：伤害奖励 {hr}")
+
+        r = call("boss.startfight", {"id": own_id, "curTeamIdx": 0}, 358)
+        bp2 = bp()
+        if r.get("code") != 200 or bp2 != bp1 - cost:
+            bad.append(f"打完一场之后再打该扣 {cost} 点 BP：{bp1} -> {bp2}（code={r.get('code')}）")
+        else:
+            print(f"       首战免费、第二场 -{cost} BP（{bp0} -> {bp2}）")
+
+        r = call("boss.randomsharefriend", {"id": own_id}, 359)
+        friends_list = (r.get("data") or {}).get("shareFriends")
+        if r.get("code") != 200 or not isinstance(friends_list, list) or not friends_list:
+            bad.append(f"打完一场之后 randomsharefriend code={r.get('code')} "
+                       f"shareFriends={str(friends_list)[:60]}，要有候选萌友")
+        else:
+            one = friends_list[0] or {}
+            lack = [f for f in ("name", "lv", "headId") if f not in one]
+            if lack:
+                bad.append(f"shareFriends 条目少了 {lack}（_updatePlayerInfo 读这四个）")
+            print(f"       可分享萌友 {len(friends_list)} 个（第一个 {one.get('name')}）")
+
+        r = call("boss.shareboss", {"id": own_id}, 360)
+        if r.get("code") != 200 or int((r.get("data") or {}).get("shareFlag", -1)) != 1:
+            bad.append(f"shareboss 第一次应该置 shareFlag=1：{r.get('code')} {r.get('data')}")
+        r = call("boss.shareboss", {"id": own_id}, 361)
+        # ⚠️ 这里别写 `x or -1` —— shareFlag 取消之后就是 0，`0 or -1` 会变成 -1
+        if r.get("code") != 200 or int((r.get("data") or {}).get("shareFlag", -1)) != 0:
+            bad.append(f"shareboss 第二次（同一条请求）应该取消 shareFlag：{r.get('data')}")
+
+        r = call("boss.finishfight", {"id": own_id, "harm": 10 ** 9}, 362)
+        d = r.get("data") or {}
+        if r.get("code") != 200:
+            bad.append(f"补刀 code={r.get('code')}")
+        else:
+            res = d.get("result") or {}
+            # ⚠️ 同上：curHp 死了就是 0，别用 `or -1`
+            if int((d.get("boss") or {}).get("curHp", -1)) != 0:
+                bad.append(f"伤害大到溢出时 curHp 应该夹到 0，拿到 {(d.get('boss') or {}).get('curHp')}")
+            kr = ((res.get("killReward")) or {}).get("items")
+            if not isinstance(kr, dict) or not kr:
+                bad.append(f"击杀没有击杀奖励：{res}")
+            if int(res.get("exp") or 0) != int(own_tb.get("exp") or 0):
+                bad.append(f"击杀经验应该是表里的 exp={own_tb.get('exp')}，拿到 {res.get('exp')}")
+            print(f"       击杀：奖励 {kr}，经验 {res.get('exp')}")
+
+        r = call("boss.startfight", {"id": own_id, "curTeamIdx": 0}, 363)
+        if r.get("code") != 204:
+            bad.append(f"打已经死掉的 BOSS code={r.get('code')}，应该是 204（很可惜，BOSS已经被击杀了）")
+
+        r = call("boss.getbossfightlog", {"id": own_id}, 364)
+        logs = r.get("data")
+        if r.get("code") != 200 or not isinstance(logs, list) or len(logs) < 2:
+            bad.append(f"挑战记录应该有 2 条，拿到 {str(logs)[:80]}")
+        else:
+            lack = [f for f in ("name", "lv", "harm", "createTimeSec") if f not in logs[0]]
+            if lack:
+                bad.append(f"挑战记录少了 {lack}（BossRecordInfoItem.update 读这些）")
+            print(f"       挑战记录 {len(logs)} 条，最新 harm={logs[0].get('harm')}")
+
+        # BP 不足 -> 209（找一只别人名下的、还没打的）
+        other = next((row for row in lst.values()
+                      if int(row.get("ownerId") or 0) != me), None)
+        if other is None:
+            bad.append("列表里没有萌友名下的 BOSS（扣 BP 那条链没验到）")
+        else:
+            p = store.get_or_create_player(account)
+            keep_bp = items.count_of(p, bossmod.POINT_KEY)
+            items.items_of(p)[bossmod.POINT_KEY] = 0
+            store.save_player(p)
+            rr = call("boss.startfight", {"id": other["id"], "curTeamIdx": 0}, 365)
+            if rr.get("code") != 209:
+                bad.append(f"BP 为 0 时打萌友的 BOSS code={rr.get('code')}，应该是 209（BP不足了）")
+            p = store.get_or_create_player(account)
+            items.items_of(p)[bossmod.POINT_KEY] = keep_bp
+            store.save_player(p)
+    finally:
+        p = store.get_or_create_player(account)
+        p["boss"] = before_boss
+        p["curExp"] = before_exp
+        got = items.items_of(p)
+        for k in [k for k in got if k not in before_items]:
+            del got[k]
+        for k, v in before_items.items():
+            got[k] = v
+        store.save_player(p)
+
+    if bad:
+        for one in bad[:10]:
+            print(f"  BAD {one}")
+        return False
+    print("  OK  好友 BOSS：登录块 data.boss 是列表、friendBossList/bossRecordList 是 map、"
+          "行里 11 个字段齐且 key 在表内、levelKey 落在活动章节里、首战免费/再战扣 BP、"
+          "伤害与击杀奖励、击杀 exp、挑战记录是数组、分享开关、202/204/209/216 都对"
+          "（收尾已还原 BOSS 存档 / 背包 / 经验）")
+    return ok
+
+
 def run_check(ok: bool, name: str, fn) -> bool:
     """跑一项检查：支持 --only 过滤 + 打印用时（自检太慢，得知道时间花在哪）。"""
     if ONLY and ONLY not in name:
@@ -3016,6 +3272,8 @@ def main():
     ok = run_check(ok, "助战自检异常", friendsupport_check)
 
     ok = run_check(ok, "勋章自检异常", medal_check)
+
+    ok = run_check(ok, "好友BOSS自检异常", boss_check)
 
     ok = run_check(ok, "功能开启弹窗自检异常", module_open_check)
 

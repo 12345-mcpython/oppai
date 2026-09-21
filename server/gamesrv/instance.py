@@ -354,8 +354,16 @@ def subarea_levels(player: dict) -> dict:
             for level_id in subarea_level_ids()}
 
 
-# `INSTANCE_TYPE.SUBAREA`（客户端那是个**字符串**枚举："1"主线 / "3"好感 / "4"活动 / "5"分区）
+# `INSTANCE_TYPE`（客户端那是个**字符串**枚举："1"主线 / "3"好感 / "4"活动 / "5"分区）
 ACTIVITY_CHAPTER_TYPE = "5"
+# 这层界面（`ActivityInstanceLayer` + 左侧 `ActivityChapterPanel`）有**两个页签**：
+#   活动（INSTANCE_TYPE.ACTIVITY = "4"）与分区（SUBAREA = "5"）
+# `ActivityChapterPanel._updateChapterList` 对每个页签各调一次
+# `getActivityChapterListOfType(type)`，而它是拿 `table_chapter[key].type === type` 过滤的。
+# 早先这里只发 type=="5" 的 4 个分区章节 -> 「活动」页签**永远是空的**（46 个 type=="4"
+# 的章节一个都没发下去），好友 BOSS 也就没地方显示（BOSS 的 `levelKey` 落在 4018/4019/4037
+# 这几个 type=="4" 的「极密」章节里，见 gamesrv/boss.py）。
+ACTIVITY_CHAPTER_TYPES = ("4", ACTIVITY_CHAPTER_TYPE)
 
 
 def activity_chapters(player: dict) -> dict:
@@ -379,8 +387,12 @@ def activity_chapters(player: dict) -> dict:
 
         {chapterId: {key, challengeTimes, priority, [limitDay, limitTime]}}
 
-    * `key` = 客户端 `table_chapter` 的 key（服务端只认 `type == "5"` 的那 4 个：
-      5001 伯尼尔生物研究 / 5002 冰河集团 / 5003 第三工业园区 / 5004 太古重工）
+    * `key` = 客户端 `table_chapter` 的 key。服务端发**两类**章节
+      （`ACTIVITY_CHAPTER_TYPES`）：
+        * `"5"` 分区 4 个：5001 伯尼尔生物研究 / 5002 冰河集团 / 5003 第三工业园区 /
+          5004 太古重工；
+        * `"4"` 活动 46 个（4001 交出小钱钱、4018 极密B221…、4037 …）——
+          客户端「活动」页签就是按 `type == "4"` 过滤的，不发的话那个页签一片空白。
     * `challengeTimes = -1` —— 客户端见到 -1 会转成 `Number.MAX_VALUE`，即**章节级不限次**。
       这是客户端自己的约定，不是我编的数字
     * `priority` 从 `table_chapter` 抄（排序用）
@@ -389,7 +401,7 @@ def activity_chapters(player: dict) -> dict:
     """
     out = {}
     for chapter_id, info in (_chapter_table() or {}).items():
-        if str((info or {}).get("t") or "") != ACTIVITY_CHAPTER_TYPE:
+        if str((info or {}).get("t") or "") not in ACTIVITY_CHAPTER_TYPES:
             continue
         out[str(chapter_id)] = {
             "key": str(chapter_id),

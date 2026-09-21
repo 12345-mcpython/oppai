@@ -53,6 +53,7 @@
 | **好友** | ⚠️ | 9 条 `friend.*` 全实现（搜索/申请/同意/拒绝/删除/送收物资/两个列表）；好友是 **NPC**（没有别的玩家），见 §7 |
 | **勋章 / 头像 / 衣柜** | ⚠️ | 9 条 `medal.*` 全实现（换头像/衣服/背景、佩戴、清 NEW、好友勋章）；衣柜与头像是**背包道具**（type 40/50/60/70），勋章进度按 `condition_kind` 反推，25 条活动勋章直接算完成，见 §7 |
 | **私密剧情（回看/解锁）** | ⚠️ | 2 条 `diary.*` 全实现；登录块 `storyDiarys` 里 **通关过的算已解锁**、没通关的进 `lockLevels` 可花金条买；38 章全开、价格 `30+5×序号`（原版价在服务端，见 differences §D） |
+| **好友 BOSS** | ⚠️ | 6 条 `boss.*` 全实现；服务端**直接刷** 3 只（1 只挂自己名下：首战免费 + 能分享，2 只挂 NPC 萌友名下要花 BP），名字/品质/消耗/战斗关卡全用客户端 `table_world_boss`；打一场真扣血真给奖，打死有击杀奖励。入口在「活动/分区」章节面板里（顺带把 type=="4" 的 46 个活动章节也发下去了 —— 以前那个页签是空的） |
 | 开场/引导视频 | ✅ | 视频层清理 + 幂等守卫 |
 | 扭蛋 / 抽卡 | ⚠️ | 缺运营配置（`gachaMasterList`），靠兜底不让它崩 |
 | **培养（天赋）** | ✅ | 三条课题（101 军士 / 102 机甲 / 103 克制），`player.selecttalent` / `player.upgradetalent` 落盘、升级真扣材料。⚠️ 入口是编成→培养里的「**萌源增幅**」，要**通关 3-6** 才解锁（`table_function_open[100014].unlock_level_key = "100316"`）；103 还要指挥部 40 级 |
@@ -418,6 +419,16 @@ vanilla 不传参 → 游戏代码 `function (eventName) { if (/began\d/.test(ev
        ⚠️ `table_story_review[*].price` **客户端表里没有**（原版服务端塞的）→
        确认弹窗会显示 `undefined`，登录块顺带发了 `prices` 供 `patch.js` 修（要重打包）。
        见 [protocol.md §16](protocol.md)。
+ - [x] **好友 BOSS**（6 条 `boss.*`）：列表 / 开打 / 结算 / 挑战记录 / 分享。
+       **BOSS 表在客户端**（`table_world_boss` 36 行 = 4 族 × 3 型 × 3 档，档位是
+       `15万血·1BP·10分钟` / `45万·2·1.5小时` / `150万·3·5小时`），服务端只给状态。
+       两个键容易搞混：`boss_level_key` 是**打它进的那一关**，行里的 `levelKey` 是
+       **它出现在哪一关**（必须落在某个章节的关卡列表里，否则章节面板里点不到入口）。
+       自己的 BOSS **第一场打免费**、打完能分享给萌友（分享/取消是同一条 route，
+       只能按 `record.shareFlag` 做成开关 —— 客户端自己那道闸有点毛病）。
+       ⚠️ 顺带修了一件事：`instance.getactivityinstance` 原来只发 `type=="5"` 的 4 个分区
+       章节，「活动」页签（`type=="4"`，46 个章节）**永远是空的** —— 好友 BOSS 的入口
+       就在那个页签的章节面板里。见 [protocol.md §17](protocol.md)。
 - [x] 文档：协议 / 逆向手法 / 打包逻辑 / 调试台 / 引擎调试 / 本总览 / **与原版的差异** / **从零复刻**
 
 ### 待办（按卡点排序）
@@ -451,11 +462,10 @@ vanilla 不传参 → 游戏代码 `function (eventName) { if (/began\d/.test(ev
    现在回 `{recommendList: [...]}`（实机量过：客户端拿到 20 条，第一条 `ai001`）。
    见 [protocol.md §15](protocol.md) + `handlers/friendsupport.py` 的模块注释。
 3. **其余未实现的 route** —— `python script/route_gap.py --static` 能列出全部。
-   当前：客户端静态候选 **161** 条，服务端 **112** 条，缺 **57** 条。按单机价值排：
+   当前：客户端静态候选 **161** 条，服务端 **117** 条，缺 **52** 条。按单机价值排：
 
    | 命名空间 | 缺 | 说明 |
    |---|---|---|
-   | `boss.*` | 5 | 好友 BOSS（`getbosslist` 已实现并回空表） |
    | `society.*` / `societyclg.*` | 33+6 | 军团——单机价值低、量最大 |
 
    ⚠️ **`rank.*` / `boss.getbosslist` 这类"回空表"不算缺口**：私服没有榜、没有好友，
@@ -465,7 +475,7 @@ vanilla 不传参 → 游戏代码 `function (eventName) { if (/began\d/.test(ev
    **`char.upgradedaemon`**(1)、**`player.updateasst`**(1)、
    `player.selecttalent`/`upgradetalent`、`sign.*`(1)、`detect.*`(6)、**`arena.*`**(4)、
    **`friend.*`**(9)、**`medal.*`**(9)、**`share.*`**(1)、**`convert.*`**(1)、
-   **`diary.*`**(2)。
+   **`diary.*`**(2)、**`boss.*`**(5，`getbosslist` 早就有了但回的是空表)。
 4. `hashKey` / `hmac64` 还没复刻（登录靠单位元绕过）；自研 DH 的完整算法也没还原。
 
 ---
