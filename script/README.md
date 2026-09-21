@@ -2,7 +2,7 @@
 
 按用途分五类。**日常只会用到前两类**，后面的是排障、体检和追溯用的。
 
-> 想先了解整个项目，读 [`../server/docs/overview.md`](../server/docs/overview.md)；
+> 想先了解整个项目，读 [`../docs/overview.md`](../docs/overview.md)；
 > 想从零复刻，读 [`../REPRODUCE.md`](../REPRODUCE.md)；
 > 这份只管「哪个脚本干什么」。
 >
@@ -17,7 +17,7 @@
 | `build_apk.py` | 打包 APK 全套：从原版包恢复带地址的文件 → 改 assets → 写 `patch.js`/`probe.js` → **规范化清单**（targetSdk 33 / exported / 明文 HTTP / 缺 `<uses-sdk>` 就补）→ 删死代码与 SDK 资源 → apktool 完整打包 → zipalign → 签名。`--no-probe` 出正式包，`--abis` 只带指定 ABI。**幂等**，可以反复跑 |
 | `serve.py` | 服务端守护：`run.py` 挂了自动拉起。**推荐用这个起服务端**，别用 `Start-Process python run.py`（会被回收） |
 | `merge_dex.py` | 把 apktool 拆出来的 `smali_classesN` 合并进 `smali/`（合成单个 dex）。⚠️ 必须在 `build_apk.py` **之前**跑 —— `DROP_SMALI` 里的路径都是按合并后写的 |
-| `build_arm64_deps.py` | 备齐 arm64-v8a 的引擎依赖（预编译库 + 自建 chipmunk 6.2.1 / libwebsockets 1.23 + 按 ABI 分的 SM/curl/**jpeg** 头文件）。`--check` 只报告。详见 [`../server/docs/build.md`](../server/docs/build.md) §ABI |
+| `build_arm64_deps.py` | 备齐 arm64-v8a 的引擎依赖（预编译库 + 自建 chipmunk 6.2.1 / libwebsockets 1.23 + 按 ABI 分的 SM/curl/**jpeg** 头文件）。`--check` 只报告。详见 [`../docs/build.md`](../docs/build.md) §ABI |
 | `patch_js_debugger.py` | 把调试器自己的 JS（`assets/script/jsb_debugger.js` + `assets/script/debugger/**`，**注意是游戏 assets 里的 `script/`，不是本目录**）换成**明文并打补丁**，并删掉同名 `.jsc`（`.jsc` 是缓存，删掉引擎才改读 `.js`）—— 不用重编引擎就能改调试器 |
 | `sdk_strip/` | 删掉没用到的第三方 SDK：扫引用 → 生成桩类 → 删 smali → 清 manifest / assets / lib。细目见 §5 |
 
@@ -28,7 +28,7 @@
 | `jsc_strings.py` | **最好用的一把刀**：只扒 `.jsc` 的 atom（标识符）表，按源码顺序输出「参数/局部变量 → 函数体里用到的属性名」。没源码也能看懂一个函数在干什么 |
 | `jsc_disasm.py` | SM33.1.1 XDR 字节码反汇编器（`_opcodes_gen.py` 是它的操作码表，别删） |
 | `disasm_func.py` | 按函数名反汇编，会自动带上嵌套函数 |
-| **`jsc_decompile.py`** | ★ **jsc → js 反编译器**（栈机模拟 + 结构恢复）：`assets/src/**` **572/575** 能过 `node --check`。见 [`../server/docs/decompile.md`](../server/docs/decompile.md) |
+| **`jsc_decompile.py`** | ★ **jsc → js 反编译器**（栈机模拟 + 结构恢复）：`assets/src/**` **572/575** 能过 `node --check`。见 [`../docs/decompile.md`](../docs/decompile.md) |
 | **`jsc_find.py`** | ★ **按原子反查**：这个 key / route / 方法名在哪个 `.jsc` 的哪个函数里用过。`.jsc` 是二进制，裸 `grep` 搜不到，只能这么查。判断「这个登录包字段到底有没有人读」全靠它 |
 | `jsc_funcs.py` | 按**函数**分组打印原子表（看一个类的完整数据流） |
 | `jsc_scope.py` | 打印各 script 的 bindings / 槽位 —— 把 `getaliasedvar slot=N` 对回变量名时用 |
@@ -58,8 +58,8 @@ python script\jsc_find.py "favor\..*" --regex
 
 | 脚本 | 干什么 |
 |---|---|
-| **`/devtools`** | ★ **浏览器调试台**（`gamesrv/devtools.py` + `gamesrv/web/`，挂在 CDN 端口）。流量 / JS 控制台 / 存档编辑+作弊 / 日志流 / 表查询 / **引擎调试器**，详见 [`../server/docs/devtools.md`](../server/docs/devtools.md) |
-| `jsd.py` | ★ **引擎自带的远程 JS 调试器**客户端：断点 / 单步 / 调用栈 / 暂停时求值（`tabs` / `sources` / `repl` / `demo`）。见 [`../server/docs/engine-debug.md`](../server/docs/engine-debug.md) |
+| **`/devtools`** | ★ **浏览器调试台**（`gamesrv/devtools.py` + `gamesrv/web/`，挂在 CDN 端口）。流量 / JS 控制台 / 存档编辑+作弊 / 日志流 / 表查询 / **引擎调试器**，详见 [`../docs/devtools.md`](../docs/devtools.md) |
+| `jsd.py` | ★ **引擎自带的远程 JS 调试器**客户端：断点 / 单步 / 调用栈 / 暂停时求值（`tabs` / `sources` / `repl` / `demo`）。见 [`../docs/engine-debug.md`](../docs/engine-debug.md) |
 | `repl.py` | **在游戏进程里执行任意 JS（不暂停）**。前提：装了 probe 版 APK + 服务端在跑。验证数据形状、翻运行时状态全靠它 |
 | `probe.py` | 重启客户端 + 批量执行 JS 表达式（`repl.py` 的批处理版） |
 | `shots.py` | 重启客户端并连续截图 |
@@ -103,7 +103,7 @@ python script\jsc_find.py "favor\..*" --regex
 > ⚠️ **顺序**：`analyze → strip（内含 gen_stubs）→ gen_native_stubs → merge_dex → patch_smali → patch_js_debugger → build_apk`。
 > `patch_smali.py` 必须排在 `strip.py` **之后**（`strip.py` 会重建 `com\quicksdk` 的桩类，早跑会被冲掉），
 > `merge_dex.py` 必须排在 `build_apk.py` 之前。完整命令见
-> [`../server/docs/build.md`](../server/docs/build.md) §「完整重建命令」。
+> [`../docs/build.md`](../docs/build.md) §「完整重建命令」。
 
 ## 6. `archive/` —— 一次性脚本（历史存档，别再跑）
 
@@ -143,7 +143,7 @@ python script\jsc_find.py "favor\..*" --regex
    ⚠️ 抽表时**在客户端 JS 里就把字段压到最小**，别把整表原样回传
 7. **验证** —— `selftest_game.py`（协议层）/ 数值逻辑单独写一个 `selftest_<模块>.py`（进程内，
    不用模拟器）/ `/devtools`（流量 + 存档 + 运行时状态）/ 服务端日志
-8. **记坑** —— 踩到的形状坑写进 `server/docs/overview.md` §6，不然下次还得再踩一遍
+8. **记坑** —— 踩到的形状坑写进 `docs/overview.md` §6，不然下次还得再踩一遍
 
 ## 附 2：`out/` 里哪些能删
 

@@ -2,7 +2,7 @@ r"""打印 jsc 里各 script 的 bindings / 槽位，用于把 `getaliasedvar sl
 
     python script\jsc_scope.py <file.jsc>
 
-背景（详见 server\docs\reverse-engineering.md §1.8）：
+背景（详见 docs\reverse-engineering.md §1.8）：
 
 * 模块（文件顶层那个 `Xxx<` 函数）的绑定按声明序排在**槽位 2 起**
   （0/1 被 `this` / `arguments` 两个保留槽占掉），也就是

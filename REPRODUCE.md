@@ -20,7 +20,7 @@
 * 一整套逆向工具：`.jsc` 反编译 / 反汇编 / 原子表提取 / 运行时探针
 
 游戏内**能玩到**的部分和**没做**的部分，见
-[`server/docs/differences.md`](server/docs/differences.md) §C。
+[`docs/differences.md`](docs/differences.md) §C。
 
 ---
 
@@ -183,7 +183,7 @@ python script\patch_js_debugger.py           # 6) 调试器 JS 换成明文（�
 
 > 顺序不能颠倒：`strip.py` 会把 `smali\com\quicksdk` 整个删掉再按 `needed.json` 重建桩类，
 > **`patch_smali.py` 必须排在它后面**；`merge_dex.py` 必须排在 `patch_smali.py` / `build_apk.py`
-> 之前。细节与完整命令见 [`server/docs/build.md`](server/docs/build.md) §「完整重建命令」。
+> 之前。细节与完整命令见 [`docs/build.md`](docs/build.md) §「完整重建命令」。
 >
 > 想在不碰 `game\` 的情况下演练整条链：给每一步都带上 `GS_APK_DIR=<别的解包目录>`
 > （打包时再加 `GS_ORIGINAL_APK=<原版包路径>`）。
@@ -251,7 +251,7 @@ Get-Content out\engine-build-x86.log -Tail 5
 > **直接调 `ndk-build.cmd` 更省事**，`build.ps1`（仓库根那个）就是这么做的。
 >
 > 深入：[`engine/ENGINE_PATCHES.md`](engine/ENGINE_PATCHES.md)、
-> [`server/docs/engine-debug.md`](server/docs/engine-debug.md)。
+> [`docs/engine-debug.md`](docs/engine-debug.md)。
 
 ---
 
@@ -294,9 +294,9 @@ Get-NetTCPConnection -State Listen |
 > （`cdn.shuangmawei.net` = 19 字节 / `http://114.55.66.97:16840` = 25 字节），
 > 老路子（`-JscUrlPatch`）下必须等长替换；默认的运行时改写没有这个约束，
 > 但端口仍然贯穿服务端配置与客户端，别动。
-> 详见 [`server/docs/build.md`](server/docs/build.md)。
+> 详见 [`docs/build.md`](docs/build.md)。
 >
-> 深入：[`server/docs/protocol.md`](server/docs/protocol.md)。
+> 深入：[`docs/protocol.md`](docs/protocol.md)。
 
 ---
 
@@ -328,7 +328,7 @@ adb -s 127.0.0.1:21503 shell pm path com.cm.zcsmw.baidu    # 装上了
 adb -s 127.0.0.1:21503 logcat -d -v brief | Select-String "OPPAIPATCH|JS ERROR"
 ```
 
-**这一步在做什么**（细节见 [`server/docs/build.md`](server/docs/build.md)）：
+**这一步在做什么**（细节见 [`docs/build.md`](docs/build.md)）：
 
 | 子步 | 内容 |
 |---|---|
@@ -346,7 +346,7 @@ adb -s 127.0.0.1:21503 logcat -d -v brief | Select-String "OPPAIPATCH|JS ERROR"
 > UTF-8 脚本按 GBK 读，中文注释吃掉引号 → 一大片 `Unexpected token`。
 > 最坑的是**解析失败 = 一行都没执行**，别把它当成"跑过了但没效果"。
 >
-> 深入：[`server/docs/build.md`](server/docs/build.md)、
+> 深入：[`docs/build.md`](docs/build.md)、
 > [`server/client/patch.js`](server/client/patch.js) 头部（11 条适配各自的原因，其中第 6/9 条是体验改动，可删）。
 
 ---
@@ -366,7 +366,7 @@ adb -s 127.0.0.1:21503 logcat -d -v brief | Select-String "OPPAIPATCH|JS ERROR"
 | 卡点 | 结论 | 怎么办 |
 |---|---|---|
 | **装得上** | 原版 `targetSdkVersion=23`。Android 14 起禁装 `<23`、**Android 15 起禁装 `<24`**，所以以前装真机得带 `--bypass-low-target-sdk-block` | **已修**：`script/build_apk.py` 的 `normalize_android_manifest()` 每次打包把 targetSdk 提到 **33**，并给带 intent-filter 的组件补显式 `android:exported`（31+ 不写会报 `android:exported needs to be explicitly specified`）。现在 `.\build.ps1 -Install` 直接装 |
-| **跑得起来** | 原版包只有 `armeabi` + `x86`，而引擎的预编译依赖（curl/websockets/png/freetype…）在 cocos 官方那套里也只有 armeabi / armeabi-v7a / x86 —— **arm64 是后来自己凑依赖编出来的**（见 §4b 末尾和 [`build.md`](server/docs/build.md) §ABI，现在四份 ABI 都能打） | **别只看属性，直接装一个试** —— `ro.product.cpu.abilist` / `ro.zygote` 说只有 64 位，不代表跑不了：一加 PLZ110（Android 16，`abilist32` 为空、`ro.zygote=zygote64`）**带厂商 32 位兼容层**（有 `app_process32`、32 位 `linker`/bionic、`init.svc.zygote_tango`），装 v7a 包能跑；没这层的机器（Pixel 7 以后）才会 `UnsatisfiedLinkError` —— 那种机器就打 arm64 包（`-PackAbis arm64-v8a`） |
+| **跑得起来** | 原版包只有 `armeabi` + `x86`，而引擎的预编译依赖（curl/websockets/png/freetype…）在 cocos 官方那套里也只有 armeabi / armeabi-v7a / x86 —— **arm64 是后来自己凑依赖编出来的**（见 §4b 末尾和 [`build.md`](docs/build.md) §ABI，现在四份 ABI 都能打） | **别只看属性，直接装一个试** —— `ro.product.cpu.abilist` / `ro.zygote` 说只有 64 位，不代表跑不了：一加 PLZ110（Android 16，`abilist32` 为空、`ro.zygote=zygote64`）**带厂商 32 位兼容层**（有 `app_process32`、32 位 `linker`/bionic、`init.svc.zygote_tango`），装 v7a 包能跑；没这层的机器（Pixel 7 以后）才会 `UnsatisfiedLinkError` —— 那种机器就打 arm64 包（`-PackAbis arm64-v8a`） |
 | **连得上** | 地址烘在包里 → 换 IP 就要重打包 | 见下面，**改成运行时改写**，连局域网都不需要 |
 
 ```powershell
@@ -395,7 +395,7 @@ adb -s <手机序列号> install -r --bypass-low-target-sdk-block out\zcsmw-mod-
 > **`primaryCpuAbi=arm64-v8a`**（原生 64 位，不走厂商 32 位兼容层），MEmu 挑 `x86`。
 > 真机建议：`-PackAbis arm64-v8a -Install -Serial <手机>`（只带 64 位那一份，543 MB）。
 > arm64 依赖怎么凑（chipmunk 6.2.1 / libwebsockets 1.23 / 按 ABI 分头文件）见
-> [`build.md`](server/docs/build.md) 的「ABI」一节 + `script/build_arm64_deps.py`。
+> [`build.md`](docs/build.md) 的「ABI」一节 + `script/build_arm64_deps.py`。
 
 **实测结论（一加 PLZ110，Android 16 / SDK 36）**：
 
@@ -431,7 +431,7 @@ ro.zygote                 zygote64
 > `socket.readyState === WebSocket.OPEN`。包出来的函数不抄 `OPEN` 就等于
 > `undefined` → 判定恒假 → **登录握手一个字节都发不出去**（症状：WS 连上了、
 > 密钥也算完了，服务端发完欢迎包就一直阻塞在 recv）。详见
-> [`server/docs/overview.md`](server/docs/overview.md) §6.13。
+> [`docs/overview.md`](docs/overview.md) §6.13。
 >
 > ⚠️ 老路子（`-JscUrlPatch`）的坑，知道一下就行：它走**等长**替换
 > （`<host>:18080` 必须 19 字节 → **host 必须 13 个字符**），而且那几个文件是
@@ -518,8 +518,8 @@ python script\route_gap.py --static      # 客户端候选 161 / 已实现 72 / 
 > ⚠️ **宿舍「互动（抚摸）」是按住来回搓，不是单击** ——
 > 而且判定框原版只有 100×100、不可见、还在角色右边。
 > 本项目在 [`server/client/patch.js`](server/client/patch.js) 末尾把它放大到覆盖角色了
-> （私下体验改动，见 [`server/docs/differences.md`](server/docs/differences.md) §B）。
-> 排查这类"点了没反应"，先看 [`server/docs/overview.md`](server/docs/overview.md) §6.10。
+> （私下体验改动，见 [`docs/differences.md`](docs/differences.md) §B）。
+> 排查这类"点了没反应"，先看 [`docs/overview.md`](docs/overview.md) §6.10。
 
 ---
 
@@ -537,7 +537,7 @@ python script\route_gap.py --static      # 客户端候选 161 / 已实现 72 / 
    那是引擎级断点，游戏会真的停住
 
 **症状 → 原因**的速查表在
-[`server/docs/overview.md`](server/docs/overview.md) **§6**（10 条坑，
+[`docs/overview.md`](docs/overview.md) **§6**（10 条坑，
 每条都有现象、根因、定位方法）。
 
 ---
@@ -546,14 +546,14 @@ python script\route_gap.py --static      # 客户端候选 161 / 已实现 72 / 
 
 | 想看什么 | 文档 |
 |---|---|
-| 全景、分层、成果、坑速查 | [`server/docs/overview.md`](server/docs/overview.md) |
-| **和原版哪里不一样**（含"哪些数值是猜的"） | [`server/docs/differences.md`](server/docs/differences.md) |
-| 协议逐项 + 反汇编证据 | [`server/docs/protocol.md`](server/docs/protocol.md) |
-| 没有源码怎么逆向（`.jsc` 格式、探针手法） | [`server/docs/reverse-engineering.md`](server/docs/reverse-engineering.md) |
-| jsc → js 反编译器怎么做 | [`server/docs/decompile.md`](server/docs/decompile.md) |
-| 打包逻辑（为什么要删那些东西） | [`server/docs/build.md`](server/docs/build.md) |
-| 浏览器调试台 | [`server/docs/devtools.md`](server/docs/devtools.md) |
-| 引擎层调试（自带远程 JS 调试器） | [`server/docs/engine-debug.md`](server/docs/engine-debug.md) |
+| 全景、分层、成果、坑速查 | [`docs/overview.md`](docs/overview.md) |
+| **和原版哪里不一样**（含"哪些数值是猜的"） | [`docs/differences.md`](docs/differences.md) |
+| 协议逐项 + 反汇编证据 | [`docs/protocol.md`](docs/protocol.md) |
+| 没有源码怎么逆向（`.jsc` 格式、探针手法） | [`docs/reverse-engineering.md`](docs/reverse-engineering.md) |
+| jsc → js 反编译器怎么做 | [`docs/decompile.md`](docs/decompile.md) |
+| 打包逻辑（为什么要删那些东西） | [`docs/build.md`](docs/build.md) |
+| 浏览器调试台 | [`docs/devtools.md`](docs/devtools.md) |
+| 引擎层调试（自带远程 JS 调试器） | [`docs/engine-debug.md`](docs/engine-debug.md) |
 | 13 个引擎补丁的证据链 | [`engine/ENGINE_PATCHES.md`](engine/ENGINE_PATCHES.md) |
 | 引擎移植过程与踩过的坑 | [`engine/README.md`](engine/README.md) |
 | 脚本索引 + 加新玩法模块的流程 | [`script/README.md`](script/README.md) |

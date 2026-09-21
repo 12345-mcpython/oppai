@@ -30,7 +30,7 @@ arm64 的依赖 cocos 官方包里没有（只有三套 ABI），得先备齐：
     .\build.ps1 -Engine -Abi arm64-v8a -PackAbis arm64-v8a -Install -Serial <手机>
 
 坑（chipmunk 要 6.2.1 不是 7.0、libwebsockets 要 1.23 且要补 3 个结构体字段，
-否则真机 `setgid(0)` 被 seccomp 打死）都写在 server\docs\build.md 的「ABI」那节。
+否则真机 `setgid(0)` 被 seccomp 打死）都写在 docs\build.md 的「ABI」那节。
 
 产物统一落在 out\ 下：
 

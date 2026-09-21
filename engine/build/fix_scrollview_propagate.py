@@ -29,7 +29,7 @@ cocos2d-x 3.6 的 `Widget::propagateTouchEvent`（`cocos/ui/UIWidget.cpp`）：
 
 原版引擎显然能穿过去。这是本项目反复遇到的那一类问题：
 **引擎与游戏的约定不一致，单看 C++ 或单看 JS 都发现不了**（见
-`server/docs/overview.md` §6 和 `ENGINE_PATCHES.md`）。
+`docs/overview.md` §6 和 `ENGINE_PATCHES.md`）。
 
 ## 改法
 

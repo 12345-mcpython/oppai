@@ -82,7 +82,7 @@ void Widget::propagateTouchEvent(...)
   所以不会出现两个 ScrollView 同时滚
 
 **验证**：宿舍列表在条目上直接拖动就能滚；条目点击照旧。
-排查手法见 `server/docs/overview.md` §6.11。
+排查手法见 `docs/overview.md` §6.11。
 
 ---
 
@@ -93,7 +93,7 @@ void Widget::propagateTouchEvent(...)
 所以从来没被调用过。`enable_js_debugger.py` 往 `AppDelegate.cpp` 里插一段无条件调用。
 
 细节、协议、以及「调试器自己的 JS 怎么换成明文来改」见
-`server/docs/engine-debug.md`。
+`docs/engine-debug.md`。
 
 ## ⑬ 修 `js_log`（`CCLOG` 在 release 里是空宏）
 
